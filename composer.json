@@ -1,0 +1,31 @@
+{
+    "name": "zhangjinteng/6mm-php",
+    "description": "Shared PHP domain and query services for 6MM administration applications.",
+    "type": "library",
+    "license": "proprietary",
+    "require": {
+        "php": "^8.0",
+        "illuminate/database": "^8.75 || ^9.0 || ^10.0 || ^11.0 || ^12.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "SixMm\\Shared\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "SixMm\\Shared\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "branch-alias": {
+            "dev-main": "0.1.x-dev"
+        }
+    },
+    "scripts": {
+        "test": "@php tests/run.php"
+    },
+    "config": {
+        "sort-packages": true
+    }
+}
