@@ -8,6 +8,7 @@ final class UserAssetListQuery
 {
     private const SORTABLE_FIELDS = [
         'ua_id',
+        'platform_user_id',
         'user_id',
         'public_user_id',
         'uid',
@@ -19,7 +20,8 @@ final class UserAssetListQuery
         private string $keyword = '',
         private ?int $userType = null,
         private string $orderBy = 'ua_id',
-        private string $orderDirection = 'desc'
+        private string $orderDirection = 'desc',
+        private ?int $agentId = null
     ) {
         $this->page = max(1, $this->page);
         $this->pageSize = min(1000, max(1, $this->pageSize));
@@ -31,6 +33,9 @@ final class UserAssetListQuery
             ? $this->orderBy
             : 'ua_id';
         $this->orderDirection = strtolower($this->orderDirection) === 'asc' ? 'asc' : 'desc';
+        $this->agentId = $this->agentId !== null && $this->agentId >= 0
+            ? $this->agentId
+            : null;
     }
 
     public function page(): int
@@ -51,6 +56,11 @@ final class UserAssetListQuery
     public function userType(): ?int
     {
         return $this->userType;
+    }
+
+    public function agentId(): ?int
+    {
+        return $this->agentId;
     }
 
     public function orderBy(): string

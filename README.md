@@ -28,6 +28,11 @@ must provide a `UserDataScope`; an empty scope fails closed. Authentication,
 HTTP response envelopes, trade-kernel account/position hydration, market-price
 subscriptions, and live position valuation remain application-owned.
 
+`UserAssetListQuery::agentId` optionally filters a recommendation relationship,
+including platform users whose agent ID is `0`. Asset rows expose the public UID
+as `user_id` and the internal application user ID as `platform_user_id`; hosts
+should use the latter for balance operations such as deposit and deduction.
+
 ## Shared user list
 
 `UserListQueryService` owns the reusable user-list projection, filtering,

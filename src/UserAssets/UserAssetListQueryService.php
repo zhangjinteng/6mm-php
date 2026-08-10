@@ -84,12 +84,17 @@ final class UserAssetListQueryService
         if ($criteria->userType() !== null) {
             $query->where('users.user_type', $criteria->userType());
         }
+
+        if ($criteria->agentId() !== null) {
+            $query->where('users.agent_id', $criteria->agentId());
+        }
     }
 
     private function applyOrdering(Builder $query, UserAssetListQuery $criteria): void
     {
         $columns = [
             'ua_id' => 'assets.ua_id',
+            'platform_user_id' => 'assets.user_id',
             'user_id' => 'users.public_user_id',
             'public_user_id' => 'users.public_user_id',
             'uid' => 'users.public_user_id',

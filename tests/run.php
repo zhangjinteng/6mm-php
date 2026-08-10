@@ -180,6 +180,7 @@ $database->getConnection()->table('user_assets')->insert([
     ['ua_id' => 2, 'user_id' => 2, 'wallet_balance' => 250, 'frozen_balance' => 8, 'realized_pnl' => -2],
     ['ua_id' => 3, 'user_id' => 3, 'wallet_balance' => 50, 'frozen_balance' => 0, 'realized_pnl' => 0],
     ['ua_id' => 4, 'user_id' => 4, 'wallet_balance' => 999, 'frozen_balance' => 0, 'realized_pnl' => 0],
+    ['ua_id' => 5, 'user_id' => 5, 'wallet_balance' => 75, 'frozen_balance' => 0, 'realized_pnl' => 0],
 ]);
 $database->getConnection()->table('user_daily_volume')->insert([
     ['user_id' => 1, 'trade_date' => '2026-08-01', 'volume' => 1000],
@@ -256,18 +257,30 @@ assertSameValue(2, $userAssets->items()[1]['platform_user_id'], 'The internal pl
 assertSameValue('250', $userAssets->items()[1]['wallet_balance'], 'Asset amounts should be serialized as strings.');
 
 $filteredUserAssets = $userAssetService->search(
-    new UserAssetListQuery(keyword: 'external-bob', userType: 2),
-    new AgentIdsScope([10])
+    new UserAssetListQuery(keyword: 'external-bob', userType: 2, agentId: 10),
+    new AllUsersScope()
 );
-assertSameValue(1, $filteredUserAssets->total(), 'External-ID and user-type filters should compose.');
+assertSameValue(1, $filteredUserAssets->total(), 'External-ID, user-type, and recommendation filters should compose.');
 assertSameValue(9002, $filteredUserAssets->items()[0]['user_id'], 'The filtered shared asset row should be returned.');
 assertSameValue('Bob', $filteredUserAssets->items()[0]['nice_name'], 'The preferred user display name should be projected.');
+
+$platformRelationUserAssets = $userAssetService->search(
+    new UserAssetListQuery(agentId: 0),
+    new AllUsersScope()
+);
+assertSameValue([9005], array_column($platformRelationUserAssets->items(), 'user_id'), 'Asset recommendation filtering should support platform users with agent ID zero.');
 
 $uidSortedUserAssets = $userAssetService->search(
     new UserAssetListQuery(orderBy: 'user_id', orderDirection: 'asc'),
     new AgentIdsScope([10])
 );
 assertSameValue([9001, 9002, 9003], array_column($uidSortedUserAssets->items(), 'user_id'), 'Public UID sorting should remain available.');
+
+$internalIdSortedUserAssets = $userAssetService->search(
+    new UserAssetListQuery(orderBy: 'platform_user_id', orderDirection: 'asc'),
+    new AgentIdsScope([10])
+);
+assertSameValue([1, 2, 3], array_column($internalIdSortedUserAssets->items(), 'platform_user_id'), 'Internal platform user ID sorting should remain available.');
 
 $emptyAssetScope = $userAssetService->search(new UserAssetListQuery(), new AgentIdsScope([]));
 assertSameValue(0, $emptyAssetScope->total(), 'An empty asset scope must fail closed.');
