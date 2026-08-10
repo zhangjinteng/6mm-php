@@ -64,6 +64,7 @@ final class ConditionOrderListQueryService
             ])
             ->map(function (object $row) use ($criteria): array {
                 $item = (array) $row;
+                $item['condition_id'] = (string) ($item['condition_id'] ?? '');
                 $platformUserId = (int) $item['user_id'];
                 $resolvedUserType = $criteria->lifecycle()->usesUserTypeSnapshot()
                     ? ($item['user_type'] ?? $item['current_user_type'] ?? null)

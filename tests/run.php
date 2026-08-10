@@ -295,7 +295,7 @@ $database->getConnection()->table('condition_orders')->insert([
     $conditionRow('condition-current', 1, 'trailing_stop', false, 0, 2, '2026-08-06 10:00:00'),
     $conditionRow('tp-sl-current', 2, 'take_profit_market', true, 1, 1, '2026-08-06 11:00:00'),
     $conditionRow('condition-history', 1, 'trailing_stop', false, 3, 2, '2026-08-05 10:00:00'),
-    $conditionRow('tp-sl-history', 2, 'stop_market', true, 2, 1, '2026-08-05 11:00:00'),
+    $conditionRow('2085983764139225088', 2, 'stop_market', true, 2, 1, '2026-08-05 11:00:00'),
     $conditionRow('condition-outside', 4, 'trailing_stop', false, 0, 1, '2026-08-06 12:00:00'),
 ]);
 $database->getConnection()->table('orders')->insert([
@@ -1006,6 +1006,24 @@ $currentTpSl = $conditionService->search(
 );
 assertSameValue(['tp-sl-current'], array_column($currentTpSl->items(), 'condition_id'), 'TP/SL identity search should include active external bindings.');
 assertSameValue('external-bob', $currentTpSl->items()[0]['agent_user_id'], 'TP/SL rows should expose the external user ID.');
+
+$historyTpSl = $conditionService->search(
+    new ConditionOrderListQuery(
+        kind: ConditionOrderKind::TP_SL,
+        lifecycle: ConditionOrderLifecycle::HISTORY
+    ),
+    new AgentIdsScope([10])
+);
+assertSameValue(
+    '2085983764139225088',
+    $historyTpSl->items()[0]['condition_id'],
+    'Condition-order IDs larger than JavaScript safe integers must remain exact strings.'
+);
+assertSameValue(
+    'string',
+    get_debug_type($historyTpSl->items()[0]['condition_id']),
+    'Condition-order IDs must be serialized as strings.'
+);
 
 $historyConditions = $conditionService->search(
     new ConditionOrderListQuery(
