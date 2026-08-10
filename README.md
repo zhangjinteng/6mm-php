@@ -20,6 +20,19 @@ Shared PHP contracts, query objects, and domain services used by the 6MM adminis
 
 Authentication, routes, permissions, and application-specific data-scope resolution remain in each application.
 
+## Shared account change log list
+
+`AccountChangeLogListQueryService` owns the reusable account-change projection,
+identity and active external-binding joins, filtering, stable cursor pagination,
+and historical `user_type` fallback. The host must provide a `UserDataScope`;
+an empty scope fails closed. Rows expose the public UID as `user_id`, the
+internal platform user ID as `platform_user_id`, and use the log snapshot
+`user_type` before falling back to the current user type.
+
+Authentication, HTTP response envelopes, local-time to UTC conversion, product
+category enrichment, and business-specific detail actions remain
+application-owned.
+
 ## Shared user asset list
 
 `UserAssetListQueryService` owns the reusable base asset projection, user and

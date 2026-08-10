@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 use Illuminate\Database\Capsule\Manager as Capsule;
 use Illuminate\Database\Schema\Blueprint;
+use SixMm\Shared\AccountChangeLogs\AccountChangeLogListQuery;
+use SixMm\Shared\AccountChangeLogs\AccountChangeLogListQueryService;
 use SixMm\Shared\Contracts\UserTradingActionGateway;
 use SixMm\Shared\DataScope\AgentIdsScope;
 use SixMm\Shared\DataScope\AllUsersScope;
@@ -70,6 +72,26 @@ $schema->create('user_assets', static function (Blueprint $table): void {
     $table->decimal('frozen_balance', 24, 8)->default(0);
     $table->decimal('realized_pnl', 24, 8)->default(0);
     $table->unsignedBigInteger('version')->default(0);
+    $table->dateTime('created_at')->nullable();
+    $table->dateTime('updated_at')->nullable();
+    $table->dateTime('deleted_at')->nullable();
+});
+$schema->create('user_account_change_log', static function (Blueprint $table): void {
+    $table->increments('id');
+    $table->unsignedBigInteger('user_id');
+    $table->unsignedSmallInteger('user_type')->nullable();
+    $table->unsignedBigInteger('agent_id')->nullable();
+    $table->unsignedInteger('profile_version')->nullable();
+    $table->string('symbol')->nullable();
+    $table->string('asset_type')->nullable();
+    $table->decimal('amount', 24, 8)->default(0);
+    $table->decimal('wallet_balance_before', 24, 8)->default(0);
+    $table->decimal('wallet_balance_after', 24, 8)->default(0);
+    $table->decimal('frozen_balance_before', 24, 8)->default(0);
+    $table->decimal('frozen_balance_after', 24, 8)->default(0);
+    $table->string('change_type');
+    $table->string('reference_id')->nullable();
+    $table->text('description')->nullable();
     $table->dateTime('created_at')->nullable();
     $table->dateTime('updated_at')->nullable();
     $table->dateTime('deleted_at')->nullable();
@@ -182,6 +204,92 @@ $database->getConnection()->table('user_assets')->insert([
     ['ua_id' => 4, 'user_id' => 4, 'wallet_balance' => 999, 'frozen_balance' => 0, 'realized_pnl' => 0],
     ['ua_id' => 5, 'user_id' => 5, 'wallet_balance' => 75, 'frozen_balance' => 0, 'realized_pnl' => 0],
 ]);
+$database->getConnection()->table('user_account_change_log')->insert([
+    [
+        'id' => 100,
+        'user_id' => 1,
+        'user_type' => 1,
+        'agent_id' => 10,
+        'symbol' => 'BTCUSDT',
+        'asset_type' => 'USDT',
+        'amount' => -1,
+        'wallet_balance_before' => 100,
+        'wallet_balance_after' => 99,
+        'change_type' => 'HANDLING_FEE',
+        'reference_id' => 'trade-100',
+        'created_at' => '2026-08-02 10:00:00',
+    ],
+    [
+        'id' => 101,
+        'user_id' => 2,
+        'user_type' => 1,
+        'agent_id' => 10,
+        'symbol' => 'ETHUSDT',
+        'asset_type' => 'USDT',
+        'amount' => 2,
+        'wallet_balance_before' => 250,
+        'wallet_balance_after' => 252,
+        'change_type' => 'FUNDING_FEE_SETTLE',
+        'reference_id' => 'funding-101',
+        'created_at' => '2026-08-03 10:00:00',
+    ],
+    [
+        'id' => 102,
+        'user_id' => 4,
+        'user_type' => 1,
+        'agent_id' => 20,
+        'symbol' => 'BTCUSDT',
+        'asset_type' => 'USDT',
+        'amount' => 999,
+        'wallet_balance_before' => 0,
+        'wallet_balance_after' => 999,
+        'change_type' => 'REALIZED_PNL',
+        'reference_id' => 'outside-102',
+        'created_at' => '2026-08-04 10:00:00',
+    ],
+    [
+        'id' => 103,
+        'user_id' => 2,
+        'user_type' => 2,
+        'agent_id' => 10,
+        'symbol' => 'SOLUSDT',
+        'asset_type' => 'USDT',
+        'amount' => 10,
+        'wallet_balance_before' => 252,
+        'wallet_balance_after' => 262,
+        'change_type' => 'agent_transfer',
+        'reference_id' => 'transfer-in-103',
+        'created_at' => '2026-08-05 10:00:00',
+    ],
+    [
+        'id' => 104,
+        'user_id' => 2,
+        'user_type' => 2,
+        'agent_id' => 10,
+        'symbol' => 'SOLUSDT',
+        'asset_type' => 'USDT',
+        'amount' => -5,
+        'wallet_balance_before' => 262,
+        'wallet_balance_after' => 257,
+        'change_type' => 'agent_transfer_all_out',
+        'reference_id' => 'transfer-out-104',
+        'created_at' => '2026-08-06 10:00:00',
+    ],
+    [
+        'id' => 105,
+        'user_id' => 1,
+        'user_type' => 1,
+        'agent_id' => 10,
+        'symbol' => 'btcusdt',
+        'asset_type' => 'USDT',
+        'amount' => 3,
+        'wallet_balance_before' => 99,
+        'wallet_balance_after' => 102,
+        'change_type' => 'REALIZED_PNL',
+        'reference_id' => 'pnl-105',
+        'created_at' => '2026-08-07 10:00:00',
+    ],
+]);
 $database->getConnection()->table('user_daily_volume')->insert([
     ['user_id' => 1, 'trade_date' => '2026-08-01', 'volume' => 1000],
     ['user_id' => 2, 'trade_date' => '2026-08-02', 'volume' => 2000],
@@ -286,6 +394,85 @@ $emptyAssetScope = $userAssetService->search(new UserAssetListQuery(), new Agent
 assertSameValue(0, $emptyAssetScope->total(), 'An empty asset scope must fail closed.');
 assertSameValue([], $emptyAssetScope->items(), 'An empty asset scope must not return rows.');
 
+$accountChangeService = new AccountChangeLogListQueryService($database->getConnection());
+$accountChanges = $accountChangeService->search(
+    new AccountChangeLogListQuery(pageSize: 2),
+    new AgentIdsScope([10])
+);
+assertSameValue([105, 104], array_column($accountChanges->items(), 'id'), 'Account changes should default to ID descending.');
+assertSameValue(9001, $accountChanges->items()[0]['user_id'], 'Account changes should expose the public UID.');
+assertSameValue(1, $accountChanges->items()[0]['platform_user_id'], 'The internal platform user ID should remain available.');
+assertSameValue('Alice', $accountChanges->items()[0]['user']['nice_name'], 'The preferred display name should be projected.');
+assertSameValue(true, $accountChanges->hasMore(), 'The first cursor page should report a following page.');
+assertSameValue(false, $accountChanges->hasPrevious(), 'The first cursor page should not report a previous page.');
+
+$nextAccountChanges = $accountChangeService->search(
+    new AccountChangeLogListQuery(pageSize: 2, cursor: $accountChanges->nextCursor()),
+    new AgentIdsScope([10])
+);
+assertSameValue([103, 101], array_column($nextAccountChanges->items(), 'id'), 'The next cursor should continue the stable ID order.');
+assertSameValue(true, $nextAccountChanges->hasPrevious(), 'A following page should expose a previous cursor.');
+
+$previousAccountChanges = $accountChangeService->search(
+    new AccountChangeLogListQuery(pageSize: 2, cursor: $nextAccountChanges->previousCursor()),
+    new AgentIdsScope([10])
+);
+assertSameValue([105, 104], array_column($previousAccountChanges->items(), 'id'), 'The previous cursor should return to the prior page.');
+
+$amountSortedAccountChanges = $accountChangeService->search(
+    new AccountChangeLogListQuery(pageSize: 2, orderBy: 'amount', orderDirection: 'desc'),
+    new AgentIdsScope([10])
+);
+assertSameValue([103, 105], array_column($amountSortedAccountChanges->items(), 'id'), 'Amount sorting should use a stable ID tie-breaker.');
+$nextAmountSortedAccountChanges = $accountChangeService->search(
+    new AccountChangeLogListQuery(
+        pageSize: 2,
+        cursor: $amountSortedAccountChanges->nextCursor(),
+        orderBy: 'amount',
+        orderDirection: 'desc'
+    ),
+    new AgentIdsScope([10])
+);
+assertSameValue([101, 100], array_column($nextAmountSortedAccountChanges->items(), 'id'), 'Sorted cursors should continue from the last sort value.');
+
+$externalAccountChanges = $accountChangeService->search(
+    new AccountChangeLogListQuery(keyword: 'external-bob', userType: 2),
+    new AgentIdsScope([10])
+);
+assertSameValue([104, 103, 101], array_column($externalAccountChanges->items(), 'id'), 'External ID and current user type filters should compose.');
+assertSameValue(1, $externalAccountChanges->items()[2]['user_type'], 'Each row should preserve the historical user type stored with the account change.');
+assertSameValue('external-bob', $externalAccountChanges->items()[0]['agent_user_id'], 'The active external binding should be projected.');
+
+$symbolAccountChanges = $accountChangeService->search(
+    new AccountChangeLogListQuery(symbol: 'bTc'),
+    new AgentIdsScope([10])
+);
+assertSameValue([105, 100], array_column($symbolAccountChanges->items(), 'id'), 'Symbol filtering should be partial and case-insensitive.');
+
+$transferInChanges = $accountChangeService->search(
+    new AccountChangeLogListQuery(changeType: 'agent_transfer'),
+    new AgentIdsScope([10])
+);
+assertSameValue([103], array_column($transferInChanges->items(), 'id'), 'Transfer-in filtering should require a positive amount.');
+
+$transferOutChanges = $accountChangeService->search(
+    new AccountChangeLogListQuery(changeType: 'agent_transfer_all_out'),
+    new AgentIdsScope([10])
+);
+assertSameValue([104], array_column($transferOutChanges->items(), 'id'), 'Transfer-out filtering should include negative transfer variants.');
+
+$timeAccountChanges = $accountChangeService->search(
+    new AccountChangeLogListQuery(
+        createdAtStart: '2026-08-03 00:00:00',
+        createdAtEndExclusive: '2026-08-06 00:00:00'
+    ),
+    new AgentIdsScope([10])
+);
+assertSameValue([103, 101], array_column($timeAccountChanges->items(), 'id'), 'Time filtering should use an exclusive end boundary.');
+
+$emptyAccountChangeScope = $accountChangeService->search(new AccountChangeLogListQuery(), new AgentIdsScope([]));
+assertSameValue([], $emptyAccountChangeScope->items(), 'An empty account-change scope must fail closed.');
+
 $service = new OnlineUserQueryService($database->getConnection());
 $scoped = $service->search(new OnlineUserQuery(), new AgentIdsScope([10]));
 assertSameValue(2, $scoped->total(), 'Only online users inside the scope should be counted.');
@@ -346,4 +533,4 @@ assertSameValue([2], $tradingGateway->closedUserIds, 'Close-all should call the 
 assertSameValue(false, $tradingActions->cancelAllOrders(9004, new AgentIdsScope([10])), 'Trading actions must reject users outside the supplied scope.');
 assertSameValue([1], $tradingGateway->cancelledUserIds, 'Rejected actions must not call the host gateway.');
 
-fwrite(STDOUT, "Shared user-list, user-asset, online-user, user-detail, and user-action contract tests passed.\n");
+fwrite(STDOUT, "Shared user-list, user-asset, account-change, online-user, user-detail, and user-action contract tests passed.\n");
