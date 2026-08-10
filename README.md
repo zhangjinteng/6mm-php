@@ -13,12 +13,21 @@ Shared PHP contracts, query objects, and domain services used by the 6MM adminis
     }
   ],
   "require": {
-    "zhangjinteng/6mm-php": "^0.1"
+    "zhangjinteng/6mm-php": "^0.2"
   }
 }
 ```
 
 Authentication, routes, permissions, and application-specific data-scope resolution remain in each application.
+
+## Shared user list
+
+`UserListQueryService` owns the reusable user-list projection, filtering,
+pagination, aggregate sorting, and active external-binding lookup. The host must
+pass an explicit `UserDataScope`; it can additionally provide included or
+excluded internal platform user IDs for application-owned filters such as
+current ClickHouse positions. Authentication, HTTP response envelopes, IP
+enrichment, and position lookup remain application-owned.
 
 ## Shared user detail
 
