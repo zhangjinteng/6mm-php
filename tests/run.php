@@ -4,10 +4,13 @@ declare(strict_types=1);
 
 use Illuminate\Database\Capsule\Manager as Capsule;
 use Illuminate\Database\Schema\Blueprint;
+use SixMm\Shared\Contracts\UserTradingActionGateway;
 use SixMm\Shared\DataScope\AgentIdsScope;
+use SixMm\Shared\DataScope\AllUsersScope;
 use SixMm\Shared\OnlineUsers\OnlineUserQuery;
 use SixMm\Shared\OnlineUsers\OnlineUserQueryService;
 use SixMm\Shared\UserDetails\UserDetailQueryService;
+use SixMm\Shared\UserActions\UserTradingActionService;
 use SixMm\Shared\Users\UserListQuery;
 use SixMm\Shared\Users\UserListQueryService;
 
@@ -133,6 +136,20 @@ $database->getConnection()->table('users')->insert([
         'created_at' => '2026-08-04 11:00:00',
         'updated_at' => '2026-08-04 12:10:00',
     ],
+    [
+        'user_id' => 5,
+        'public_user_id' => 9005,
+        'agent_id' => 0,
+        'username' => 'platform-user',
+        'nick_name' => 'Platform User',
+        'user_type' => 1,
+        'vip_level' => 1,
+        'online_status' => 0,
+        'last_login_ip' => null,
+        'last_login_at' => null,
+        'created_at' => '2026-08-05 11:00:00',
+        'updated_at' => '2026-08-05 12:10:00',
+    ],
 ]);
 
 $database->getConnection()->table('agent_user_bindings')->insert([
@@ -212,6 +229,12 @@ $excludedUserList = $userListService->search(
 );
 assertSameValue([9002], array_column($excludedUserList->items(), 'user_id'), 'Excluded platform user IDs should be applied before pagination.');
 
+$platformRelationUserList = $userListService->search(
+    new UserListQuery(volumeSince: '2026-07-01', agentId: 0),
+    new AllUsersScope()
+);
+assertSameValue([9005], array_column($platformRelationUserList->items(), 'user_id'), 'Recommendation filtering should support platform users with agent ID zero.');
+
 $service = new OnlineUserQueryService($database->getConnection());
 $scoped = $service->search(new OnlineUserQuery(), new AgentIdsScope([10]));
 assertSameValue(2, $scoped->total(), 'Only online users inside the scope should be counted.');
@@ -247,4 +270,29 @@ assertSameValue(null, $outsideDetail, 'A user outside the supplied data scope mu
 $emptyScopeDetail = $detailService->findByPublicUserId(9001, new AgentIdsScope([]));
 assertSameValue(null, $emptyScopeDetail, 'An empty detail scope must fail closed.');
 
-fwrite(STDOUT, "Shared user-list, online-user, and user-detail contract tests passed.\n");
+$tradingGateway = new class implements UserTradingActionGateway {
+    /** @var int[] */
+    public array $cancelledUserIds = [];
+
+    /** @var int[] */
+    public array $closedUserIds = [];
+
+    public function cancelAllOrders(int $platformUserId): void
+    {
+        $this->cancelledUserIds[] = $platformUserId;
+    }
+
+    public function closeAllPositions(int $platformUserId): void
+    {
+        $this->closedUserIds[] = $platformUserId;
+    }
+};
+$tradingActions = new UserTradingActionService($detailService, $tradingGateway);
+assertSameValue(true, $tradingActions->cancelAllOrders(9001, new AgentIdsScope([10])), 'Cancel-all should resolve an authorized public UID.');
+assertSameValue([1], $tradingGateway->cancelledUserIds, 'Cancel-all should call the host gateway with the internal platform user ID.');
+assertSameValue(true, $tradingActions->closeAllPositions(9002, new AgentIdsScope([10])), 'Close-all should resolve an authorized public UID.');
+assertSameValue([2], $tradingGateway->closedUserIds, 'Close-all should call the host gateway with the internal platform user ID.');
+assertSameValue(false, $tradingActions->cancelAllOrders(9004, new AgentIdsScope([10])), 'Trading actions must reject users outside the supplied scope.');
+assertSameValue([1], $tradingGateway->cancelledUserIds, 'Rejected actions must not call the host gateway.');
+
+fwrite(STDOUT, "Shared user-list, online-user, user-detail, and user-action contract tests passed.\n");

@@ -43,7 +43,8 @@ final class UserListQuery
         private string $orderDirection = 'desc',
         private ?string $volumeSince = null,
         ?array $includedPlatformUserIds = null,
-        array $excludedPlatformUserIds = []
+        array $excludedPlatformUserIds = [],
+        private ?int $agentId = null
     ) {
         $this->page = max(1, $this->page);
         $this->pageSize = min(1000, max(1, $this->pageSize));
@@ -58,6 +59,9 @@ final class UserListQuery
             ? null
             : $this->normalizeIds($includedPlatformUserIds);
         $this->excludedPlatformUserIds = $this->normalizeIds($excludedPlatformUserIds);
+        $this->agentId = $this->agentId !== null && $this->agentId >= 0
+            ? $this->agentId
+            : null;
     }
 
     public function page(): int
@@ -125,6 +129,11 @@ final class UserListQuery
     public function excludedPlatformUserIds(): array
     {
         return $this->excludedPlatformUserIds;
+    }
+
+    public function agentId(): ?int
+    {
+        return $this->agentId;
     }
 
     /** @param array<int, int|string> $ids

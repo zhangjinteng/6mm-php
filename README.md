@@ -26,8 +26,10 @@ Authentication, routes, permissions, and application-specific data-scope resolut
 pagination, aggregate sorting, and active external-binding lookup. The host must
 pass an explicit `UserDataScope`; it can additionally provide included or
 excluded internal platform user IDs for application-owned filters such as
-current ClickHouse positions. Authentication, HTTP response envelopes, IP
-enrichment, and position lookup remain application-owned.
+current ClickHouse positions. `UserListQuery::agentId` optionally narrows the
+authorized scope to one recommendation relationship, including platform users
+whose agent ID is `0`. Authentication, HTTP response envelopes, IP enrichment,
+and position lookup remain application-owned.
 
 ## Shared user detail
 
@@ -36,3 +38,21 @@ application to provide an explicit `UserDataScope`. It returns the common user
 identity/login projection plus the internal platform user ID needed by the host
 to query its own trading services. Authentication, IP enrichment, live account
 data, and HTTP response envelopes remain application-owned.
+
+## Optional user trading actions
+
+`UserTradingActionService` resolves a public user UID inside the supplied
+`UserDataScope`, then calls a host implementation of
+`UserTradingActionGateway` with the internal platform user ID. The gateway owns
+the actual cancel-all-orders and close-all-positions RPC calls, transactions,
+logging, and error mapping. Applications that do not need these actions do not
+implement or instantiate the gateway.
+
+```php
+$actions = new UserTradingActionService(
+    new UserDetailQueryService(DB::connection()),
+    $applicationTradingGateway
+);
+
+$accepted = $actions->cancelAllOrders($publicUserId, $scope);
+```

@@ -150,6 +150,10 @@ final class UserListQueryService
             $query->where('users.online_status', $criteria->onlineStatus());
         }
 
+        if ($criteria->agentId() !== null) {
+            $query->where('users.agent_id', $criteria->agentId());
+        }
+
         if ($criteria->createdAtStart() !== null && $criteria->createdAtStart() !== '') {
             $query->where('users.created_at', '>=', $criteria->createdAtStart());
         }
