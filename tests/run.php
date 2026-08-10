@@ -7,6 +7,7 @@ use Illuminate\Database\Schema\Blueprint;
 use SixMm\Shared\DataScope\AgentIdsScope;
 use SixMm\Shared\OnlineUsers\OnlineUserQuery;
 use SixMm\Shared\OnlineUsers\OnlineUserQueryService;
+use SixMm\Shared\UserDetails\UserDetailQueryService;
 
 require dirname(__DIR__) . '/vendor/autoload.php';
 
@@ -150,4 +151,16 @@ $emptyScope = $service->search(new OnlineUserQuery(), new AgentIdsScope([]));
 assertSameValue(0, $emptyScope->total(), 'An empty scope must fail closed.');
 assertSameValue([], $emptyScope->items(), 'An empty scope must not return rows.');
 
-fwrite(STDOUT, "Online-user query contract tests passed.\n");
+$detailService = new UserDetailQueryService($database->getConnection());
+$detail = $detailService->findByPublicUserId(9001, new AgentIdsScope([10]));
+assertSameValue(1, $detail?->platformUserId(), 'The internal platform user ID should be available to the host application.');
+assertSameValue(9001, $detail?->toArray()['user_id'] ?? null, 'The public user ID should be projected to the shared response.');
+assertSameValue('external-alice', $detail?->toArray()['agent_user_id'] ?? null, 'The active external user binding should be included.');
+
+$outsideDetail = $detailService->findByPublicUserId(9004, new AgentIdsScope([10]));
+assertSameValue(null, $outsideDetail, 'A user outside the supplied data scope must not be returned.');
+
+$emptyScopeDetail = $detailService->findByPublicUserId(9001, new AgentIdsScope([]));
+assertSameValue(null, $emptyScopeDetail, 'An empty detail scope must fail closed.');
+
+fwrite(STDOUT, "Shared online-user and user-detail contract tests passed.\n");

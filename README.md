@@ -19,3 +19,11 @@ Shared PHP contracts, query objects, and domain services used by the 6MM adminis
 ```
 
 Authentication, routes, permissions, and application-specific data-scope resolution remain in each application.
+
+## Shared user detail
+
+`UserDetailQueryService` resolves a user by public UID and requires the host
+application to provide an explicit `UserDataScope`. It returns the common user
+identity/login projection plus the internal platform user ID needed by the host
+to query its own trading services. Authentication, IP enrichment, live account
+data, and HTTP response envelopes remain application-owned.
