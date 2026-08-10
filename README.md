@@ -20,6 +20,14 @@ Shared PHP contracts, query objects, and domain services used by the 6MM adminis
 
 Authentication, routes, permissions, and application-specific data-scope resolution remain in each application.
 
+## Shared user asset list
+
+`UserAssetListQueryService` owns the reusable base asset projection, user and
+active external-binding lookup, filtering, sorting, and pagination. The host
+must provide a `UserDataScope`; an empty scope fails closed. Authentication,
+HTTP response envelopes, trade-kernel account/position hydration, market-price
+subscriptions, and live position valuation remain application-owned.
+
 ## Shared user list
 
 `UserListQueryService` owns the reusable user-list projection, filtering,

@@ -11,6 +11,8 @@ use SixMm\Shared\OnlineUsers\OnlineUserQuery;
 use SixMm\Shared\OnlineUsers\OnlineUserQueryService;
 use SixMm\Shared\UserDetails\UserDetailQueryService;
 use SixMm\Shared\UserActions\UserTradingActionService;
+use SixMm\Shared\UserAssets\UserAssetListQuery;
+use SixMm\Shared\UserAssets\UserAssetListQueryService;
 use SixMm\Shared\Users\UserListQuery;
 use SixMm\Shared\Users\UserListQueryService;
 
@@ -61,9 +63,15 @@ $schema->create('agent_user_bindings', static function (Blueprint $table): void 
     $table->string('bind_status');
 });
 $schema->create('user_assets', static function (Blueprint $table): void {
-    $table->increments('id');
+    $table->increments('ua_id');
     $table->unsignedBigInteger('user_id');
+    $table->string('asset_type')->default('USDT');
     $table->decimal('wallet_balance', 24, 8)->default(0);
+    $table->decimal('frozen_balance', 24, 8)->default(0);
+    $table->decimal('realized_pnl', 24, 8)->default(0);
+    $table->unsignedBigInteger('version')->default(0);
+    $table->dateTime('created_at')->nullable();
+    $table->dateTime('updated_at')->nullable();
     $table->dateTime('deleted_at')->nullable();
 });
 $schema->create('user_daily_volume', static function (Blueprint $table): void {
@@ -168,9 +176,10 @@ $database->getConnection()->table('agent_user_bindings')->insert([
 ]);
 
 $database->getConnection()->table('user_assets')->insert([
-    ['user_id' => 1, 'wallet_balance' => 100],
-    ['user_id' => 2, 'wallet_balance' => 250],
-    ['user_id' => 3, 'wallet_balance' => 50],
+    ['ua_id' => 1, 'user_id' => 1, 'wallet_balance' => 100, 'frozen_balance' => 5, 'realized_pnl' => 10],
+    ['ua_id' => 2, 'user_id' => 2, 'wallet_balance' => 250, 'frozen_balance' => 8, 'realized_pnl' => -2],
+    ['ua_id' => 3, 'user_id' => 3, 'wallet_balance' => 50, 'frozen_balance' => 0, 'realized_pnl' => 0],
+    ['ua_id' => 4, 'user_id' => 4, 'wallet_balance' => 999, 'frozen_balance' => 0, 'realized_pnl' => 0],
 ]);
 $database->getConnection()->table('user_daily_volume')->insert([
     ['user_id' => 1, 'trade_date' => '2026-08-01', 'volume' => 1000],
@@ -235,6 +244,35 @@ $platformRelationUserList = $userListService->search(
 );
 assertSameValue([9005], array_column($platformRelationUserList->items(), 'user_id'), 'Recommendation filtering should support platform users with agent ID zero.');
 
+$userAssetService = new UserAssetListQueryService($database->getConnection());
+$userAssets = $userAssetService->search(
+    new UserAssetListQuery(),
+    new AgentIdsScope([10])
+);
+assertSameValue(3, $userAssets->total(), 'The shared asset list should include only assets inside the supplied scope.');
+assertSameValue([3, 2, 1], array_column($userAssets->items(), 'ua_id'), 'The shared asset list should default to asset ID descending.');
+assertSameValue([9003, 9002, 9001], array_column($userAssets->items(), 'user_id'), 'The shared asset list should expose public UIDs.');
+assertSameValue(2, $userAssets->items()[1]['platform_user_id'], 'The internal platform user ID should remain available to the host adapter.');
+assertSameValue('250', $userAssets->items()[1]['wallet_balance'], 'Asset amounts should be serialized as strings.');
+
+$filteredUserAssets = $userAssetService->search(
+    new UserAssetListQuery(keyword: 'external-bob', userType: 2),
+    new AgentIdsScope([10])
+);
+assertSameValue(1, $filteredUserAssets->total(), 'External-ID and user-type filters should compose.');
+assertSameValue(9002, $filteredUserAssets->items()[0]['user_id'], 'The filtered shared asset row should be returned.');
+assertSameValue('Bob', $filteredUserAssets->items()[0]['nice_name'], 'The preferred user display name should be projected.');
+
+$uidSortedUserAssets = $userAssetService->search(
+    new UserAssetListQuery(orderBy: 'user_id', orderDirection: 'asc'),
+    new AgentIdsScope([10])
+);
+assertSameValue([9001, 9002, 9003], array_column($uidSortedUserAssets->items(), 'user_id'), 'Public UID sorting should remain available.');
+
+$emptyAssetScope = $userAssetService->search(new UserAssetListQuery(), new AgentIdsScope([]));
+assertSameValue(0, $emptyAssetScope->total(), 'An empty asset scope must fail closed.');
+assertSameValue([], $emptyAssetScope->items(), 'An empty asset scope must not return rows.');
+
 $service = new OnlineUserQueryService($database->getConnection());
 $scoped = $service->search(new OnlineUserQuery(), new AgentIdsScope([10]));
 assertSameValue(2, $scoped->total(), 'Only online users inside the scope should be counted.');
@@ -295,4 +333,4 @@ assertSameValue([2], $tradingGateway->closedUserIds, 'Close-all should call the 
 assertSameValue(false, $tradingActions->cancelAllOrders(9004, new AgentIdsScope([10])), 'Trading actions must reject users outside the supplied scope.');
 assertSameValue([1], $tradingGateway->cancelledUserIds, 'Rejected actions must not call the host gateway.');
 
-fwrite(STDOUT, "Shared user-list, online-user, user-detail, and user-action contract tests passed.\n");
+fwrite(STDOUT, "Shared user-list, user-asset, online-user, user-detail, and user-action contract tests passed.\n");
