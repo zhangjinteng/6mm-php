@@ -30,7 +30,8 @@ final class CurrentPositionListQuery
         private string $createdAtStart = '',
         private string $createdAtEnd = '',
         private string $orderBy = 'position_id',
-        private string $orderDirection = 'desc'
+        private string $orderDirection = 'desc',
+        private bool $largeContract = false
     ) {
         $this->page = max(1, $this->page);
         $this->pageSize = min(100, max(1, $this->pageSize));
@@ -109,6 +110,11 @@ final class CurrentPositionListQuery
     public function orderDirection(): string
     {
         return $this->orderDirection;
+    }
+
+    public function largeContract(): bool
+    {
+        return $this->largeContract;
     }
 
     private function positiveIntegerOrNull(?int $value): ?int

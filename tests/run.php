@@ -583,7 +583,8 @@ $positionQuery = new CurrentPositionListQuery(
     positionSide: ' LONG ',
     leverage: -1,
     orderBy: 'unsupported',
-    orderDirection: 'ASC'
+    orderDirection: 'ASC',
+    largeContract: true
 );
 assertSameValue(1, $positionQuery->page(), 'Current-position pages should fail back to the first page.');
 assertSameValue(100, $positionQuery->pageSize(), 'Current-position page size should be capped.');
@@ -593,6 +594,8 @@ assertSameValue(null, $positionQuery->marginMode(), 'Unsupported margin modes sh
 assertSameValue('long', $positionQuery->positionSide(), 'Position sides should be normalized.');
 assertSameValue('position_id', $positionQuery->orderBy(), 'Unsupported position sorting should fail closed.');
 assertSameValue('asc', $positionQuery->orderDirection(), 'Position sort direction should be normalized.');
+assertSameValue(true, $positionQuery->largeContract(), 'Current-position queries should preserve the large-contract filter.');
+assertSameValue(false, (new CurrentPositionListQuery())->largeContract(), 'The large-contract filter should remain disabled by default.');
 
 $positionContext = new CurrentPositionUserContextService($database->getConnection());
 assertSameValue(
