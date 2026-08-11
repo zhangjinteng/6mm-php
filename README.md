@@ -60,21 +60,17 @@ host-timezone formatting, and fail-closed agent scoping. Applications provide a
 `LiquidationTradeQueryExecutor`, resolve the authorized agent IDs, and keep
 authentication and HTTP response envelopes application-owned.
 
-## Shared trade-fill list
+## Shared trade-fill user context
 
 `TradeFillListQuery` normalizes trade-fill pagination, filters, time boundaries,
-and allowed sorting fields. `TradeFillListQueryService` owns the ClickHouse list,
-historical order/current position/history position user-type precedence, position
-enrichment, stable pagination, and host-timezone conversion. Applications provide
-a `TradeFillQueryExecutor` and explicit scoped/fallback/keyword user IDs.
-
-`TradeFillUserContextService` resolves scoped users,
+and allowed sorting fields. `TradeFillUserContextService` resolves scoped users,
 matches public UID, username, preferred name, and active external bindings, then
 hydrates ClickHouse rows with public identity while rejecting rows outside the
 explicit `UserDataScope`. A valid historical `user_type` remains authoritative;
 the current user profile is only used as a fallback.
 
-Product-category enrichment, authentication, and HTTP envelopes remain host-owned.
+ClickHouse SQL, order/position history joins, product-category enrichment,
+authentication, detail drawers, and HTTP envelopes remain host-owned.
 
 ## Shared current-position user context
 
