@@ -22,6 +22,9 @@ use SixMm\Shared\HistoryPositions\HistoryPositionUserContextService;
 use SixMm\Shared\HistoryOrders\HistoryOrderListQuery;
 use SixMm\Shared\HistoryOrders\HistoryOrderUserContextService;
 use SixMm\Shared\Liquidations\LiquidationListQuery;
+use SixMm\Shared\Liquidations\LiquidationTradeListQuery;
+use SixMm\Shared\Liquidations\LiquidationTradeListQueryService;
+use SixMm\Shared\Liquidations\LiquidationTradeQueryExecutor;
 use SixMm\Shared\Liquidations\LiquidationUserContextService;
 use SixMm\Shared\TradeFills\TradeFillListQuery;
 use SixMm\Shared\TradeFills\TradeFillUserContextService;
@@ -1112,5 +1115,58 @@ assertSameValue(9001, $hydratedHistoryOrders[0]['user_id'], 'History-order hydra
 assertSameValue('external-alice', $hydratedHistoryOrders[0]['agent_user_id'], 'History-order hydration should expose the active external binding.');
 assertSameValue(2, $hydratedHistoryOrders[0]['user_type'], 'A valid history-order user type snapshot should remain authoritative.');
 assertSameValue(2, $hydratedHistoryOrders[1]['user_type'], 'History-order hydration should fall back to the current user type.');
+
+$liquidationTradeExecutor = new class implements LiquidationTradeQueryExecutor {
+    /** @var string[] */
+    public array $queries = [];
+
+    public function select(string $sql): array
+    {
+        $this->queries[] = $sql;
+
+        if (str_contains($sql, 'SELECT count() AS aggregate')) {
+            return [['aggregate' => '2']];
+        }
+
+        return [[
+            'position_id' => '10018143',
+            'order_id' => '100294664',
+            'side' => 'buy',
+            'price' => '63999.589239828693790149',
+            'quantity' => '5.604',
+            'trade_value' => '358653.6981',
+            'role_type' => 'TAKER',
+            'handling_fee' => '0',
+            'trade_time' => '2026-07-30 14:01:39',
+            'fill_count' => '10',
+        ]];
+    }
+};
+$liquidationTradeService = new LiquidationTradeListQueryService(
+    $liquidationTradeExecutor,
+    'freedex_history',
+    'Asia/Shanghai'
+);
+$liquidationTrades = $liquidationTradeService->search(
+    new LiquidationTradeListQuery(positionId: 10018143, page: 2, pageSize: 15),
+    [32, '33', 32, 0]
+);
+assertSameValue(2, $liquidationTrades->total(), 'Liquidation fills should count unique liquidation orders.');
+assertSameValue('100294664', $liquidationTrades->items()[0]['order_id'], 'Liquidation fills should preserve exact order IDs.');
+assertSameValue(2, count($liquidationTradeExecutor->queries), 'Liquidation fills should execute count and list queries.');
+assertSameValue(true, str_contains($liquidationTradeExecutor->queries[0], 'o.agent_id IN (32, 33)'), 'Liquidation fills should normalize agent scope.');
+assertSameValue(true, str_contains($liquidationTradeExecutor->queries[1], 'GROUP BY f.user_id, f.position_id, f.order_id'), 'Liquidation fills should aggregate by liquidation order.');
+assertSameValue(true, str_contains($liquidationTradeExecutor->queries[1], "toTimeZone(max(f.traded_at), 'Asia/Shanghai')"), 'Liquidation fill time should use the host timezone.');
+assertSameValue(true, str_contains($liquidationTradeExecutor->queries[1], 'LIMIT 15 OFFSET 15'), 'Liquidation fills should use normalized pagination.');
+
+$queryCountBeforeInvalidScope = count($liquidationTradeExecutor->queries);
+$invalidLiquidationTrades = $liquidationTradeService->search(
+    new LiquidationTradeListQuery(positionId: 0, page: -1, pageSize: 500),
+    []
+);
+assertSameValue([], $invalidLiquidationTrades->items(), 'Invalid liquidation fill scope must fail closed.');
+assertSameValue(1, $invalidLiquidationTrades->page(), 'Liquidation fill pages should be normalized.');
+assertSameValue(100, $invalidLiquidationTrades->pageSize(), 'Liquidation fill page size should be capped.');
+assertSameValue($queryCountBeforeInvalidScope, count($liquidationTradeExecutor->queries), 'Invalid liquidation fill scope must not query ClickHouse.');
 
 fwrite(STDOUT, "Shared user-list, user-asset, account-change, current-position, history-position, current-order, history-order, liquidation, trade-fill, condition-order, online-user, user-detail, and user-action contract tests passed.\n");

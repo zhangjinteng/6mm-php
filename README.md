@@ -52,6 +52,14 @@ ClickHouse aggregation, product-category symbol expansion, fee calculations,
 detail/trade-order endpoints, authentication, and HTTP envelopes remain owned by
 the host application.
 
+## Shared liquidation-trade list
+
+`LiquidationTradeListQueryService` owns the ClickHouse query that groups fills by
+position and liquidation order, stable pagination, fee/notional aggregation,
+host-timezone formatting, and fail-closed agent scoping. Applications provide a
+`LiquidationTradeQueryExecutor`, resolve the authorized agent IDs, and keep
+authentication and HTTP response envelopes application-owned.
+
 ## Shared trade-fill user context
 
 `TradeFillListQuery` normalizes trade-fill pagination, filters, time boundaries,
