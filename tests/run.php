@@ -26,6 +26,8 @@ use SixMm\Shared\Liquidations\LiquidationTradeListQuery;
 use SixMm\Shared\Liquidations\LiquidationTradeListQueryService;
 use SixMm\Shared\Liquidations\LiquidationTradeQueryExecutor;
 use SixMm\Shared\Liquidations\LiquidationUserContextService;
+use SixMm\Shared\MarginChangeLogs\MarginChangeLogListQuery;
+use SixMm\Shared\MarginChangeLogs\MarginChangeLogListQueryService;
 use SixMm\Shared\TradeFills\TradeFillListQuery;
 use SixMm\Shared\TradeFills\TradeFillUserContextService;
 use SixMm\Shared\OnlineUsers\OnlineUserQuery;
@@ -114,6 +116,28 @@ $schema->create('user_account_change_log', static function (Blueprint $table): v
     $table->dateTime('created_at')->nullable();
     $table->dateTime('updated_at')->nullable();
     $table->dateTime('deleted_at')->nullable();
+});
+$schema->create('agent_account_change_log', static function (Blueprint $table): void {
+    $table->increments('id');
+    $table->unsignedBigInteger('agent_id');
+    $table->unsignedBigInteger('platform_user_id')->nullable();
+    $table->unsignedSmallInteger('user_type')->nullable();
+    $table->string('currency')->nullable();
+    $table->string('biz_type');
+    $table->string('biz_id')->nullable();
+    $table->decimal('delta_amount', 24, 8)->default(0);
+    $table->decimal('balance_before', 24, 8)->default(0);
+    $table->decimal('balance_after', 24, 8)->default(0);
+    $table->string('order_no')->nullable();
+    $table->dateTime('created_at')->nullable();
+    $table->dateTime('updated_at')->nullable();
+    $table->dateTime('deleted_at')->nullable();
+});
+$schema->create('agent_transfer_orders', static function (Blueprint $table): void {
+    $table->increments('id');
+    $table->unsignedBigInteger('agent_id');
+    $table->string('agent_order_no');
+    $table->decimal('amount', 24, 8)->default(0);
 });
 $schema->create('user_daily_volume', static function (Blueprint $table): void {
     $table->increments('id');
@@ -390,6 +414,67 @@ $database->getConnection()->table('user_account_change_log')->insert([
         'created_at' => '2026-08-07 10:00:00',
     ],
 ]);
+$database->getConnection()->table('agent_account_change_log')->insert([
+    [
+        'id' => 200,
+        'agent_id' => 10,
+        'platform_user_id' => 1,
+        'user_type' => 1,
+        'currency' => 'USDT',
+        'biz_type' => 'fee',
+        'biz_id' => 'trade-200',
+        'delta_amount' => -1,
+        'balance_before' => 100,
+        'balance_after' => 99,
+        'order_no' => null,
+        'created_at' => '2026-08-02 10:00:00',
+    ],
+    [
+        'id' => 201,
+        'agent_id' => 10,
+        'platform_user_id' => 2,
+        'user_type' => 2,
+        'currency' => 'USDT',
+        'biz_type' => 'handling_fee',
+        'biz_id' => 'trade-201',
+        'delta_amount' => 0,
+        'balance_before' => 250,
+        'balance_after' => 250,
+        'order_no' => null,
+        'created_at' => '2026-08-03 10:00:00',
+    ],
+    [
+        'id' => 202,
+        'agent_id' => 10,
+        'platform_user_id' => 2,
+        'user_type' => 2,
+        'currency' => 'USDT',
+        'biz_type' => 'commission_rebate',
+        'biz_id' => 'commission-202',
+        'delta_amount' => 2,
+        'balance_before' => 250,
+        'balance_after' => 252,
+        'order_no' => 'A202',
+        'created_at' => '2026-08-04 10:00:00',
+    ],
+    [
+        'id' => 203,
+        'agent_id' => 20,
+        'platform_user_id' => 4,
+        'user_type' => 1,
+        'currency' => 'USDT',
+        'biz_type' => 'fee',
+        'biz_id' => 'outside-203',
+        'delta_amount' => 999,
+        'balance_before' => 0,
+        'balance_after' => 999,
+        'order_no' => null,
+        'created_at' => '2026-08-05 10:00:00',
+    ],
+]);
+$database->getConnection()->table('agent_transfer_orders')->insert([
+    ['agent_id' => 10, 'agent_order_no' => 'A202', 'amount' => 2],
+]);
 $database->getConnection()->table('user_daily_volume')->insert([
     ['user_id' => 1, 'trade_date' => '2026-08-01', 'volume' => 1000],
     ['user_id' => 2, 'trade_date' => '2026-08-02', 'volume' => 2000],
@@ -572,6 +657,36 @@ assertSameValue([103, 101], array_column($timeAccountChanges->items(), 'id'), 'T
 
 $emptyAccountChangeScope = $accountChangeService->search(new AccountChangeLogListQuery(), new AgentIdsScope([]));
 assertSameValue([], $emptyAccountChangeScope->items(), 'An empty account-change scope must fail closed.');
+
+$marginChangeService = new MarginChangeLogListQueryService($database->getConnection());
+$marginChanges = $marginChangeService->search(
+    new MarginChangeLogListQuery(),
+    new AgentIdsScope([10])
+);
+assertSameValue([202, 200], array_column($marginChanges->items(), 'id'), 'Margin changes should honor agent scope, zero filtering, and stable time sorting.');
+assertSameValue(9002, $marginChanges->items()[0]['user_id'], 'Margin changes should expose the public user UID.');
+assertSameValue('Bob', $marginChanges->items()[0]['user']['nice_name'], 'Margin changes should project user display data.');
+assertSameValue('2', $marginChanges->items()[0]['transfer_amount'], 'Margin changes should project matching transfer amounts.');
+
+$feeMarginChanges = $marginChangeService->search(
+    new MarginChangeLogListQuery(bizTypes: ['handling_fee'], includeZeroAmount: true),
+    new AgentIdsScope([10])
+);
+assertSameValue([201, 200], array_column($feeMarginChanges->items(), 'id'), 'Equivalent margin-change business types should expand together.');
+
+$filteredMarginChanges = $marginChangeService->search(
+    new MarginChangeLogListQuery(
+        bizTypes: ['fee_commission'],
+        userId: '9002',
+        username: 'BOB',
+        userType: 2
+    ),
+    new AgentIdsScope([10])
+);
+assertSameValue([202], array_column($filteredMarginChanges->items(), 'id'), 'Margin-change business and user filters should compose.');
+
+$emptyMarginChangeScope = $marginChangeService->search(new MarginChangeLogListQuery(), new AgentIdsScope([]));
+assertSameValue([], $emptyMarginChangeScope->items(), 'An empty margin-change scope must fail closed.');
 
 $positionQuery = new CurrentPositionListQuery(
     page: -2,
@@ -1175,4 +1290,4 @@ assertSameValue(1, $invalidLiquidationTrades->page(), 'Liquidation fill pages sh
 assertSameValue(100, $invalidLiquidationTrades->pageSize(), 'Liquidation fill page size should be capped.');
 assertSameValue($queryCountBeforeInvalidScope, count($liquidationTradeExecutor->queries), 'Invalid liquidation fill scope must not query ClickHouse.');
 
-fwrite(STDOUT, "Shared user-list, user-asset, account-change, current-position, history-position, current-order, history-order, liquidation, trade-fill, condition-order, online-user, user-detail, and user-action contract tests passed.\n");
+fwrite(STDOUT, "Shared user-list, user-asset, account-change, margin-change, current-position, history-position, current-order, history-order, liquidation, trade-fill, condition-order, online-user, user-detail, and user-action contract tests passed.\n");
