@@ -27,6 +27,8 @@ use SixMm\Shared\Liquidations\LiquidationTradeListQueryService;
 use SixMm\Shared\Liquidations\LiquidationTradeQueryExecutor;
 use SixMm\Shared\Liquidations\LiquidationUserContextService;
 use SixMm\Shared\TradeFills\TradeFillListQuery;
+use SixMm\Shared\TradeFills\TradeFillListQueryService;
+use SixMm\Shared\TradeFills\TradeFillQueryExecutor;
 use SixMm\Shared\TradeFills\TradeFillUserContextService;
 use SixMm\Shared\OnlineUsers\OnlineUserQuery;
 use SixMm\Shared\OnlineUsers\OnlineUserQueryService;
@@ -755,6 +757,92 @@ assertSameValue(9001, $hydratedTradeFills[0]['user_id'], 'Trade-fill hydration s
 assertSameValue('external-alice', $hydratedTradeFills[0]['agent_user_id'], 'Trade-fill hydration should expose the active external binding.');
 assertSameValue(2, $hydratedTradeFills[0]['user_type'], 'A valid historical trade-fill user type should remain authoritative.');
 assertSameValue(2, $hydratedTradeFills[1]['user_type'], 'Trade-fill hydration should fall back to the current user type.');
+
+$tradeFillExecutor = new class implements TradeFillQueryExecutor {
+    /** @var string[] */
+    public array $queries = [];
+
+    public function select(string $sql): array
+    {
+        $this->queries[] = $sql;
+        if (str_contains($sql, 'SELECT count() AS aggregate')) {
+            return [['aggregate' => '2']];
+        }
+        if (str_contains($sql, 'FROM freedex_history.history_trade_fills AS o')) {
+            return [
+                [
+                    'fill_id' => '7201', 'trade_id' => '8201', 'order_id' => '9201',
+                    'user_id' => '1', 'user_type' => 1, 'position_id' => '1001',
+                    'symbol' => 'BTCUSDT', 'side' => 'buy', 'price' => '100',
+                    'quantity' => '1', 'trade_value' => '100', 'handling_fee' => '0.1',
+                    'realized_pnl' => '2', 'role_type' => 'taker',
+                    'trade_time' => '2026-08-01 12:00:00',
+                ],
+                [
+                    'fill_id' => '7202', 'trade_id' => '8202', 'order_id' => '9202',
+                    'user_id' => '2', 'user_type' => null, 'position_id' => '1002',
+                    'symbol' => 'ETHUSDT', 'side' => 'sell', 'price' => '200',
+                    'quantity' => '2', 'trade_value' => '400', 'handling_fee' => '0.2',
+                    'realized_pnl' => '-3', 'role_type' => 'maker',
+                    'trade_time' => '2026-08-01 13:00:00',
+                ],
+            ];
+        }
+        if (str_contains($sql, 'FROM freedex_history.current_position_query')) {
+            return [[
+                'id' => '1001', 'position_id' => '1001', 'user_id' => '1',
+                'public_user_id' => '9001', 'user_type' => 1, 'margin_mode' => 1,
+                'leverage' => 20,
+            ]];
+        }
+        if (str_contains($sql, 'FROM freedex_history.history_position_query FINAL')) {
+            return [[
+                'id' => '1002', 'position_id' => '1002', 'user_id' => '2',
+                'user_type' => 2, 'margin_mode' => 2, 'leverage' => 10,
+            ]];
+        }
+        return [];
+    }
+};
+$tradeFillListService = new TradeFillListQueryService(
+    $tradeFillExecutor,
+    'freedex_history',
+    'Asia/Shanghai'
+);
+$tradeFillPage = $tradeFillListService->search(
+    new TradeFillListQuery(
+        page: 2,
+        pageSize: 20,
+        keyword: 'external-alice',
+        userType: 2,
+        symbol: 'btcusdt',
+        tradeTimeStart: '2026-08-01 00:00:00',
+        tradeTimeEnd: '2026-08-02 23:59:59',
+        orderBy: 'realized_pnl',
+        orderDirection: 'asc'
+    ),
+    [1, 2, 3],
+    [2, 99],
+    [1, 99]
+);
+assertSameValue(2, $tradeFillPage->total(), 'Trade-fill query service should preserve the source count.');
+assertSameValue(2, $tradeFillPage->page(), 'Trade-fill query service should preserve normalized pagination.');
+assertSameValue(1, $tradeFillPage->items()[0]['user_type'], 'Historical order user type should remain authoritative.');
+assertSameValue(2, $tradeFillPage->items()[1]['user_type'], 'History position user type should fill a missing order snapshot.');
+assertSameValue(1, $tradeFillPage->items()[0]['position']['margin_mode'], 'Current position context should be attached.');
+assertSameValue(2, $tradeFillPage->items()[1]['position']['margin_mode'], 'History position context should be attached.');
+assertSameValue(true, str_contains($tradeFillExecutor->queries[0], 'o.user_id IN (1, 2, 3)'), 'Trade-fill queries must apply explicit scoped users.');
+assertSameValue(true, str_contains($tradeFillExecutor->queries[0], 'o.user_id IN (2)'), 'Current user-type fallback IDs must be scope-safe.');
+assertSameValue(true, str_contains($tradeFillExecutor->queries[0], 'o.user_id IN (1)'), 'Keyword user IDs must be scope-safe.');
+assertSameValue(true, str_contains($tradeFillExecutor->queries[0], "2026-07-31 16:00:00.000"), 'Trade-fill start time should convert from host time to UTC.');
+assertSameValue(true, str_contains($tradeFillExecutor->queries[0], "2026-08-02 16:00:00.000"), 'Trade-fill inclusive end should become an exclusive UTC boundary.');
+assertSameValue(true, str_contains($tradeFillExecutor->queries[1], 'o.realized_pnl ASC'), 'Trade-fill sorting should use the normalized field and direction.');
+assertSameValue(true, str_contains($tradeFillExecutor->queries[1], 'LIMIT 20 OFFSET 20'), 'Trade-fill list should use stable server pagination.');
+
+$tradeFillQueriesBeforeEmptyScope = count($tradeFillExecutor->queries);
+$emptyTradeFillPage = $tradeFillListService->search(new TradeFillListQuery(), []);
+assertSameValue([], $emptyTradeFillPage->items(), 'An empty trade-fill scope must fail closed.');
+assertSameValue($tradeFillQueriesBeforeEmptyScope, count($tradeFillExecutor->queries), 'An empty trade-fill scope must not query ClickHouse.');
 
 $orderQuery = new CurrentOrderListQuery(
     pageSize: 500,
