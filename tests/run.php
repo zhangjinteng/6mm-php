@@ -17,6 +17,9 @@ use SixMm\Shared\ConditionOrders\ConditionOrderListQueryService;
 use SixMm\Shared\Contracts\UserTradingActionGateway;
 use SixMm\Shared\DataScope\AgentIdsScope;
 use SixMm\Shared\DataScope\AllUsersScope;
+use SixMm\Shared\FeeCommissions\FeeCommissionListQuery;
+use SixMm\Shared\FeeCommissions\FeeCommissionListQueryService;
+use SixMm\Shared\FeeCommissions\FeeCommissionTradeDetailProvider;
 use SixMm\Shared\HistoryPositions\HistoryPositionListQuery;
 use SixMm\Shared\HistoryPositions\HistoryPositionUserContextService;
 use SixMm\Shared\HistoryOrders\HistoryOrderListQuery;
@@ -138,6 +141,29 @@ $schema->create('agent_transfer_orders', static function (Blueprint $table): voi
     $table->unsignedBigInteger('agent_id');
     $table->string('agent_order_no');
     $table->decimal('amount', 24, 8)->default(0);
+});
+$schema->create('agent_commission_details', static function (Blueprint $table): void {
+    $table->increments('id');
+    $table->unsignedBigInteger('agent_id');
+    $table->unsignedBigInteger('platform_user_id');
+    $table->unsignedSmallInteger('user_type')->nullable();
+    $table->unsignedInteger('profile_version')->nullable();
+    $table->string('trade_id')->nullable();
+    $table->string('order_id')->nullable();
+    $table->string('position_id')->nullable();
+    $table->string('symbol')->nullable();
+    $table->string('base_asset')->nullable();
+    $table->string('side')->nullable();
+    $table->string('fee_asset')->nullable();
+    $table->string('margin_mode')->nullable();
+    $table->decimal('price', 24, 8)->nullable();
+    $table->decimal('quantity', 24, 8)->nullable();
+    $table->decimal('trade_value', 24, 8)->nullable();
+    $table->decimal('handling_fee', 24, 8)->nullable();
+    $table->decimal('commission_rate', 24, 8)->nullable();
+    $table->decimal('commission_amount', 24, 8)->nullable();
+    $table->string('role_type')->nullable();
+    $table->dateTime('trade_time')->nullable();
 });
 $schema->create('user_daily_volume', static function (Blueprint $table): void {
     $table->increments('id');
@@ -475,6 +501,68 @@ $database->getConnection()->table('agent_account_change_log')->insert([
 $database->getConnection()->table('agent_transfer_orders')->insert([
     ['agent_id' => 10, 'agent_order_no' => 'A202', 'amount' => 2],
 ]);
+$database->getConnection()->table('agent_commission_details')->insert([
+    [
+        'id' => 300,
+        'agent_id' => 10,
+        'platform_user_id' => 1,
+        'user_type' => 1,
+        'trade_id' => '2085983764139225001',
+        'order_id' => '2085983764139225002',
+        'position_id' => '2085983764139225003',
+        'symbol' => 'BTCUSDT',
+        'side' => 'buy',
+        'margin_mode' => 'cross',
+        'price' => 64000,
+        'quantity' => 0.1,
+        'trade_value' => 6400,
+        'handling_fee' => 3.2,
+        'commission_rate' => 0.1,
+        'commission_amount' => 0.32,
+        'role_type' => 'maker',
+        'trade_time' => '2026-08-09 10:00:00',
+    ],
+    [
+        'id' => 301,
+        'agent_id' => 10,
+        'platform_user_id' => 2,
+        'user_type' => 2,
+        'trade_id' => '2085983764139225086',
+        'order_id' => '2085983764139225087',
+        'position_id' => null,
+        'symbol' => 'XAUUSDT',
+        'side' => 'sell',
+        'margin_mode' => 'isolated',
+        'price' => null,
+        'quantity' => null,
+        'trade_value' => null,
+        'handling_fee' => 1.25,
+        'commission_rate' => 0.2,
+        'commission_amount' => 0.25,
+        'role_type' => 'taker',
+        'trade_time' => '2026-08-10 10:00:00',
+    ],
+    [
+        'id' => 302,
+        'agent_id' => 20,
+        'platform_user_id' => 4,
+        'user_type' => 1,
+        'trade_id' => 'outside-trade',
+        'order_id' => 'outside-order',
+        'position_id' => 'outside-position',
+        'symbol' => 'ETHUSDT',
+        'side' => 'sell',
+        'margin_mode' => 'isolated',
+        'price' => 3000,
+        'quantity' => 1,
+        'trade_value' => 3000,
+        'handling_fee' => 2,
+        'commission_rate' => 0.1,
+        'commission_amount' => 0.2,
+        'role_type' => 'maker',
+        'trade_time' => '2026-08-11 10:00:00',
+    ],
+]);
 $database->getConnection()->table('user_daily_volume')->insert([
     ['user_id' => 1, 'trade_date' => '2026-08-01', 'volume' => 1000],
     ['user_id' => 2, 'trade_date' => '2026-08-02', 'volume' => 2000],
@@ -687,6 +775,82 @@ assertSameValue([202], array_column($filteredMarginChanges->items(), 'id'), 'Mar
 
 $emptyMarginChangeScope = $marginChangeService->search(new MarginChangeLogListQuery(), new AgentIdsScope([]));
 assertSameValue([], $emptyMarginChangeScope->items(), 'An empty margin-change scope must fail closed.');
+
+$feeCommissionProvider = new class implements FeeCommissionTradeDetailProvider {
+    public int $calls = 0;
+
+    public function enrich(array $rows): array
+    {
+        $this->calls++;
+        foreach ($rows as &$row) {
+            if ((string) ($row['trade_id'] ?? '') !== '2085983764139225086') {
+                continue;
+            }
+            $row['position_id'] = '2085983764139225088';
+            $row['margin_mode'] = 'isolated';
+            $row['side'] = 'sell';
+            $row['quantity'] = '0.25';
+            $row['price'] = '2500.5';
+            $row['trade_value'] = '625.125';
+        }
+        unset($row);
+
+        return $rows;
+    }
+};
+$feeCommissionService = new FeeCommissionListQueryService(
+    $database->getConnection(),
+    $feeCommissionProvider
+);
+$feeCommissions = $feeCommissionService->search(
+    new FeeCommissionListQuery(),
+    new AgentIdsScope([10])
+);
+assertSameValue(2, $feeCommissions->total(), 'Fee commissions should honor the supplied agent scope.');
+assertSameValue(['301', '300'], array_column($feeCommissions->items(), 'id'), 'Fee commissions should use stable trade-time sorting.');
+assertSameValue('9002', $feeCommissions->items()[0]['user_id'], 'Fee commissions should expose the public user UID.');
+assertSameValue('external-bob', $feeCommissions->items()[0]['agent_user_id'], 'Fee commissions should expose the active external binding.');
+assertSameValue('2085983764139225088', $feeCommissions->items()[0]['position_id'], 'Fee commission identifiers must remain exact strings after enrichment.');
+assertSameValue('625.125', $feeCommissions->items()[0]['trade_value'], 'Missing relational trade details should be provided by the host adapter.');
+assertSameValue(1, $feeCommissionProvider->calls, 'Trade detail enrichment should run once for a non-empty page.');
+
+$filteredFeeCommissions = $feeCommissionService->search(
+    new FeeCommissionListQuery(
+        keyword: 'EXTERNAL-BOB',
+        symbol: 'xau',
+        marginMode: 2,
+        side: 'SELL',
+        roleType: 'TAKER',
+        tradeTimeStart: '2026-08-10 00:00:00',
+        tradeTimeEndExclusive: '2026-08-11 00:00:00'
+    ),
+    new AgentIdsScope([10])
+);
+assertSameValue(['301'], array_column($filteredFeeCommissions->items(), 'id'), 'Fee commission filters should compose and normalize enum values.');
+
+$exactFeeCommission = $feeCommissionService->search(
+    new FeeCommissionListQuery(keyword: '2085983764139225087'),
+    new AgentIdsScope([10])
+);
+assertSameValue(['301'], array_column($exactFeeCommission->items(), 'id'), 'Fee commission order IDs should support exact identity search.');
+
+$cachedFeeCommissionCount = $feeCommissionService->count(
+    new FeeCommissionListQuery(roleType: 'maker'),
+    new AgentIdsScope([10])
+);
+assertSameValue(1, $cachedFeeCommissionCount, 'Fee commissions should expose a reusable count query for host caching.');
+$knownTotalFeeCommissions = $feeCommissionService->search(
+    new FeeCommissionListQuery(roleType: 'maker'),
+    new AgentIdsScope([10]),
+    $cachedFeeCommissionCount
+);
+assertSameValue(1, $knownTotalFeeCommissions->total(), 'A host-provided cached total should be preserved.');
+
+$emptyFeeCommissionScope = $feeCommissionService->search(
+    new FeeCommissionListQuery(),
+    new AgentIdsScope([])
+);
+assertSameValue([], $emptyFeeCommissionScope->items(), 'An empty fee-commission scope must fail closed.');
 
 $positionQuery = new CurrentPositionListQuery(
     page: -2,

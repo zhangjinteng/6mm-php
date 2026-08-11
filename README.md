@@ -143,6 +143,21 @@ Authentication, HTTP response envelopes, local-time to UTC conversion, product
 category enrichment, and business-specific detail actions remain
 application-owned.
 
+## Shared fee commission list
+
+`FeeCommissionListQueryService` owns the reusable relational commission
+projection, public/external identity joins, filtering, stable sorting, counting,
+and pagination. The host must provide an explicit `UserDataScope`; an empty
+scope fails closed. Identifiers such as trade, order, and position IDs are
+serialized as strings so JavaScript clients retain their exact values.
+
+When relational snapshots are incomplete, an application can inject a
+`FeeCommissionTradeDetailProvider`. This keeps ClickHouse connections and SQL
+inside each host while allowing the shared service to return one consistent row
+contract. Authentication, local-time conversion, count caching, HTTP envelopes,
+agent commission configuration, and business cell navigation remain
+application-owned.
+
 ## Shared user asset list
 
 `UserAssetListQueryService` owns the reusable base asset projection, user and
