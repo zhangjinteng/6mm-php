@@ -31,7 +31,8 @@ final class CurrentPositionListQuery
         private string $createdAtEnd = '',
         private string $orderBy = 'position_id',
         private string $orderDirection = 'desc',
-        private bool $largeContract = false
+        private bool $largeContract = false,
+        private bool $liquidationWarning = false
     ) {
         $this->page = max(1, $this->page);
         $this->pageSize = min(100, max(1, $this->pageSize));
@@ -115,6 +116,11 @@ final class CurrentPositionListQuery
     public function largeContract(): bool
     {
         return $this->largeContract;
+    }
+
+    public function liquidationWarning(): bool
+    {
+        return $this->liquidationWarning;
     }
 
     private function positiveIntegerOrNull(?int $value): ?int

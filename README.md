@@ -81,10 +81,12 @@ username, preferred name, and active external bindings, then hydrates source
 position rows with public identity and account balances while dropping rows
 outside the authorized scope.
 
-`CurrentPositionListQuery::largeContract()` exposes an optional large-contract
-filter intent and defaults to `false`. The host application remains responsible
-for resolving the configured notional threshold, current market prices, and the
-source-specific predicate used to select large positions.
+`CurrentPositionListQuery::largeContract()` and
+`CurrentPositionListQuery::liquidationWarning()` expose optional large-contract
+and liquidation-warning filter intents. Both default to `false`. The host
+application remains responsible for resolving configured thresholds, current
+market prices, risk-position sources, and source-specific predicates used to
+select large or liquidation-warning positions.
 
 The position source itself remains application-owned: ClickHouse SQL, market
 subscriptions, gRPC position enrichment, TP/SL relations, close-position
