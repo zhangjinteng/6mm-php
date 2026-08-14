@@ -36,7 +36,7 @@ final class LiquidationListQuery
         $this->page = max(1, $this->page);
         $this->pageSize = min(100, max(1, $this->pageSize));
         $this->keyword = trim($this->keyword);
-        $this->userType = in_array($this->userType, [1, 2], true) ? $this->userType : null;
+        $this->userType = in_array($this->userType, [1, 2, 3], true) ? $this->userType : null;
         $this->productCategory = strtolower(trim($this->productCategory));
         $this->symbol = strtoupper(trim($this->symbol));
         $side = strtolower(trim($this->positionSide));

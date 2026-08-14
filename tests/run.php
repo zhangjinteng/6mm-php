@@ -948,6 +948,9 @@ assertSameValue('long', $liquidationQuery->positionSide(), 'Liquidation sides sh
 assertSameValue('occurred_at', $liquidationQuery->orderBy(), 'Unsupported liquidation sorting should fail closed.');
 assertSameValue('asc', $liquidationQuery->orderDirection(), 'Liquidation sort direction should be normalized.');
 
+$robotLiquidationQuery = new LiquidationListQuery(userType: 3);
+assertSameValue(3, $robotLiquidationQuery->userType(), 'Robot liquidation user type should be preserved.');
+
 $liquidationContext = new LiquidationUserContextService($database->getConnection());
 assertSameValue(
     [1],
