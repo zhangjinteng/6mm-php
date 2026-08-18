@@ -158,6 +158,35 @@ contract. Authentication, local-time conversion, count caching, HTTP envelopes,
 agent commission configuration, and business cell navigation remain
 application-owned.
 
+## Shared handling-fee configuration
+
+`HandlingFeeConfigListQuery` normalizes the owner and pagination inputs.
+`HandlingFeeConfigQueryService` returns the stable threshold-ordered projection,
+keeps agent owners isolated, exposes previous-threshold values across pages, and
+provides owner-scoped detail and next-level reads. The default owner is the
+platform configuration (`agent_id = 0`).
+
+```php
+use SixMm\Shared\HandlingFees\HandlingFeeConfigListQuery;
+use SixMm\Shared\HandlingFees\HandlingFeeConfigQueryService;
+use SixMm\Shared\HandlingFees\HandlingFeeConfigWriteGuard;
+
+$service = new HandlingFeeConfigQueryService(DB::connection());
+$result = $service->search(new HandlingFeeConfigListQuery(
+    agentId: $resolvedAgentId,
+    page: (int) request('page_no', 1),
+    pageSize: (int) request('page_size', 20),
+));
+
+$guard = new HandlingFeeConfigWriteGuard();
+$guard->assertAllows($config->agent_id);
+```
+
+The host must resolve `$resolvedAgentId` from its authenticated scope. Controllers,
+authorization, mutations, transactions, cache invalidation, audit logs, gRPC
+synchronization, and HTTP response envelopes remain application-owned. See
+[`docs/adr/0001-shared-handling-fee-config-boundary.md`](docs/adr/0001-shared-handling-fee-config-boundary.md).
+
 ## Shared user asset list
 
 `UserAssetListQueryService` owns the reusable base asset projection, user and

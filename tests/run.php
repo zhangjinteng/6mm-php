@@ -24,6 +24,9 @@ use SixMm\Shared\HistoryPositions\HistoryPositionListQuery;
 use SixMm\Shared\HistoryPositions\HistoryPositionUserContextService;
 use SixMm\Shared\HistoryOrders\HistoryOrderListQuery;
 use SixMm\Shared\HistoryOrders\HistoryOrderUserContextService;
+use SixMm\Shared\HandlingFees\HandlingFeeConfigListQuery;
+use SixMm\Shared\HandlingFees\HandlingFeeConfigQueryService;
+use SixMm\Shared\HandlingFees\HandlingFeeConfigWriteGuard;
 use SixMm\Shared\Liquidations\LiquidationListQuery;
 use SixMm\Shared\Liquidations\LiquidationTradeListQuery;
 use SixMm\Shared\Liquidations\LiquidationTradeListQueryService;
@@ -216,6 +219,18 @@ $schema->create('condition_orders', static function (Blueprint $table): void {
 $schema->create('orders', static function (Blueprint $table): void {
     $table->string('order_id')->primary();
     $table->decimal('filled_quantity', 24, 8)->default(0);
+});
+$schema->create('handling_fee_level_config', static function (Blueprint $table): void {
+    $table->increments('id');
+    $table->integer('agent_id')->default(0);
+    $table->integer('level');
+    $table->string('level_name');
+    $table->decimal('volume_30d', 20, 2);
+    $table->decimal('maker_fee_rate', 20, 10);
+    $table->decimal('taker_fee_rate', 20, 10);
+    $table->dateTime('created_at')->nullable();
+    $table->dateTime('updated_at')->nullable();
+    $table->dateTime('deleted_at')->nullable();
 });
 
 $database->getConnection()->table('users')->insert([
@@ -1457,4 +1472,44 @@ assertSameValue(1, $invalidLiquidationTrades->page(), 'Liquidation fill pages sh
 assertSameValue(100, $invalidLiquidationTrades->pageSize(), 'Liquidation fill page size should be capped.');
 assertSameValue($queryCountBeforeInvalidScope, count($liquidationTradeExecutor->queries), 'Invalid liquidation fill scope must not query ClickHouse.');
 
-fwrite(STDOUT, "Shared user-list, user-asset, account-change, margin-change, current-position, history-position, current-order, history-order, liquidation, trade-fill, condition-order, online-user, user-detail, and user-action contract tests passed.\n");
+$database->getConnection()->table('handling_fee_level_config')->insert([
+    ['id' => 1, 'agent_id' => 0, 'level' => 0, 'level_name' => '普通会员', 'volume_30d' => 5000000, 'maker_fee_rate' => 0.02, 'taker_fee_rate' => 0.05, 'deleted_at' => null],
+    ['id' => 2, 'agent_id' => 0, 'level' => 1, 'level_name' => 'VIP1', 'volume_30d' => 10000000, 'maker_fee_rate' => 0.018, 'taker_fee_rate' => 0.05, 'deleted_at' => null],
+    ['id' => 3, 'agent_id' => 0, 'level' => 2, 'level_name' => 'VIP2', 'volume_30d' => 50000000, 'maker_fee_rate' => 0.016, 'taker_fee_rate' => 0.04, 'deleted_at' => null],
+    ['id' => 4, 'agent_id' => 14, 'level' => 0, 'level_name' => '普通会员', 'volume_30d' => 7000000, 'maker_fee_rate' => 0.03, 'taker_fee_rate' => 0.06, 'deleted_at' => null],
+    ['id' => 5, 'agent_id' => 14, 'level' => 1, 'level_name' => 'VIP1', 'volume_30d' => 12000000, 'maker_fee_rate' => 0.025, 'taker_fee_rate' => 0.055, 'deleted_at' => null],
+    ['id' => 6, 'agent_id' => 14, 'level' => 2, 'level_name' => 'Deleted', 'volume_30d' => 15000000, 'maker_fee_rate' => 0.02, 'taker_fee_rate' => 0.05, 'deleted_at' => '2026-08-18 00:00:00'],
+]);
+
+$handlingFeeCriteria = new HandlingFeeConfigListQuery(agentId: -1, page: -2, pageSize: 1000);
+assertSameValue(0, $handlingFeeCriteria->agentId(), 'Handling-fee agent IDs should default to the platform scope.');
+assertSameValue(1, $handlingFeeCriteria->page(), 'Handling-fee pages should fail back to the first page.');
+assertSameValue(100, $handlingFeeCriteria->pageSize(), 'Handling-fee page size should be capped.');
+
+$handlingFeeService = new HandlingFeeConfigQueryService($database->getConnection());
+$platformFees = $handlingFeeService->search(new HandlingFeeConfigListQuery());
+assertSameValue(3, $platformFees->total(), 'Handling-fee queries should default to platform configuration.');
+assertSameValue(['普通会员', 'VIP1', 'VIP2'], array_column($platformFees->items(), 'level_name'), 'Handling-fee rows should use stable threshold ordering.');
+assertSameValue(['0', '5000000', '10000000'], array_column($platformFees->items(), 'volume_30d_min'), 'Handling-fee rows should expose the previous threshold.');
+
+$agentFees = $handlingFeeService->search(new HandlingFeeConfigListQuery(agentId: 14, pageSize: 1));
+assertSameValue(2, $agentFees->total(), 'Handling-fee queries should remain scoped to the selected agent.');
+assertSameValue([14], array_column($agentFees->items(), 'agent_id'), 'Handling-fee rows must not leak another owner.');
+$agentFeesPageTwo = $handlingFeeService->search(new HandlingFeeConfigListQuery(agentId: 14, page: 2, pageSize: 1));
+assertSameValue('7000000', $agentFeesPageTwo->items()[0]['volume_30d_min'], 'Handling-fee threshold projection should remain correct across pages.');
+assertSameValue('VIP3', $handlingFeeService->nextLevel()['level_name'], 'Handling-fee create defaults should advance the platform VIP level.');
+assertSameValue(14, $handlingFeeService->detail(4, 14)['agent_id'] ?? null, 'Handling-fee detail reads should enforce the supplied owner.');
+assertSameValue(null, $handlingFeeService->detail(4, 0), 'Handling-fee detail reads must not cross owner boundaries.');
+
+$handlingFeeWriteGuard = new HandlingFeeConfigWriteGuard();
+assertSameValue(true, $handlingFeeWriteGuard->allows(0), 'Platform handling-fee configuration should be writable.');
+assertSameValue(false, $handlingFeeWriteGuard->allows(14), 'Agent handling-fee configuration should be read-only.');
+$guardRejectedAgent = false;
+try {
+    $handlingFeeWriteGuard->assertAllows(14);
+} catch (DomainException) {
+    $guardRejectedAgent = true;
+}
+assertSameValue(true, $guardRejectedAgent, 'The handling-fee write guard should reject agent-owned rows.');
+
+fwrite(STDOUT, "Shared user-list, user-asset, account-change, margin-change, current-position, history-position, current-order, history-order, liquidation, trade-fill, condition-order, online-user, user-detail, user-action, and handling-fee contract tests passed.\n");
