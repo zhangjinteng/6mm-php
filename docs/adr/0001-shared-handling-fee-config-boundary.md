@@ -5,18 +5,18 @@
 
 ## Context
 
-Platform Admin and Agent Admin need the same handling-fee configuration table and edit experience. Their authentication, permissions, HTTP routes, cache invalidation, operation logs, and gRPC synchronization are different. Agent-owned rows are currently read-only while platform rows (`agent_id = 0`) are writable.
+Platform Admin and Agent Admin need the same handling-fee configuration table and edit experience. Their authentication, permissions, HTTP routes, cache invalidation, operation logs, and gRPC synchronization are different. Agent-owned rows may override platform defaults, while platform rows (`agent_id = 0`) remain the minimum allowed rates for each tier.
 
 ## Decision
 
-`6mm-ui` provides one composite `MmHandlingFeeConfig` component. It owns the table, owner filter, add/edit dialog, delete dialog, form validation, loading states, and platform-versus-agent read-only presentation. The host injects a list request and optional create, update, delete, detail, and create-default callbacks. Missing callbacks mean that capability is unavailable.
+`6mm-ui` provides one composite `MmHandlingFeeConfig` component. It owns the table, owner filter, add/edit dialog, delete dialog, form validation, and loading states. The host injects a list request and optional create, update, delete, detail, and create-default callbacks. Data ownership, editability, write ownership, and volume-threshold editability are independent component inputs.
 
-`6mm-php` provides the normalized list criteria, database query/projection service, create-default/detail reads, and `HandlingFeeConfigWriteGuard`. Host applications retain controllers, authorization, transactions, cache invalidation, audit logging, and gRPC synchronization.
+`6mm-php` provides the normalized list criteria, database query/projection service, create-default/detail reads, `HandlingFeeConfigWriteGuard`, and a transactional agent upsert service. On the first edit, the upsert service copies all missing platform levels to the agent. It enforces the platform same-tier floor and monotonic neighboring-tier Maker/Taker rates. Host applications retain controllers, authenticated-agent resolution, percentage conversion, cache invalidation, audit logging, and gRPC synchronization.
 
 ## Consequences
 
 - Platform Admin and Agent Admin render the same UI without sharing application routes.
-- Agent Admin can use the component in query-only mode.
+- Agent Admin can edit an effective platform fallback into a complete agent-owned configuration.
 - Server-side write authorization remains mandatory; hiding UI actions is not a security boundary.
 - Hosts adapt their existing response envelope to the component's small typed contract.
 

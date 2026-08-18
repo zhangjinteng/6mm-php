@@ -26,6 +26,8 @@ use SixMm\Shared\HistoryOrders\HistoryOrderListQuery;
 use SixMm\Shared\HistoryOrders\HistoryOrderUserContextService;
 use SixMm\Shared\HandlingFees\HandlingFeeConfigListQuery;
 use SixMm\Shared\HandlingFees\HandlingFeeConfigQueryService;
+use SixMm\Shared\HandlingFees\HandlingFeeConfigRateConstraintViolation;
+use SixMm\Shared\HandlingFees\HandlingFeeConfigUpsertService;
 use SixMm\Shared\HandlingFees\HandlingFeeConfigWriteGuard;
 use SixMm\Shared\Liquidations\LiquidationListQuery;
 use SixMm\Shared\Liquidations\LiquidationTradeListQuery;
@@ -1473,12 +1475,12 @@ assertSameValue(100, $invalidLiquidationTrades->pageSize(), 'Liquidation fill pa
 assertSameValue($queryCountBeforeInvalidScope, count($liquidationTradeExecutor->queries), 'Invalid liquidation fill scope must not query ClickHouse.');
 
 $database->getConnection()->table('handling_fee_level_config')->insert([
-    ['id' => 1, 'agent_id' => 0, 'level' => 0, 'level_name' => '普通会员', 'volume_30d' => 5000000, 'maker_fee_rate' => 0.02, 'taker_fee_rate' => 0.05, 'deleted_at' => null],
-    ['id' => 2, 'agent_id' => 0, 'level' => 1, 'level_name' => 'VIP1', 'volume_30d' => 10000000, 'maker_fee_rate' => 0.018, 'taker_fee_rate' => 0.05, 'deleted_at' => null],
-    ['id' => 3, 'agent_id' => 0, 'level' => 2, 'level_name' => 'VIP2', 'volume_30d' => 50000000, 'maker_fee_rate' => 0.016, 'taker_fee_rate' => 0.04, 'deleted_at' => null],
-    ['id' => 4, 'agent_id' => 14, 'level' => 0, 'level_name' => '普通会员', 'volume_30d' => 7000000, 'maker_fee_rate' => 0.03, 'taker_fee_rate' => 0.06, 'deleted_at' => null],
-    ['id' => 5, 'agent_id' => 14, 'level' => 1, 'level_name' => 'VIP1', 'volume_30d' => 12000000, 'maker_fee_rate' => 0.025, 'taker_fee_rate' => 0.055, 'deleted_at' => null],
-    ['id' => 6, 'agent_id' => 14, 'level' => 2, 'level_name' => 'Deleted', 'volume_30d' => 15000000, 'maker_fee_rate' => 0.02, 'taker_fee_rate' => 0.05, 'deleted_at' => '2026-08-18 00:00:00'],
+    ['id' => 1, 'agent_id' => 0, 'level' => 0, 'level_name' => '普通会员', 'volume_30d' => 5000000, 'maker_fee_rate' => 0.0002, 'taker_fee_rate' => 0.0005, 'deleted_at' => null],
+    ['id' => 2, 'agent_id' => 0, 'level' => 1, 'level_name' => 'VIP1', 'volume_30d' => 10000000, 'maker_fee_rate' => 0.00018, 'taker_fee_rate' => 0.0005, 'deleted_at' => null],
+    ['id' => 3, 'agent_id' => 0, 'level' => 2, 'level_name' => 'VIP2', 'volume_30d' => 50000000, 'maker_fee_rate' => 0.00016, 'taker_fee_rate' => 0.0004, 'deleted_at' => null],
+    ['id' => 4, 'agent_id' => 14, 'level' => 0, 'level_name' => '普通会员', 'volume_30d' => 7000000, 'maker_fee_rate' => 0.0003, 'taker_fee_rate' => 0.0006, 'deleted_at' => null],
+    ['id' => 5, 'agent_id' => 14, 'level' => 1, 'level_name' => 'VIP1', 'volume_30d' => 12000000, 'maker_fee_rate' => 0.00025, 'taker_fee_rate' => 0.00055, 'deleted_at' => null],
+    ['id' => 6, 'agent_id' => 14, 'level' => 2, 'level_name' => 'Deleted', 'volume_30d' => 15000000, 'maker_fee_rate' => 0.0002, 'taker_fee_rate' => 0.0005, 'deleted_at' => '2026-08-18 00:00:00'],
 ]);
 
 $handlingFeeCriteria = new HandlingFeeConfigListQuery(agentId: -1, page: -2, pageSize: 1000);
@@ -1511,5 +1513,61 @@ try {
     $guardRejectedAgent = true;
 }
 assertSameValue(true, $guardRejectedAgent, 'The handling-fee write guard should reject agent-owned rows.');
+
+$handlingFeeUpsert = new HandlingFeeConfigUpsertService($database->getConnection());
+$updatedAgentFee = $handlingFeeUpsert->upsertAgentLevel(14, 1, '0.00024', '0.00055');
+assertSameValue(14, $updatedAgentFee['agent_id'], 'Agent upserts should preserve the target owner.');
+assertSameValue(1, $updatedAgentFee['level'], 'Agent upserts should target tiers by stable level.');
+assertSameValue(0, bccomp('0.00024', $updatedAgentFee['maker_fee_rate'], 10), 'Agent upserts should persist the Maker rate.');
+assertSameValue(3, $database->getConnection()->table('handling_fee_level_config')->where('agent_id', 14)->whereNull('deleted_at')->count(), 'Agent upserts should restore missing platform tiers.');
+
+$newAgentFee = $handlingFeeUpsert->upsertAgentLevel(15, 1, '0.00019', '0.0005');
+assertSameValue(15, $newAgentFee['agent_id'], 'First edits should create agent-owned data.');
+assertSameValue(3, $database->getConnection()->table('handling_fee_level_config')->where('agent_id', 15)->whereNull('deleted_at')->count(), 'First edits should clone the complete platform tier set.');
+assertSameValue(
+    'VIP2',
+    $database->getConnection()->table('handling_fee_level_config')->where('agent_id', 15)->where('level', 2)->value('level_name'),
+    'First edits should retain unedited platform tiers.'
+);
+
+$platformFloorViolation = null;
+try {
+    $handlingFeeUpsert->upsertAgentLevel(16, 1, '0.00017', '0.0005');
+} catch (HandlingFeeConfigRateConstraintViolation $exception) {
+    $platformFloorViolation = $exception;
+}
+assertSameValue('maker_fee_rate', $platformFloorViolation?->field(), 'Maker rates must respect the platform same-tier floor.');
+assertSameValue(HandlingFeeConfigRateConstraintViolation::PLATFORM_FLOOR, $platformFloorViolation?->rule(), 'Maker platform-floor failures should expose their rule.');
+assertSameValue(0, $database->getConnection()->table('handling_fee_level_config')->where('agent_id', 16)->count(), 'Rejected first edits must roll back cloned tiers.');
+
+$takerFloorViolation = null;
+try {
+    $handlingFeeUpsert->upsertAgentLevel(17, 1, '0.00018', '0.00049');
+} catch (HandlingFeeConfigRateConstraintViolation $exception) {
+    $takerFloorViolation = $exception;
+}
+assertSameValue('taker_fee_rate', $takerFloorViolation?->field(), 'Taker rates must respect the platform same-tier floor.');
+assertSameValue(HandlingFeeConfigRateConstraintViolation::PLATFORM_FLOOR, $takerFloorViolation?->rule(), 'Taker platform-floor failures should expose their rule.');
+
+$database->getConnection()->table('handling_fee_level_config')
+    ->where('agent_id', 14)
+    ->where('level', 2)
+    ->whereNull('deleted_at')
+    ->update(['maker_fee_rate' => '0.00023']);
+$lowerTierViolation = null;
+try {
+    $handlingFeeUpsert->upsertAgentLevel(14, 1, '0.00022', '0.00055');
+} catch (HandlingFeeConfigRateConstraintViolation $exception) {
+    $lowerTierViolation = $exception;
+}
+assertSameValue(HandlingFeeConfigRateConstraintViolation::LOWER_TIER_FLOOR, $lowerTierViolation?->rule(), 'Rates must not be lower than the next tier.');
+
+$upperTierViolation = null;
+try {
+    $handlingFeeUpsert->upsertAgentLevel(14, 1, '0.00031', '0.00055');
+} catch (HandlingFeeConfigRateConstraintViolation $exception) {
+    $upperTierViolation = $exception;
+}
+assertSameValue(HandlingFeeConfigRateConstraintViolation::UPPER_TIER_CEILING, $upperTierViolation?->rule(), 'Rates must not be higher than the previous tier.');
 
 fwrite(STDOUT, "Shared user-list, user-asset, account-change, margin-change, current-position, history-position, current-order, history-order, liquidation, trade-fill, condition-order, online-user, user-detail, user-action, and handling-fee contract tests passed.\n");

@@ -169,6 +169,7 @@ platform configuration (`agent_id = 0`).
 ```php
 use SixMm\Shared\HandlingFees\HandlingFeeConfigListQuery;
 use SixMm\Shared\HandlingFees\HandlingFeeConfigQueryService;
+use SixMm\Shared\HandlingFees\HandlingFeeConfigUpsertService;
 use SixMm\Shared\HandlingFees\HandlingFeeConfigWriteGuard;
 
 $service = new HandlingFeeConfigQueryService(DB::connection());
@@ -180,11 +181,26 @@ $result = $service->search(new HandlingFeeConfigListQuery(
 
 $guard = new HandlingFeeConfigWriteGuard();
 $guard->assertAllows($config->agent_id);
+
+$upsert = new HandlingFeeConfigUpsertService(DB::connection());
+$row = $upsert->upsertAgentLevel(
+    agentId: $authenticatedMainAgentId,
+    level: $platformFallbackRow->level,
+    makerFeeRate: $databaseMakerRate,
+    takerFeeRate: $databaseTakerRate,
+);
 ```
 
-The host must resolve `$resolvedAgentId` from its authenticated scope. Controllers,
-authorization, mutations, transactions, cache invalidation, audit logs, gRPC
-synchronization, and HTTP response envelopes remain application-owned. See
+The upsert service copies every missing platform tier before the first agent edit,
+then updates the selected level transactionally. Maker and Taker rates cannot be
+lower than the platform rate for the same level, lower than the next tier, or
+higher than the previous tier. Rates use database decimal units (for example,
+`0.0002` means `0.02%`).
+
+The host must resolve `$resolvedAgentId` and `$authenticatedMainAgentId` from its
+authenticated scope. Controllers, authorization, percentage display conversion,
+cache invalidation, audit logs, gRPC synchronization, and HTTP response envelopes
+remain application-owned. See
 [`docs/adr/0001-shared-handling-fee-config-boundary.md`](docs/adr/0001-shared-handling-fee-config-boundary.md).
 
 ## Shared user asset list
