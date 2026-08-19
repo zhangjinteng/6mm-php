@@ -4,16 +4,30 @@ declare(strict_types=1);
 
 namespace SixMm\Shared\MarginChangeLogs;
 
+use DateTimeImmutable;
+use DateTimeInterface;
+use DateTimeZone;
 use Illuminate\Database\ConnectionInterface;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Database\Query\JoinClause;
 use SixMm\Shared\Contracts\UserDataScope;
 use SixMm\Shared\Pagination\PageResult;
+use Throwable;
 
 final class MarginChangeLogListQueryService
 {
-    public function __construct(private ConnectionInterface $connection)
+    private DateTimeZone $outputTimezone;
+
+    public function __construct(
+        private ConnectionInterface $connection,
+        string $outputTimezone = 'UTC'
+    )
     {
+        try {
+            $this->outputTimezone = new DateTimeZone($outputTimezone);
+        } catch (Throwable) {
+            $this->outputTimezone = new DateTimeZone('UTC');
+        }
     }
 
     /** @return PageResult<array<string, mixed>> */
@@ -30,10 +44,13 @@ final class MarginChangeLogListQueryService
             ->offset(($criteria->page() - 1) * $criteria->pageSize())
             ->limit($criteria->pageSize())
             ->get($this->columns())
-            ->map(static function (object $row): array {
+            ->map(function (object $row): array {
                 $item = (array) $row;
                 foreach (['delta_amount', 'balance_before', 'balance_after'] as $field) {
                     $item[$field] = (string) ($item[$field] ?? '0');
+                }
+                foreach (['created_at', 'updated_at'] as $field) {
+                    $item[$field] = $this->formatDateTime($item[$field] ?? null);
                 }
                 $item['transfer_amount'] = $item['transfer_amount'] === null
                     ? null
@@ -52,6 +69,25 @@ final class MarginChangeLogListQueryService
             ->all();
 
         return new PageResult($items, $total, $criteria->page(), $criteria->pageSize());
+    }
+
+    private function formatDateTime(mixed $value): ?string
+    {
+        if ($value === null || (!$value instanceof DateTimeInterface && trim((string) $value) === '')) {
+            return null;
+        }
+
+        try {
+            $dateTime = $value instanceof DateTimeInterface
+                ? DateTimeImmutable::createFromInterface($value)
+                : new DateTimeImmutable((string) $value, new DateTimeZone('UTC'));
+
+            return $dateTime
+                ->setTimezone($this->outputTimezone)
+                ->format('Y-m-d H:i:s');
+        } catch (Throwable) {
+            return (string) $value;
+        }
     }
 
     private function baseQuery(): Builder

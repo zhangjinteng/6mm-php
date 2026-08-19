@@ -498,7 +498,7 @@ $database->getConnection()->table('agent_account_change_log')->insert([
         'balance_before' => 250,
         'balance_after' => 252,
         'order_no' => 'A202',
-        'created_at' => '2026-08-04 10:00:00',
+        'created_at' => '2026-08-19 09:16:20.900410+00:00',
     ],
     [
         'id' => 203,
@@ -763,7 +763,10 @@ assertSameValue([103, 101], array_column($timeAccountChanges->items(), 'id'), 'T
 $emptyAccountChangeScope = $accountChangeService->search(new AccountChangeLogListQuery(), new AgentIdsScope([]));
 assertSameValue([], $emptyAccountChangeScope->items(), 'An empty account-change scope must fail closed.');
 
-$marginChangeService = new MarginChangeLogListQueryService($database->getConnection());
+$marginChangeService = new MarginChangeLogListQueryService(
+    $database->getConnection(),
+    'Asia/Shanghai'
+);
 $marginChanges = $marginChangeService->search(
     new MarginChangeLogListQuery(),
     new AgentIdsScope([10])
@@ -772,6 +775,7 @@ assertSameValue([202, 200], array_column($marginChanges->items(), 'id'), 'Margin
 assertSameValue(9002, $marginChanges->items()[0]['user_id'], 'Margin changes should expose the public user UID.');
 assertSameValue('Bob', $marginChanges->items()[0]['user']['nice_name'], 'Margin changes should project user display data.');
 assertSameValue('2', $marginChanges->items()[0]['transfer_amount'], 'Margin changes should project matching transfer amounts.');
+assertSameValue('2026-08-19 17:16:20', $marginChanges->items()[0]['created_at'], 'Margin-change timestamps should use the requested output timezone and omit fractional seconds.');
 
 $feeMarginChanges = $marginChangeService->search(
     new MarginChangeLogListQuery(bizTypes: ['handling_fee'], includeZeroAmount: true),
