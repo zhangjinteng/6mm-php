@@ -1196,6 +1196,46 @@ assertSameValue(2, $scoped->total(), 'Only online users inside the scope should 
 assertSameValue([9002, 9001], array_column($scoped->items(), 'user_id'), 'Default ordering should use last login descending.');
 assertSameValue('external-alice', $scoped->items()[1]['agent_user_id'], 'The active external user binding should be projected.');
 
+$database->getConnection()->table('user_account_change_log')->insert([
+    [
+        'id' => 1000,
+        'user_id' => 2,
+        'user_type' => 2,
+        'agent_id' => 10,
+        'asset_type' => 'USDT',
+        'amount' => 100,
+        'change_type' => 'deposit',
+        'reference_id' => 'deposit-1000',
+        'created_at' => '2026-08-08 10:00:00',
+        'deleted_at' => null,
+    ],
+    [
+        'id' => 1001,
+        'user_id' => 2,
+        'user_type' => 2,
+        'agent_id' => 10,
+        'asset_type' => 'USDT',
+        'amount' => -10,
+        'change_type' => 'withdraw',
+        'reference_id' => 'withdraw-1001',
+        'created_at' => '2026-08-09 10:00:00',
+        'deleted_at' => '2026-08-09 11:00:00',
+    ],
+]);
+
+$lastActiveTimes = $service->lastActiveTimes(
+    [9001, 9002, 9003, 9004, 9999],
+    new AgentIdsScope([10])
+);
+assertSameValue(
+    [
+        ['user_id' => 9001, 'last_active_at' => '2026-08-07 10:00:00'],
+        ['user_id' => 9002, 'last_active_at' => '2026-08-08 10:00:00'],
+    ],
+    $lastActiveTimes,
+    'Last-active lookup should combine login and selected account activity while enforcing online state, scope, and soft deletes.'
+);
+
 $filtered = $service->search(
     new OnlineUserQuery(
         keyword: 'external-bob',

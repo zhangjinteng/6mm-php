@@ -14,6 +14,17 @@ final class OnlineUserQueryService
 {
     private const ACTIVE_BINDING_STATUSES = ['BOUND', 'LOCKED'];
 
+    private const LAST_ACTIVE_CHANGE_TYPES = [
+        'deposit',
+        'DEPOSIT',
+        'withdraw',
+        'WITHDRAW',
+        'handling_fee',
+        'HANDLING_FEE',
+        'realized_pnl',
+        'REALIZED_PNL',
+    ];
+
     public function __construct(private ConnectionInterface $connection)
     {
     }
@@ -66,6 +77,108 @@ final class OnlineUserQueryService
             ->all();
 
         return new PageResult($items, $total, $criteria->page(), $criteria->pageSize());
+    }
+
+    /**
+     * Resolve the last active time for visible online users without delaying
+     * the primary online-user list query.
+     *
+     * @param array<int, int|string> $publicUserIds
+     * @return array<int, array{user_id: mixed, last_active_at: ?string}>
+     */
+    public function lastActiveTimes(array $publicUserIds, UserDataScope $scope): array
+    {
+        $publicUserIds = $this->normalizePublicUserIds($publicUserIds);
+        if ($publicUserIds === []) {
+            return [];
+        }
+
+        $usersQuery = $this->connection
+            ->table('users')
+            ->whereNull('users.deleted_at')
+            ->where('users.online_status', 1)
+            ->whereIn('users.public_user_id', $publicUserIds);
+
+        $scope->apply($usersQuery, 'users.agent_id');
+
+        $users = $usersQuery
+            ->get([
+                'users.user_id',
+                'users.public_user_id',
+                'users.last_login_at',
+            ])
+            ->keyBy(static fn (object $user): string => (string) $user->public_user_id);
+
+        if ($users->isEmpty()) {
+            return [];
+        }
+
+        $activityTimes = $this->connection
+            ->table('user_account_change_log')
+            ->whereNull('deleted_at')
+            ->whereIn('user_id', $users->pluck('user_id')->all())
+            ->whereIn('change_type', self::LAST_ACTIVE_CHANGE_TYPES)
+            ->groupBy('user_id')
+            ->pluck($this->connection->raw('MAX(created_at) AS last_activity_at'), 'user_id');
+
+        $result = [];
+        foreach ($publicUserIds as $publicUserId) {
+            $user = $users->get($publicUserId);
+            if ($user === null) {
+                continue;
+            }
+
+            $result[] = [
+                'user_id' => $user->public_user_id,
+                'last_active_at' => $this->latestDateTime(
+                    $user->last_login_at,
+                    $activityTimes->get($user->user_id)
+                ),
+            ];
+        }
+
+        return $result;
+    }
+
+    /** @param array<int, int|string> $publicUserIds */
+    private function normalizePublicUserIds(array $publicUserIds): array
+    {
+        $normalized = [];
+        foreach ($publicUserIds as $publicUserId) {
+            $value = trim((string) $publicUserId);
+            if ($value === '' || !ctype_digit($value) || (int) $value <= 0) {
+                continue;
+            }
+
+            $normalized[$value] = $value;
+        }
+
+        return array_values($normalized);
+    }
+
+    private function latestDateTime($loginTime, $activityTime): ?string
+    {
+        $loginTime = trim((string) ($loginTime ?? ''));
+        $activityTime = trim((string) ($activityTime ?? ''));
+
+        if ($loginTime === '') {
+            return $activityTime !== '' ? $activityTime : null;
+        }
+        if ($activityTime === '') {
+            return $loginTime;
+        }
+
+        $loginTimestamp = strtotime($loginTime);
+        $activityTimestamp = strtotime($activityTime);
+
+        if ($loginTimestamp === false) {
+            return $activityTime;
+        }
+        if ($activityTimestamp === false) {
+            return $loginTime;
+        }
+
+        return $activityTimestamp > $loginTimestamp ? $activityTime : $loginTime;
     }
 
     private function applyFilters(Builder $query, OnlineUserQuery $criteria): void
