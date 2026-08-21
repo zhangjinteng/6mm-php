@@ -4,8 +4,12 @@ declare(strict_types=1);
 
 use SixMm\Shared\IpLocations\IpInfoClient;
 use SixMm\Shared\IpLocations\IpInfoConfig;
+use SixMm\Shared\IpLocations\IpInfoHttpResponse;
+use SixMm\Shared\IpLocations\IpInfoHttpTransport;
+use SixMm\Shared\IpLocations\IpInfoRequestException;
 use SixMm\Shared\IpLocations\IpInfoService;
 use SixMm\Shared\IpLocations\IpLocationCache;
+use SixMm\Shared\IpLocations\CurlIpInfoClient;
 
 require dirname(__DIR__) . '/vendor/autoload.php';
 
@@ -61,6 +65,47 @@ final class FakeIpInfoClient implements IpInfoClient
     }
 }
 
+final class ThrowingIpInfoClient implements IpInfoClient
+{
+    public int $calls = 0;
+
+    public function lookupMany(array $ips, IpInfoConfig $config): array
+    {
+        $this->calls++;
+
+        throw new IpInfoRequestException('Temporary IPinfo failure.', 429);
+    }
+}
+
+final class FakeIpInfoHttpTransport implements IpInfoHttpTransport
+{
+    public array $requests = [];
+
+    /** @param list<IpInfoHttpResponse|Throwable> $responses */
+    public function __construct(private array $responses) {}
+
+    public function request(
+        string $method,
+        string $url,
+        array $headers,
+        ?string $body,
+        int $timeout
+    ): IpInfoHttpResponse {
+        $this->requests[] = compact('method', 'url', 'headers', 'body', 'timeout');
+        $response = array_shift($this->responses);
+
+        if ($response instanceof Throwable) {
+            throw $response;
+        }
+
+        if (!$response instanceof IpInfoHttpResponse) {
+            throw new RuntimeException('No fake HTTP response was configured.');
+        }
+
+        return $response;
+    }
+}
+
 $cache = new MemoryIpLocationCache();
 $client = new FakeIpInfoClient([
     '8.8.8.8' => [
@@ -113,6 +158,27 @@ assertIpLocationSame(300, max($failureCache->ttls), 'Unavailable results should 
 $failureService->lookup('9.9.9.9');
 assertIpLocationSame(1, count($failureClient->calls), 'Failure results should be cached to avoid request storms.');
 
+$transientCache = new MemoryIpLocationCache();
+$transientClient = new ThrowingIpInfoClient();
+$reportedErrors = [];
+$transientService = new IpInfoService(
+    $transientCache,
+    $config,
+    $transientClient,
+    static function (Throwable $exception) use (&$reportedErrors): void {
+        $reportedErrors[] = $exception;
+    }
+);
+assertIpLocationSame(
+    'unavailable',
+    $transientService->lookup('9.9.9.9')['kind'],
+    'Transient request failures should degrade to unavailable.'
+);
+$transientService->lookup('9.9.9.9');
+assertIpLocationSame(2, $transientClient->calls, 'Transient request failures should be retried on the next lookup.');
+assertIpLocationSame([], $transientCache->items, 'Transient request failures should not pollute the failure cache.');
+assertIpLocationSame(2, count($reportedErrors), 'Transient request failures should be reported for diagnostics.');
+
 $disabledClient = new FakeIpInfoClient();
 $disabledService = new IpInfoService(
     new MemoryIpLocationCache(),
@@ -130,5 +196,64 @@ assertIpLocationSame(
     $forwardedBatch['8.8.8.8, 10.0.0.1']['ip'],
     'Batch lookups should preserve the original value as the result key.'
 );
+
+$batchTransport = new FakeIpInfoHttpTransport([
+    new IpInfoHttpResponse(200, json_encode([
+        '8.8.8.8' => [
+            'country' => 'US',
+            'region' => 'California',
+            'city' => 'Mountain View',
+        ],
+        '1.1.1.1' => [
+            'country' => 'AU',
+            'region' => 'Queensland',
+            'city' => 'Brisbane',
+        ],
+    ], JSON_THROW_ON_ERROR)),
+]);
+$batchClient = new CurlIpInfoClient($batchTransport);
+$batchResult = $batchClient->lookupMany(['8.8.8.8', '1.1.1.1'], $config);
+assertIpLocationSame(1, count($batchTransport->requests), 'Multiple IPs should use one Batch API request.');
+assertIpLocationSame('POST', $batchTransport->requests[0]['method'], 'Batch lookups should use POST.');
+assertIpLocationSame(
+    'https://ipinfo.example/batch',
+    $batchTransport->requests[0]['url'],
+    'Batch lookups should use the configured IPinfo base URL.'
+);
+assertIpLocationSame(
+    true,
+    in_array('Authorization: Bearer secret', $batchTransport->requests[0]['headers'], true),
+    'Batch authentication should not expose the token in the request URL.'
+);
+assertIpLocationSame(
+    ['8.8.8.8', '1.1.1.1'],
+    json_decode($batchTransport->requests[0]['body'], true, 512, JSON_THROW_ON_ERROR),
+    'Batch request bodies should contain all requested IPs.'
+);
+assertIpLocationSame('US', $batchResult['8.8.8.8']['country'], 'Batch responses should be keyed by IP.');
+
+$fallbackTransport = new FakeIpInfoHttpTransport([
+    new IpInfoHttpResponse(403, '{"error":"batch plan required"}'),
+    new IpInfoHttpResponse(200, '{"ip":"8.8.8.8","country":"US"}'),
+    new IpInfoHttpResponse(200, '{"ip":"1.1.1.1","country":"AU"}'),
+]);
+$fallbackResult = (new CurlIpInfoClient($fallbackTransport))->lookupMany(
+    ['8.8.8.8', '1.1.1.1'],
+    $config
+);
+assertIpLocationSame(3, count($fallbackTransport->requests), 'Unsupported Batch APIs should fall back to single lookups.');
+assertIpLocationSame('GET', $fallbackTransport->requests[1]['method'], 'Single lookup fallbacks should be sequential GET requests.');
+assertIpLocationSame('US', $fallbackResult['8.8.8.8']['country'], 'Single lookup fallbacks should preserve successful results.');
+
+$rateLimitedTransport = new FakeIpInfoHttpTransport([
+    new IpInfoHttpResponse(429, '{"error":"rate limited"}'),
+]);
+try {
+    (new CurlIpInfoClient($rateLimitedTransport))->lookupMany(['8.8.8.8', '1.1.1.1'], $config);
+    throw new RuntimeException('Rate-limited Batch requests should throw.');
+} catch (IpInfoRequestException $exception) {
+    assertIpLocationSame(429, $exception->statusCode, 'Batch failures should retain their HTTP status.');
+}
+assertIpLocationSame(1, count($rateLimitedTransport->requests), 'Rate limiting should not trigger a single-request storm.');
 
 fwrite(STDOUT, "6mm-php IP location tests passed.\n");

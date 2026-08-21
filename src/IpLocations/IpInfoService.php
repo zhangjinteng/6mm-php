@@ -7,13 +7,18 @@ namespace SixMm\Shared\IpLocations;
 final class IpInfoService
 {
     private readonly IpInfoClient $client;
+    private readonly ?\Closure $errorReporter;
 
     public function __construct(
         private readonly IpLocationCache $cache,
         private readonly IpInfoConfig $config,
-        ?IpInfoClient $client = null
+        ?IpInfoClient $client = null,
+        ?callable $errorReporter = null
     ) {
         $this->client = $client ?? new CurlIpInfoClient();
+        $this->errorReporter = $errorReporter === null
+            ? null
+            : \Closure::fromCallable($errorReporter);
     }
 
     /** @return array<string, array<string, string>> */
@@ -69,8 +74,10 @@ final class IpInfoService
         }
 
         $responses = $this->config->token === ''
-            ? []
+            ? null
             : $this->requestLocations($cacheMisses);
+        $requestFailed = $responses === null;
+        $responses ??= [];
 
         foreach ($cacheMisses as $ip) {
             $payload = $responses[$ip] ?? null;
@@ -78,11 +85,13 @@ final class IpInfoService
                 ? $this->normalize($ip, $payload)
                 : $this->fallback($ip, 'unavailable');
 
-            $this->putCached(
-                $ip,
-                $location,
-                $location['kind'] === 'resolved' ? $this->config->cacheTtl : $this->config->failureCacheTtl
-            );
+            if (!$requestFailed) {
+                $this->putCached(
+                    $ip,
+                    $location,
+                    $location['kind'] === 'resolved' ? $this->config->cacheTtl : $this->config->failureCacheTtl
+                );
+            }
             $results[$ip] = $location;
         }
 
@@ -100,12 +109,20 @@ final class IpInfoService
         return $this->lookupNormalizedMany([$ip])[$ip] ?? null;
     }
 
-    private function requestLocations(array $ips): array
+    private function requestLocations(array $ips): ?array
     {
         try {
             return $this->client->lookupMany($ips, $this->config);
-        } catch (\Throwable) {
-            return [];
+        } catch (\Throwable $exception) {
+            if ($this->errorReporter !== null) {
+                try {
+                    ($this->errorReporter)($exception);
+                } catch (\Throwable) {
+                    // Optional diagnostics must never make a business query fail.
+                }
+            }
+
+            return null;
         }
     }
 

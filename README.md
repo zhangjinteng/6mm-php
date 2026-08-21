@@ -257,6 +257,12 @@ success/failure cache lifetimes. Host applications provide an
 `IpLocationCache`, normally through `LaravelIpLocationCache`, and read the
 IPinfo settings from their own environment.
 
+Multiple cache misses use IPinfo's official `/batch` endpoint in chunks of up
+to 1,000 IPs. Plans without Batch access fall back to sequential single-IP
+requests. Transport errors, rate limits, and provider failures return a
+temporary `unavailable` result without writing a negative cache entry; explicit
+per-IP empty responses retain the configured failure cache lifetime.
+
 The canonical result contains `ip`, `kind`, `country_code`, `country`, `region`,
 `city`, and `timezone`. `kind` is one of `resolved`, `private`, or `unavailable`.
 Presentation details such as flags and localized country names remain UI-owned.
