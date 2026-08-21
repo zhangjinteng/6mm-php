@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "e1d81b86e9fa708a2a0513cd9cbe5248",
+    "content-hash": "2cd84b7b2e96bd16a35fb635b3d10003",
     "packages": [
         {
             "name": "carbonphp/carbon-doctrine-types",
@@ -1984,6 +1984,57 @@
                 }
             ],
             "time": "2022-01-24T18:55:24+00:00"
+        },
+        {
+            "name": "zhangjinteng/6mm-addr",
+            "version": "v1.0.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/zhangjinteng/6mm-addr.git",
+                "reference": "0579ff3fd8f128ef32644eab44c85f1894505f8c"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/zhangjinteng/6mm-addr/zipball/0579ff3fd8f128ef32644eab44c85f1894505f8c",
+                "reference": "0579ff3fd8f128ef32644eab44c85f1894505f8c",
+                "shasum": ""
+            },
+            "require": {
+                "ext-mbstring": "*",
+                "ext-pdo": "*",
+                "ext-pdo_sqlite": "*",
+                "php": "^8.2"
+            },
+            "type": "library",
+            "extra": {
+                "branch-alias": {
+                    "dev-main": "1.0.x-dev"
+                }
+            },
+            "autoload": {
+                "psr-4": {
+                    "SixMm\\Addr\\": "src/"
+                }
+            },
+            "autoload-dev": {
+                "psr-4": {
+                    "SixMm\\Addr\\Tests\\": "tests/"
+                }
+            },
+            "scripts": {
+                "test": [
+                    "@php tests/run.php"
+                ]
+            },
+            "license": [
+                "proprietary"
+            ],
+            "description": "Versioned multilingual address data and lookup services for 6MM applications.",
+            "support": {
+                "source": "https://github.com/zhangjinteng/6mm-addr/tree/v1.0.0",
+                "issues": "https://github.com/zhangjinteng/6mm-addr/issues"
+            },
+            "time": "2026-08-21T10:52:11+00:00"
         }
     ],
     "packages-dev": [],
@@ -1993,10 +2044,10 @@
     "prefer-stable": false,
     "prefer-lowest": false,
     "platform": {
+        "php": "^8.2",
         "ext-bcmath": "*",
         "ext-curl": "*",
-        "ext-intl": "*",
-        "php": "^8.2"
+        "ext-intl": "*"
     },
     "platform-dev": {},
     "plugin-api-version": "2.9.0"

@@ -8,20 +8,25 @@ final class IpInfoService
 {
     private readonly IpInfoClient $client;
     private readonly ?\Closure $errorReporter;
+    private readonly ?\Closure $locationEnricher;
 
     public function __construct(
         private readonly IpLocationCache $cache,
         private readonly IpInfoConfig $config,
         ?IpInfoClient $client = null,
-        ?callable $errorReporter = null
+        ?callable $errorReporter = null,
+        ?callable $locationEnricher = null
     ) {
         $this->client = $client ?? new CurlIpInfoClient();
         $this->errorReporter = $errorReporter === null
             ? null
             : \Closure::fromCallable($errorReporter);
+        $this->locationEnricher = $locationEnricher === null
+            ? $this->defaultLocationEnricher()
+            : \Closure::fromCallable($locationEnricher);
     }
 
-    /** @return array<string, array<string, string>> */
+    /** @return array<string, array<string, mixed>> */
     public function lookupMany(array $ips): array
     {
         $aliases = [];
@@ -43,7 +48,7 @@ final class IpInfoService
         return $results;
     }
 
-    /** @return array<string, array<string, string>> */
+    /** @return array<string, array<string, mixed>> */
     private function lookupNormalizedMany(array $ips): array
     {
         $results = [];
@@ -98,7 +103,7 @@ final class IpInfoService
         return $results;
     }
 
-    /** @return array<string, string>|null */
+    /** @return array<string, mixed>|null */
     public function lookup(?string $rawIp): ?array
     {
         $ip = $this->normalizeInput($rawIp);
@@ -126,7 +131,7 @@ final class IpInfoService
         }
     }
 
-    /** @return array<string, string> */
+    /** @return array<string, mixed> */
     private function normalize(string $ip, array $payload): array
     {
         $geo = isset($payload['geo']) && is_array($payload['geo']) ? $payload['geo'] : $payload;
@@ -155,6 +160,7 @@ final class IpInfoService
             'country_code' => $countryCode,
             'country' => $country,
             'region' => trim((string) ($geo['region'] ?? '')),
+            'region_code' => strtoupper(trim((string) ($geo['region_code'] ?? ''))),
             'city' => trim((string) ($geo['city'] ?? '')),
             'timezone' => trim((string) ($geo['timezone'] ?? '')),
         ];
@@ -166,10 +172,10 @@ final class IpInfoService
             return $this->fallback($ip, 'unavailable');
         }
 
-        return $location;
+        return $this->enrich($location);
     }
 
-    /** @return array<string, string> */
+    /** @return array<string, mixed> */
     private function fallback(string $ip, string $kind): array
     {
         return [
@@ -178,6 +184,7 @@ final class IpInfoService
             'country_code' => '',
             'country' => '',
             'region' => '',
+            'region_code' => '',
             'city' => '',
             'timezone' => '',
         ];
@@ -218,7 +225,7 @@ final class IpInfoService
 
     private function cacheKey(string $ip): string
     {
-        return 'ipinfo:location:v1:' . hash('sha256', $ip);
+        return 'ipinfo:location:v2:' . hash('sha256', $ip);
     }
 
     private function getCached(string $ip): ?array
@@ -242,6 +249,53 @@ final class IpInfoService
             $this->cache->put($this->cacheKey($ip), $location, max($ttl, 1));
         } catch (\Throwable) {
             // Optional enrichment must never make a business query fail.
+        }
+    }
+
+    private function defaultLocationEnricher(): ?\Closure
+    {
+        $class = 'SixMm\\Addr\\AddressLocalizer';
+        if (!class_exists($class)) {
+            return null;
+        }
+
+        try {
+            $localizer = new $class();
+        } catch (\Throwable $exception) {
+            if ($this->errorReporter !== null) {
+                try {
+                    ($this->errorReporter)($exception);
+                } catch (\Throwable) {
+                    // Optional diagnostics must never make a business query fail.
+                }
+            }
+
+            return null;
+        }
+
+        return static fn (array $location): array => $localizer->enrich($location);
+    }
+
+    private function enrich(array $location): array
+    {
+        if ($this->locationEnricher === null) {
+            return $location;
+        }
+
+        try {
+            $enriched = ($this->locationEnricher)($location);
+
+            return is_array($enriched) ? $enriched : $location;
+        } catch (\Throwable $exception) {
+            if ($this->errorReporter !== null) {
+                try {
+                    ($this->errorReporter)($exception);
+                } catch (\Throwable) {
+                    // Optional diagnostics must never make a business query fail.
+                }
+            }
+
+            return $location;
         }
     }
 }

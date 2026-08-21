@@ -4,11 +4,15 @@
     "type": "library",
     "license": "proprietary",
     "require": {
+        "php": "^8.2",
         "ext-bcmath": "*",
         "ext-curl": "*",
         "ext-intl": "*",
-        "php": "^8.2",
-        "illuminate/database": "^8.75"
+        "illuminate/database": "^8.75",
+        "zhangjinteng/6mm-addr": "^1.0.0"
+    },
+    "suggest": {
+        "zhangjinteng/6mm-addr": "Adds versioned English and Chinese country, region, and city names to IP locations."
     },
     "autoload": {
         "psr-4": {
@@ -33,5 +37,10 @@
     },
     "config": {
         "sort-packages": true
-    }
+    },
+    "repositories": [{
+        "name": "6mm-addr",
+        "type": "vcs",
+        "url": "https://github.com/zhangjinteng/6mm-addr.git"
+    }]
 }

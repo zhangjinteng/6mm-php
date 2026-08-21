@@ -264,8 +264,13 @@ temporary `unavailable` result without writing a negative cache entry; explicit
 per-IP empty responses retain the configured failure cache lifetime.
 
 The canonical result contains `ip`, `kind`, `country_code`, `country`, `region`,
-`city`, and `timezone`. `kind` is one of `resolved`, `private`, or `unavailable`.
-Presentation details such as flags and localized country names remain UI-owned.
+`region_code`, `city`, and `timezone`. `kind` is one of `resolved`, `private`,
+or `unavailable`.
+
+When `zhangjinteng/6mm-addr` is installed, the service automatically enriches
+resolved locations with `country_names`, `region_names`, and `city_names` maps.
+Each map contains `en` and `zh`; missing Chinese names fall back to English.
+Applications without the optional package keep the original response shape.
 
 ## Optional user trading actions
 

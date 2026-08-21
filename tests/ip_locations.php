@@ -119,6 +119,7 @@ $client = new FakeIpInfoClient([
             'country_code' => 'AU',
             'country' => 'Australia',
             'region' => 'Queensland',
+            'region_code' => 'QLD',
             'city' => 'South Brisbane',
             'timezone' => 'Australia/Brisbane',
         ],
@@ -142,9 +143,34 @@ assertIpLocationSame('resolved', $locations['8.8.8.8']['kind'], 'A valid IPinfo 
 assertIpLocationSame('US', $locations['8.8.8.8']['country_code'], 'Legacy IPinfo country codes should be normalized.');
 assertIpLocationSame('United States', $locations['8.8.8.8']['country'], 'Legacy country codes should be expanded to a stable country name.');
 assertIpLocationSame('Australia', $locations['1.1.1.1']['country'], 'Nested geo payloads should retain country names.');
+assertIpLocationSame('QLD', $locations['1.1.1.1']['region_code'], 'Nested geo payloads should retain region codes.');
 assertIpLocationSame('private', $locations['10.0.0.1']['kind'], 'Private addresses should not call IPinfo.');
 assertIpLocationSame('unavailable', $locations['not-an-ip']['kind'], 'Invalid non-empty values should use the unavailable state.');
 assertIpLocationSame(86400, max($cache->ttls), 'Resolved results should use the success TTL.');
+
+$enrichedService = new IpInfoService(
+    new MemoryIpLocationCache(),
+    $config,
+    new FakeIpInfoClient([
+        '8.8.4.4' => [
+            'country_code' => 'US',
+            'country' => 'United States',
+            'region' => 'California',
+            'city' => 'Mountain View',
+        ],
+    ]),
+    null,
+    static function (array $location): array {
+        $location['city_names'] = ['en' => 'Mountain View', 'zh' => '山景城'];
+
+        return $location;
+    }
+);
+assertIpLocationSame(
+    '山景城',
+    $enrichedService->lookup('8.8.4.4')['city_names']['zh'],
+    'Optional address packages should enrich resolved locations.'
+);
 
 $service->lookupMany(['8.8.8.8']);
 assertIpLocationSame(1, count($client->calls), 'Resolved results should be read from cache.');
