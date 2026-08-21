@@ -5,6 +5,8 @@
     "license": "proprietary",
     "require": {
         "ext-bcmath": "*",
+        "ext-curl": "*",
+        "ext-intl": "*",
         "php": "^8.2",
         "illuminate/database": "^8.75"
     },
@@ -24,7 +26,10 @@
         }
     },
     "scripts": {
-        "test": "@php tests/run.php"
+        "test": [
+            "@php tests/run.php",
+            "@php tests/ip_locations.php"
+        ]
     },
     "config": {
         "sort-packages": true

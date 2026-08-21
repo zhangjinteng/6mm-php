@@ -20,6 +20,19 @@ Shared PHP contracts, query objects, and domain services used by the 6MM adminis
 
 Authentication, routes, permissions, and application-specific data-scope resolution remain in each application.
 
+## Shared product-category catalog
+
+`ProductCategorySnapshot` defines the versioned Redis payload shared by the
+platform and agent applications. It normalizes contract symbols and stable
+category codes, carries Chinese and English display names, validates a content
+hash, and builds the reverse category-to-symbol index used by list filters.
+
+Applications implement `ProductCategorySnapshotProvider`; the platform owns
+database publication and the agent remains read-only. `ProductCategoryResolver`
+then provides symbol lookup, reverse lookup, dynamic category options, and row
+enrichment through `product_category` and `product_category_name`. Unknown
+symbols remain unclassified and are never assumed to be cryptocurrency.
+
 ## Shared condition-order list
 
 `ConditionOrderListQueryService` owns the relational condition-order query,
@@ -224,16 +237,29 @@ pass an explicit `UserDataScope`; it can additionally provide included or
 excluded internal platform user IDs for application-owned filters such as
 current ClickHouse positions. `UserListQuery::agentId` optionally narrows the
 authorized scope to one recommendation relationship, including platform users
-whose agent ID is `0`. Authentication, HTTP response envelopes, IP enrichment,
-and position lookup remain application-owned.
+whose agent ID is `0`. Authentication, HTTP response envelopes, and position
+lookup remain application-owned. IP enrichment can be composed from the shared
+IP location module described below.
 
 ## Shared user detail
 
 `UserDetailQueryService` resolves a user by public UID and requires the host
 application to provide an explicit `UserDataScope`. It returns the common user
 identity/login projection plus the internal platform user ID needed by the host
-to query its own trading services. Authentication, IP enrichment, live account
-data, and HTTP response envelopes remain application-owned.
+to query its own trading services. Authentication, live account data, and HTTP
+response envelopes remain application-owned.
+
+## Shared IP location
+
+`IpLocations\IpInfoService` owns IP normalization, public/private
+classification, batch IPinfo lookup, canonical response shaping, and separate
+success/failure cache lifetimes. Host applications provide an
+`IpLocationCache`, normally through `LaravelIpLocationCache`, and read the
+IPinfo settings from their own environment.
+
+The canonical result contains `ip`, `kind`, `country_code`, `country`, `region`,
+`city`, and `timezone`. `kind` is one of `resolved`, `private`, or `unavailable`.
+Presentation details such as flags and localized country names remain UI-owned.
 
 ## Optional user trading actions
 

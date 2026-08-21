@@ -40,6 +40,10 @@ use SixMm\Shared\TradeFills\TradeFillListQuery;
 use SixMm\Shared\TradeFills\TradeFillUserContextService;
 use SixMm\Shared\OnlineUsers\OnlineUserQuery;
 use SixMm\Shared\OnlineUsers\OnlineUserQueryService;
+use SixMm\Shared\ProductCategories\ProductCategory;
+use SixMm\Shared\ProductCategories\ProductCategoryResolver;
+use SixMm\Shared\ProductCategories\ProductCategorySnapshot;
+use SixMm\Shared\ProductCategories\ProductCategorySnapshotProvider;
 use SixMm\Shared\UserDetails\UserDetailQueryService;
 use SixMm\Shared\UserActions\UserTradingActionService;
 use SixMm\Shared\UserAssets\UserAssetListQuery;
@@ -67,6 +71,34 @@ $database->addConnection([
     'database' => ':memory:',
 ]);
 $database->setAsGlobal();
+
+$productCategorySnapshot = new ProductCategorySnapshot([
+    'btcusdt' => new ProductCategory(' CRYPTO ', '加密货币', 'Cryptocurrency', 1),
+    'XAUUSDT' => new ProductCategory('tradfi', '传统金融', 'Traditional Finance', 2),
+    'OLDUSDT' => new ProductCategory('tradfi', '传统金融', 'Traditional Finance', 2, false),
+], '202608210001', '2026-08-21T00:01:00+08:00');
+$productCategoryProvider = new class($productCategorySnapshot) implements ProductCategorySnapshotProvider {
+    public function __construct(private ProductCategorySnapshot $value) {}
+    public function snapshot(): ?ProductCategorySnapshot { return $this->value; }
+};
+$productCategoryResolver = new ProductCategoryResolver($productCategoryProvider);
+assertSameValue('crypto', $productCategoryResolver->categoryForSymbol(' btcusdt ')?->code(), 'Product category codes should be normalized.');
+assertSameValue('加密货币', $productCategoryResolver->categoryForSymbol('BTCUSDT')?->displayName(), 'Chinese product category names should come from snapshot data.');
+assertSameValue(['OLDUSDT', 'XAUUSDT'], $productCategoryResolver->symbolsForCategory(' TRADFI '), 'Reverse category lookup should retain archived symbols for historical filters.');
+assertSameValue(null, $productCategoryResolver->categoryForSymbol('UNKNOWN'), 'Unknown symbols must not default to crypto.');
+$productCategoryRows = [['symbol' => 'btcusdt'], ['symbol' => 'UNKNOWN']];
+$productCategoryResolver->appendToRows($productCategoryRows);
+assertSameValue('crypto', $productCategoryRows[0]['product_category'], 'Row enrichment should expose the stable category code.');
+assertSameValue('加密货币', $productCategoryRows[0]['product_category_name'], 'Row enrichment should expose the localized category name.');
+assertSameValue(null, $productCategoryRows[1]['product_category'], 'Unknown row symbols should remain unclassified.');
+$serializedProductCategorySnapshot = $productCategorySnapshot->toArray();
+assertSameValue(
+    'tradfi',
+    ProductCategorySnapshot::tryFromArray($serializedProductCategorySnapshot)?->categoryForSymbol('XAUUSDT')?->code(),
+    'Serialized product category snapshots should round-trip.'
+);
+$serializedProductCategorySnapshot['hash'] = str_repeat('0', 64);
+assertSameValue(null, ProductCategorySnapshot::tryFromArray($serializedProductCategorySnapshot), 'Snapshots with an invalid content hash must be rejected.');
 
 $schema = $database->getConnection()->getSchemaBuilder();
 $schema->create('users', static function (Blueprint $table): void {
