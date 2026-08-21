@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "2cd84b7b2e96bd16a35fb635b3d10003",
+    "content-hash": "231c89cc06f240dc237d7b0c0de05b0f",
     "packages": [
         {
             "name": "carbonphp/carbon-doctrine-types",
@@ -1987,16 +1987,16 @@
         },
         {
             "name": "zhangjinteng/6mm-addr",
-            "version": "v1.0.0",
+            "version": "v1.0.1",
             "source": {
                 "type": "git",
                 "url": "https://github.com/zhangjinteng/6mm-addr.git",
-                "reference": "0579ff3fd8f128ef32644eab44c85f1894505f8c"
+                "reference": "ef356fdb545bdd67ddeb72f21cdd5e9c421d0498"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/zhangjinteng/6mm-addr/zipball/0579ff3fd8f128ef32644eab44c85f1894505f8c",
-                "reference": "0579ff3fd8f128ef32644eab44c85f1894505f8c",
+                "url": "https://api.github.com/repos/zhangjinteng/6mm-addr/zipball/ef356fdb545bdd67ddeb72f21cdd5e9c421d0498",
+                "reference": "ef356fdb545bdd67ddeb72f21cdd5e9c421d0498",
                 "shasum": ""
             },
             "require": {
@@ -2031,10 +2031,10 @@
             ],
             "description": "Versioned multilingual address data and lookup services for 6MM applications.",
             "support": {
-                "source": "https://github.com/zhangjinteng/6mm-addr/tree/v1.0.0",
+                "source": "https://github.com/zhangjinteng/6mm-addr/tree/v1.0.1",
                 "issues": "https://github.com/zhangjinteng/6mm-addr/issues"
             },
-            "time": "2026-08-21T10:52:11+00:00"
+            "time": "2026-08-21T12:09:16+00:00"
         }
     ],
     "packages-dev": [],
