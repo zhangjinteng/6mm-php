@@ -757,13 +757,19 @@ $nextAmountSortedAccountChanges = $accountChangeService->search(
 );
 assertSameValue([101, 100], array_column($nextAmountSortedAccountChanges->items(), 'id'), 'Sorted cursors should continue from the last sort value.');
 
-$externalAccountChanges = $accountChangeService->search(
-    new AccountChangeLogListQuery(keyword: 'external-bob', userType: 2),
+$publicUidAccountChanges = $accountChangeService->search(
+    new AccountChangeLogListQuery(keyword: '9002', userType: 2),
     new AgentIdsScope([10])
 );
-assertSameValue([104, 103, 101], array_column($externalAccountChanges->items(), 'id'), 'External ID and current user type filters should compose.');
-assertSameValue(1, $externalAccountChanges->items()[2]['user_type'], 'Each row should preserve the historical user type stored with the account change.');
-assertSameValue('external-bob', $externalAccountChanges->items()[0]['agent_user_id'], 'The active external binding should be projected.');
+assertSameValue([104, 103, 101], array_column($publicUidAccountChanges->items(), 'id'), 'Public UID and current user type filters should compose.');
+assertSameValue(1, $publicUidAccountChanges->items()[2]['user_type'], 'Each row should preserve the historical user type stored with the account change.');
+assertSameValue('external-bob', $publicUidAccountChanges->items()[0]['agent_user_id'], 'The active external binding should be projected.');
+
+$unsupportedAccountChangeKeyword = $accountChangeService->search(
+    new AccountChangeLogListQuery(keyword: 'external-bob'),
+    new AgentIdsScope([10])
+);
+assertSameValue([], $unsupportedAccountChangeKeyword->items(), 'Account-change keywords must only accept an exact public UID.');
 
 $symbolAccountChanges = $accountChangeService->search(
     new AccountChangeLogListQuery(symbol: 'bTc'),

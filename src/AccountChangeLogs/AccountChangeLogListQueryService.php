@@ -88,16 +88,11 @@ final class AccountChangeLogListQueryService
     {
         if ($criteria->keyword() !== '') {
             $keyword = $criteria->keyword();
-            $query->where(static function (Builder $nested) use ($keyword): void {
-                if (ctype_digit($keyword)) {
-                    $nested->where('users.public_user_id', $keyword);
-                }
-
-                $method = ctype_digit($keyword) ? 'orWhere' : 'where';
-                $nested->{$method}('users.username', 'like', '%' . $keyword . '%')
-                    ->orWhere('users.nick_name', 'like', '%' . $keyword . '%')
-                    ->orWhere('aub.agent_user_id', 'like', '%' . $keyword . '%');
-            });
+            if (!ctype_digit($keyword)) {
+                $query->whereRaw('1 = 0');
+            } else {
+                $query->where('users.public_user_id', $keyword);
+            }
         }
 
         if ($criteria->userType() !== null) {
