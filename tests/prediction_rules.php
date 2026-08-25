@@ -20,10 +20,10 @@ $assertSame = static function (mixed $expected, mixed $actual, string $message):
 };
 
 $rules = [
-    ['game_type' => 'UP_DOWN', 'symbol' => 'BTCUSDT', 'duration_seconds' => 60, 'enabled_by_default' => true],
-    ['game_type' => 'UP_DOWN', 'symbol' => 'BTCUSDT', 'duration_seconds' => 30, 'enabled_by_default' => true],
-    ['game_type' => 'UP_DOWN', 'symbol' => 'ETHUSDT', 'duration_seconds' => 30, 'enabled_by_default' => false],
-    ['game_type' => 'UP_DOWN', 'symbol' => 'ETHUSDT', 'duration_seconds' => 60, 'enabled_by_default' => true],
+    ['game_type' => 'UP_DOWN', 'symbol' => 'BTCUSDT', 'duration_seconds' => 60, 'enabled' => false, 'enabled_by_default' => true],
+    ['game_type' => 'UP_DOWN', 'symbol' => 'BTCUSDT', 'duration_seconds' => 30, 'enabled' => false, 'enabled_by_default' => true],
+    ['game_type' => 'UP_DOWN', 'symbol' => 'ETHUSDT', 'duration_seconds' => 30, 'enabled' => true, 'enabled_by_default' => false],
+    ['game_type' => 'UP_DOWN', 'symbol' => 'ETHUSDT', 'duration_seconds' => 60, 'enabled' => true, 'enabled_by_default' => true],
     [
         'game_type' => 'HIGH_LOW',
         'symbol' => 'BTCUSDT',
@@ -46,6 +46,7 @@ $assertSame(
 $assertSame(true, $all[0]['configured'], 'RPC rules should be marked as configured.');
 $assertSame(PredictionRuleCatalog::SOURCE_PREDICTION_SERVICE, $all[0]['source'], 'RPC rules should expose their source.');
 $assertSame(false, $all[4]['configured'], 'Missing RPC symbols should be marked as defaults.');
+$assertSame(false, $all[4]['enabled'], 'Generated defaults must expose a disabled actual state.');
 $assertSame(false, $all[4]['enabled_by_default'], 'Generated defaults must never be enabled implicitly.');
 $assertSame(
     PredictionRuleCatalog::SOURCE_SYMBOL_CONFIG_DEFAULT,
@@ -54,12 +55,24 @@ $assertSame(
 );
 $assertSame(15, $all[4]['bet_open_seconds']['default_value'], 'UP_DOWN defaults should match the agreed template.');
 
+$prioritized = $catalog->mergeAndFilter(
+    $rules,
+    ['SOLUSDT', 'ETHUSDT', 'BTCUSDT'],
+    PredictionGameType::UP_DOWN,
+    PredictionRuleStatus::ALL
+);
+$assertSame(
+    ['BTCUSDT', 'BTCUSDT', 'SOLUSDT', 'ETHUSDT', 'ETHUSDT'],
+    array_column($prioritized, 'symbol'),
+    'Enabled symbols should appear before disabled and missing symbols while preserving group order.'
+);
+
 $enabled = $catalog->mergeAndFilter($rules, $symbols, PredictionGameType::UP_DOWN, PredictionRuleStatus::ENABLED);
 $assertSame(2, count($enabled), 'Enabled should retain every duration of fully enabled symbols.');
 $assertSame(
     ['BTCUSDT', 'BTCUSDT'],
     array_column($enabled, 'symbol'),
-    'Only fully enabled symbols should match the enabled filter.'
+    'The enabled filter should use enabled_by_default instead of the RPC enabled field.'
 );
 
 $disabled = $catalog->mergeAndFilter($rules, $symbols, PredictionGameType::UP_DOWN, PredictionRuleStatus::DISABLED);

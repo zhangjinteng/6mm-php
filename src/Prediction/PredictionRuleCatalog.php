@@ -43,26 +43,33 @@ final class PredictionRuleCatalog
 
             $rule['game_type'] = $gameType->value;
             $rule['symbol'] = $symbol;
+            $rule['enabled'] = (bool) ($rule['enabled'] ?? false);
             $rule['configured'] = true;
             $rule['source'] = self::SOURCE_PREDICTION_SERVICE;
             $rulesBySymbol[$symbol][] = $rule;
         }
 
-        $result = [];
+        $enabledRules = [];
+        $disabledRules = [];
         foreach ($symbolList as $symbol) {
             $rules = $rulesBySymbol[$symbol] ?? [$this->defaultRule($gameType, $symbol)];
             usort($rules, static fn (array $left, array $right): int =>
                 (int) ($left['duration_seconds'] ?? 0) <=> (int) ($right['duration_seconds'] ?? 0)
             );
 
-            if (!$status->matches($this->isEnabled($rules))) {
+            $enabled = $this->isEnabled($rules);
+            if (!$status->matches($enabled)) {
                 continue;
             }
 
-            array_push($result, ...$rules);
+            if ($enabled) {
+                array_push($enabledRules, ...$rules);
+            } else {
+                array_push($disabledRules, ...$rules);
+            }
         }
 
-        return $result;
+        return [...$enabledRules, ...$disabledRules];
     }
 
     /** @param iterable<mixed, string> $symbols @return list<string> */
@@ -91,6 +98,7 @@ final class PredictionRuleCatalog
         }
 
         foreach ($rules as $rule) {
+            // 平台交易对的启用筛选以模板默认开关为准；RPC 的 enabled 仅作为实际状态回显。
             if (($rule['enabled_by_default'] ?? false) !== true) {
                 return false;
             }

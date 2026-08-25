@@ -13,6 +13,7 @@ final class PredictionRuleDefaults
             'game_type' => $gameType->value,
             'symbol' => strtoupper(trim($symbol)),
             'duration_seconds' => 30,
+            'enabled' => false,
             'enabled_by_default' => false,
             'minimum_stake' => $this->decimalConstraint('1', '0.1', '100'),
             'maximum_stake' => $this->decimalConstraint('3000', '100', '100000'),
