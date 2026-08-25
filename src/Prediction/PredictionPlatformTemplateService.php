@@ -39,6 +39,14 @@ final class PredictionPlatformTemplateService
         return $this->client->getTemplate($operatorId, $version, $includeDraft);
     }
 
+    /** @return array{draft: array<string, mixed>|null, current: array<string, mixed>} */
+    public function getTemplateByGameType(
+        string $operatorId,
+        PredictionGameType $gameType
+    ): array {
+        return $this->client->getTemplateByGameType($operatorId, $gameType->value);
+    }
+
     /**
      * @param iterable<mixed, string> $symbols
      * @return array{draft: array<string, mixed>|null, current: array<string, mixed>}
@@ -52,7 +60,7 @@ final class PredictionPlatformTemplateService
         bool $includeDraft = false
     ): array {
         $symbolList = is_array($symbols) ? $symbols : iterator_to_array($symbols, false);
-        $template = $this->getTemplate($operatorId, $version, $includeDraft);
+        $template = $this->getTemplateByGameType($operatorId, $gameType);
         $template['current']['rules'] = $this->ruleCatalog->mergeAndFilter(
             (array) ($template['current']['rules'] ?? []),
             $symbolList,

@@ -8,6 +8,7 @@ use Prediction\V1\GameplayConfig;
 use Prediction\V1\GameplayConfigRule;
 use Prediction\V1\GetGameplayConfigResponse;
 use Prediction\V1\PriceRule;
+use SixMm\Shared\Prediction\PredictionGameType;
 use SixMm\Shared\Prediction\PredictionPlatformTemplateService;
 
 require dirname(__DIR__) . '/vendor/autoload.php';
@@ -58,8 +59,8 @@ $service = new PredictionPlatformTemplateService(
         if ($method !== 'GetGameplayConfig') {
             throw new RuntimeException("Unexpected prediction RPC: {$method}");
         }
-        if ($request->getGameType() !== GameType::GAME_TYPE_UNSPECIFIED || $request->getSymbol() !== '') {
-            throw new RuntimeException('Unfiltered gameplay queries must not set RPC filters.');
+        if ($request->getGameType() !== GameType::GAME_TYPE_UP_DOWN || $request->getSymbol() !== '') {
+            throw new RuntimeException('Gameplay queries must forward game type without setting symbol.');
         }
 
         return [
@@ -78,7 +79,7 @@ $service = new PredictionPlatformTemplateService(
     false
 );
 
-$result = $service->getTemplate('operator-1');
+$result = $service->getTemplateByGameType('operator-1', PredictionGameType::UP_DOWN);
 if (($result['current']['version'] ?? null) !== 1) {
     throw new RuntimeException('The shared prediction service did not delegate to 6mm-prediction.');
 }
