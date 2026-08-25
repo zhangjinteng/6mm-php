@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "ed48e4dbfb6159c9492c5973c9114ad7",
+    "content-hash": "125e8332d240ddee64c3dd4d4c7b0908",
     "packages": [
         {
             "name": "carbonphp/carbon-doctrine-types",
@@ -2126,16 +2126,16 @@
         },
         {
             "name": "zhangjinteng/6mm-prediction",
-            "version": "v1.0.3",
+            "version": "v1.0.5",
             "source": {
                 "type": "git",
                 "url": "https://github.com/zhangjinteng/6mm-prediction.git",
-                "reference": "811c31acceca0cf7f6887be26a6617248a5a307e"
+                "reference": "f7d78b6df2e8b66f93842b15a4cbd3c63e55556b"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/zhangjinteng/6mm-prediction/zipball/811c31acceca0cf7f6887be26a6617248a5a307e",
-                "reference": "811c31acceca0cf7f6887be26a6617248a5a307e",
+                "url": "https://api.github.com/repos/zhangjinteng/6mm-prediction/zipball/f7d78b6df2e8b66f93842b15a4cbd3c63e55556b",
+                "reference": "f7d78b6df2e8b66f93842b15a4cbd3c63e55556b",
                 "shasum": ""
             },
             "require": {
@@ -2174,7 +2174,7 @@
                 "proprietary"
             ],
             "description": "Framework-agnostic PHP client and generated gRPC contracts for 6MM prediction services.",
-            "time": "2026-08-25T08:52:12+00:00"
+            "time": "2026-08-25T10:37:34+00:00"
         }
     ],
     "packages-dev": [],
