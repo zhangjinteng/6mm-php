@@ -41,6 +41,9 @@ $service = new PredictionPlatformTemplateService(
 $template = $service->getTemplate((string) $operatorId);
 ```
 
+The read path uses `PredictionConfigAdmin.GetGameplayConfig` without gameplay
+or symbol filters and preserves the existing `draft/current` response contract.
+
 Platform and agent applications should depend on `6mm-php`; they do not need
 to import generated protobuf classes or instantiate gRPC stubs directly.
 

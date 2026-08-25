@@ -10,7 +10,7 @@
         "ext-intl": "*",
         "illuminate/database": "^8.75",
         "zhangjinteng/6mm-addr": "^1.0.1",
-        "zhangjinteng/6mm-prediction": "^1.0.5"
+        "zhangjinteng/6mm-prediction": "^1.0.7"
     },
     "suggest": {
         "zhangjinteng/6mm-addr": "Adds versioned English and Chinese country, region, and city names to IP locations."
@@ -34,7 +34,8 @@
         "test": [
             "@php tests/run.php",
             "@php tests/ip_locations.php",
-            "@php tests/prediction.php"
+            "@php tests/prediction.php",
+            "@php tests/prediction_rules.php"
         ]
     },
     "config": {
