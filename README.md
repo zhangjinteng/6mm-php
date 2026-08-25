@@ -30,8 +30,6 @@ validation, authorization, logs, and translated errors inside each host.
 
 ```php
 use SixMm\Shared\Prediction\PredictionPlatformTemplateService;
-use SixMm\Shared\Prediction\PredictionGameType;
-use SixMm\Shared\Prediction\PredictionRuleStatus;
 
 $service = new PredictionPlatformTemplateService(
     timeoutMicroseconds: (int) config('prediction.grpc_timeout'),
@@ -40,24 +38,11 @@ $service = new PredictionPlatformTemplateService(
     tls: (bool) config('prediction.grpc_tls'),
 );
 
-$template = $service->getFilteredTemplate(
-    operatorId: (string) $operatorId,
-    symbols: $activeSymbols,
-    gameType: PredictionGameType::UP_DOWN,
-    status: PredictionRuleStatus::ALL,
-);
+$template = $service->getTemplate((string) $operatorId);
 ```
 
 Platform and agent applications should depend on `6mm-php`; they do not need
 to import generated protobuf classes or instantiate gRPC stubs directly.
-Each host remains responsible for reading its active, non-deleted
-`symbol_config` rows and passing the ordered symbol list to the shared service.
-The rule catalog treats that list as authoritative: RPC-only symbols are
-discarded, missing RPC symbols receive a disabled 30-second default rule, and
-the `enabled`/`disabled` filters operate on the complete set of durations for a
-symbol. Generated rules include `configured=false` and
-`source=symbol_config_default`; querying never writes them to the prediction
-service. Persist one selected gameplay and symbol with `saveSymbolConfig()`.
 
 ## Shared product-category catalog
 
