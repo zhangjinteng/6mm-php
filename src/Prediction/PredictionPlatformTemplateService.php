@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace SixMm\Shared\Prediction;
 
 use SixMm\Prediction\ClientConfiguration;
+use SixMm\Prediction\Exceptions\PredictionRpcException;
 use SixMm\Prediction\PlatformTemplates\PlatformTemplateClient;
 
 final class PredictionPlatformTemplateService
@@ -36,7 +37,9 @@ final class PredictionPlatformTemplateService
     /** @return array{draft: array<string, mixed>|null, current: array<string, mixed>} */
     public function getTemplate(string $operatorId, int $version = 0, bool $includeDraft = true): array
     {
-        return $this->client->getTemplate($operatorId, $version, $includeDraft);
+        return $this->invoke(
+            fn (): array => $this->client->getTemplate($operatorId, $version, $includeDraft)
+        );
     }
 
     /** @return array{draft: array<string, mixed>|null, current: array<string, mixed>} */
@@ -44,7 +47,9 @@ final class PredictionPlatformTemplateService
         string $operatorId,
         PredictionGameType $gameType
     ): array {
-        return $this->client->getTemplateByGameType($operatorId, $gameType->value);
+        return $this->invoke(
+            fn (): array => $this->client->getTemplateByGameType($operatorId, $gameType->value)
+        );
     }
 
     /**
@@ -83,13 +88,13 @@ final class PredictionPlatformTemplateService
     /** @return array{version: array<string, mixed>, receipt: array<string, mixed>|null} */
     public function saveSymbolConfig(string $operatorId, array $data): array
     {
-        return $this->client->saveSymbolConfig($operatorId, $data);
+        return $this->invoke(fn (): array => $this->client->saveSymbolConfig($operatorId, $data));
     }
 
     /** @return array{draft: array<string, mixed>, receipt: array<string, mixed>|null} */
     public function saveDraft(string $operatorId, array $data): array
     {
-        return $this->client->saveDraft($operatorId, $data);
+        return $this->invoke(fn (): array => $this->client->saveDraft($operatorId, $data));
     }
 
     /**
@@ -101,6 +106,15 @@ final class PredictionPlatformTemplateService
      */
     public function publish(string $operatorId, array $data): array
     {
-        return $this->client->publish($operatorId, $data);
+        return $this->invoke(fn (): array => $this->client->publish($operatorId, $data));
+    }
+
+    private function invoke(callable $callback): array
+    {
+        try {
+            return $callback();
+        } catch (PredictionRpcException $exception) {
+            throw PredictionServiceException::fromRpcException($exception);
+        }
     }
 }

@@ -35,6 +35,7 @@
             "@php tests/run.php",
             "@php tests/ip_locations.php",
             "@php tests/prediction.php",
+            "@php tests/prediction_errors.php",
             "@php tests/prediction_rules.php"
         ]
     },

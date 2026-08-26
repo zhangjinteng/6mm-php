@@ -26,7 +26,7 @@ Authentication, routes, permissions, and application-specific data-scope resolut
 gateway for platform prediction templates. It delegates protocol transport,
 metadata, request construction, and response mapping to
 `zhangjinteng/6mm-prediction`, while keeping Laravel configuration, HTTP
-validation, authorization, logs, and translated errors inside each host.
+validation, authorization, logs, and response envelopes inside each host.
 
 ```php
 use SixMm\Shared\Prediction\PredictionPlatformTemplateService;
@@ -47,6 +47,12 @@ the existing `draft/current` response contract.
 
 Platform and agent applications should depend on `6mm-php`; they do not need
 to import generated protobuf classes or instantiate gRPC stubs directly.
+
+All prediction RPC failures are normalized to `PredictionServiceException`.
+Its message is safe to return to an administrator, while `errorCode()` provides
+a stable machine-readable code. Raw gRPC details remain available only through
+`rawDetails()` and `logContext()` so host applications can record diagnostics
+without exposing service addresses or transport errors in HTTP responses.
 
 ## Shared product-category catalog
 
