@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "5faea25dfce42e37b69f754471ae0049",
+    "content-hash": "c5977e91d8ae82e5a7ab76e14b20a09c",
     "packages": [
         {
             "name": "carbonphp/carbon-doctrine-types",
@@ -2126,7 +2126,7 @@
         },
         {
             "name": "zhangjinteng/6mm-prediction",
-            "version": "v1.0.10",
+            "version": "v1.0.11",
             "source": {
                 "type": "git",
                 "url": "https://github.com/zhangjinteng/6mm-prediction.git",

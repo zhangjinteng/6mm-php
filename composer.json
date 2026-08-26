@@ -10,7 +10,7 @@
         "ext-intl": "*",
         "illuminate/database": "^8.75",
         "zhangjinteng/6mm-addr": "^1.0.1",
-        "zhangjinteng/6mm-prediction": "^1.0.10"
+        "zhangjinteng/6mm-prediction": "^1.0.11"
     },
     "suggest": {
         "zhangjinteng/6mm-addr": "Adds versioned English and Chinese country, region, and city names to IP locations."
