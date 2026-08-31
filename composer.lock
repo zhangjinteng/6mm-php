@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "c5977e91d8ae82e5a7ab76e14b20a09c",
+    "content-hash": "a189b882415bb9747ad2c3af8de7b3eb",
     "packages": [
         {
             "name": "carbonphp/carbon-doctrine-types",
@@ -177,94 +177,6 @@
                 }
             ],
             "time": "2024-02-18T20:23:39+00:00"
-        },
-        {
-            "name": "google/protobuf",
-            "version": "v4.33.6",
-            "source": {
-                "type": "git",
-                "url": "https://github.com/protocolbuffers/protobuf-php.git",
-                "reference": "84b008c23915ed94536737eae46f41ba3bccfe67"
-            },
-            "dist": {
-                "type": "zip",
-                "url": "https://api.github.com/repos/protocolbuffers/protobuf-php/zipball/84b008c23915ed94536737eae46f41ba3bccfe67",
-                "reference": "84b008c23915ed94536737eae46f41ba3bccfe67",
-                "shasum": ""
-            },
-            "require": {
-                "php": ">=8.1.0"
-            },
-            "require-dev": {
-                "phpunit/phpunit": ">=10.5.62 <11.0.0"
-            },
-            "suggest": {
-                "ext-bcmath": "Need to support JSON deserialization"
-            },
-            "type": "library",
-            "autoload": {
-                "psr-4": {
-                    "Google\\Protobuf\\": "src/Google/Protobuf",
-                    "GPBMetadata\\Google\\Protobuf\\": "src/GPBMetadata/Google/Protobuf"
-                }
-            },
-            "notification-url": "https://packagist.org/downloads/",
-            "license": [
-                "BSD-3-Clause"
-            ],
-            "description": "proto library for PHP",
-            "homepage": "https://developers.google.com/protocol-buffers/",
-            "keywords": [
-                "proto"
-            ],
-            "support": {
-                "source": "https://github.com/protocolbuffers/protobuf-php/tree/v4.33.6"
-            },
-            "time": "2026-03-18T17:32:05+00:00"
-        },
-        {
-            "name": "grpc/grpc",
-            "version": "1.82.0",
-            "source": {
-                "type": "git",
-                "url": "https://github.com/grpc/grpc-php.git",
-                "reference": "be984cb608f21e96453b3cfe54c748cc7b192250"
-            },
-            "dist": {
-                "type": "zip",
-                "url": "https://api.github.com/repos/grpc/grpc-php/zipball/be984cb608f21e96453b3cfe54c748cc7b192250",
-                "reference": "be984cb608f21e96453b3cfe54c748cc7b192250",
-                "shasum": ""
-            },
-            "require": {
-                "php": ">=7.1.0"
-            },
-            "require-dev": {
-                "google/auth": "^v1.3.0"
-            },
-            "suggest": {
-                "ext-protobuf": "For better performance, install the protobuf C extension.",
-                "google/protobuf": "To get started using grpc quickly, install the native protobuf library."
-            },
-            "type": "library",
-            "autoload": {
-                "psr-4": {
-                    "Grpc\\": "src/lib/"
-                }
-            },
-            "notification-url": "https://packagist.org/downloads/",
-            "license": [
-                "Apache-2.0"
-            ],
-            "description": "gRPC library for PHP",
-            "homepage": "https://grpc.io",
-            "keywords": [
-                "rpc"
-            ],
-            "support": {
-                "source": "https://github.com/grpc/grpc-php/tree/v1.82.0"
-            },
-            "time": "2026-07-03T09:39:53+00:00"
         },
         {
             "name": "illuminate/collections",
@@ -2123,58 +2035,6 @@
                 "issues": "https://github.com/zhangjinteng/6mm-addr/issues"
             },
             "time": "2026-08-21T12:09:16+00:00"
-        },
-        {
-            "name": "zhangjinteng/6mm-prediction",
-            "version": "v1.0.11",
-            "source": {
-                "type": "git",
-                "url": "https://github.com/zhangjinteng/6mm-prediction.git",
-                "reference": "3e70c5cb0624f1b85eaffaa0a4cbb62979246a2b"
-            },
-            "dist": {
-                "type": "zip",
-                "url": "https://api.github.com/repos/zhangjinteng/6mm-prediction/zipball/3e70c5cb0624f1b85eaffaa0a4cbb62979246a2b",
-                "reference": "3e70c5cb0624f1b85eaffaa0a4cbb62979246a2b",
-                "shasum": ""
-            },
-            "require": {
-                "ext-grpc": "*",
-                "google/protobuf": "^4.33.6",
-                "grpc/grpc": "^1.57",
-                "php": "^8.2"
-            },
-            "type": "library",
-            "extra": {
-                "branch-alias": {
-                    "dev-main": "1.0.x-dev"
-                }
-            },
-            "autoload": {
-                "psr-4": {
-                    "SixMm\\Prediction\\": "src/",
-                    "Prediction\\": "generated/Prediction/",
-                    "GPBMetadata\\Prediction\\": "generated/GPBMetadata/Prediction/"
-                }
-            },
-            "autoload-dev": {
-                "psr-4": {
-                    "SixMm\\Prediction\\Tests\\": "tests/"
-                }
-            },
-            "scripts": {
-                "generate": [
-                    "bash scripts/generate-protos.sh"
-                ],
-                "test": [
-                    "@php tests/run.php"
-                ]
-            },
-            "license": [
-                "proprietary"
-            ],
-            "description": "Framework-agnostic PHP client and generated gRPC contracts for 6MM prediction services.",
-            "time": "2026-08-25T12:18:37+00:00"
         }
     ],
     "packages-dev": [],

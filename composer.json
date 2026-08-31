@@ -9,8 +9,7 @@
         "ext-curl": "*",
         "ext-intl": "*",
         "illuminate/database": "^8.75",
-        "zhangjinteng/6mm-addr": "^1.0.1",
-        "zhangjinteng/6mm-prediction": "^1.0.11"
+        "zhangjinteng/6mm-addr": "^1.0.1"
     },
     "suggest": {
         "zhangjinteng/6mm-addr": "Adds versioned English and Chinese country, region, and city names to IP locations."
@@ -33,21 +32,13 @@
     "scripts": {
         "test": [
             "@php tests/run.php",
-            "@php tests/ip_locations.php",
-            "@php tests/prediction.php",
-            "@php tests/prediction_errors.php",
-            "@php tests/prediction_rules.php"
+            "@php tests/ip_locations.php"
         ]
     },
     "config": {
         "sort-packages": true
     },
     "repositories": [{
-        "name": "6mm-prediction",
-        "type": "vcs",
-        "url": "https://github.com/zhangjinteng/6mm-prediction.git",
-        "no-api": true
-    },{
         "name": "6mm-addr",
         "type": "vcs",
         "url": "https://github.com/zhangjinteng/6mm-addr.git",
