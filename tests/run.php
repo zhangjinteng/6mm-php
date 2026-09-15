@@ -24,6 +24,8 @@ use SixMm\Shared\HistoryPositions\HistoryPositionListQuery;
 use SixMm\Shared\HistoryPositions\HistoryPositionUserContextService;
 use SixMm\Shared\HistoryOrders\HistoryOrderListQuery;
 use SixMm\Shared\HistoryOrders\HistoryOrderUserContextService;
+use SixMm\Shared\Hedging\HedgingMonitorQuery;
+use SixMm\Shared\Hedging\HedgingMonitorQueryService;
 use SixMm\Shared\HandlingFees\HandlingFeeConfigListQuery;
 use SixMm\Shared\HandlingFees\HandlingFeeConfigQueryService;
 use SixMm\Shared\HandlingFees\HandlingFeeConfigRateConstraintViolation;
@@ -1651,5 +1653,41 @@ try {
     $upperTierViolation = $exception;
 }
 assertSameValue(HandlingFeeConfigRateConstraintViolation::UPPER_TIER_CEILING, $upperTierViolation?->rule(), 'Rates must not be higher than the previous tier.');
+
+$schema->create('hedge_monitor_snapshots', static function (Blueprint $table): void {
+    $table->increments('id');
+    $table->unsignedBigInteger('agent_id');
+    $table->unsignedBigInteger('config_id')->default(0);
+    $table->unsignedBigInteger('exchange_account_id')->default(0);
+    $table->string('source'); $table->string('symbol'); $table->string('target_symbol')->default('');
+    $table->string('exchange')->default(''); $table->string('account_name')->default('');
+    foreach (['net_quantity', 'long_quantity', 'short_quantity', 'net_notional_usdt', 'target_hedge_usdt', 'target_hedge_quantity', 'actual_hedge_usdt', 'actual_hedge_quantity'] as $column) $table->decimal($column, 24, 8)->default(0);
+    $table->string('switch_status'); $table->string('health_status'); $table->string('action_status'); $table->string('status');
+    $table->text('status_reason')->default(''); $table->dateTime('exposure_observed_at')->nullable(); $table->dateTime('position_observed_at')->nullable();
+    $table->dateTime('calculated_at'); $table->dateTime('updated_at');
+});
+$schema->create('exposure_snapshots', static function (Blueprint $table): void {
+    $table->increments('id'); $table->unsignedBigInteger('agent_id'); $table->string('source'); $table->string('symbol');
+    foreach (['net_quantity', 'long_quantity', 'short_quantity', 'net_notional_usdt'] as $column) $table->decimal($column, 24, 8)->default(0);
+    $table->dateTime('observed_at'); $table->dateTime('updated_at');
+});
+$database->getConnection()->table('hedge_monitor_snapshots')->insert([
+    'agent_id' => 7, 'config_id' => 11, 'exchange_account_id' => 12, 'source' => '6MM', 'symbol' => 'BTCUSDT', 'target_symbol' => 'BTC/USDT:USDT',
+    'exchange' => 'Binance', 'account_name' => 'main', 'net_quantity' => '1', 'long_quantity' => '1', 'short_quantity' => '0', 'net_notional_usdt' => '100',
+    'target_hedge_usdt' => '-100', 'target_hedge_quantity' => '-1', 'actual_hedge_usdt' => '-100', 'actual_hedge_quantity' => '-1',
+    'switch_status' => 'on', 'health_status' => 'ok', 'action_status' => 'balanced', 'status' => 'balanced', 'status_reason' => '',
+    'exposure_observed_at' => '2026-09-15 10:00:00', 'position_observed_at' => '2026-09-15 10:00:00', 'calculated_at' => '2026-09-15 10:00:00', 'updated_at' => '2026-09-15 10:00:00',
+]);
+$database->getConnection()->table('exposure_snapshots')->insert([
+    ['agent_id' => 7, 'source' => '6MM', 'symbol' => 'BTCUSDT', 'net_quantity' => '1', 'long_quantity' => '1', 'short_quantity' => '0', 'net_notional_usdt' => '100', 'observed_at' => '2026-09-15 10:00:00', 'updated_at' => '2026-09-15 10:00:00'],
+    ['agent_id' => 8, 'source' => '6MM', 'symbol' => 'ETHUSDT', 'net_quantity' => '-2', 'long_quantity' => '0', 'short_quantity' => '2', 'net_notional_usdt' => '-50', 'observed_at' => '2026-09-15 11:00:00', 'updated_at' => '2026-09-15 11:00:00'],
+]);
+$hedgingService = new HedgingMonitorQueryService($database->getConnection());
+$agentMonitor = $hedgingService->search(new HedgingMonitorQuery(), new AgentIdsScope([7]));
+assertSameValue(1, $agentMonitor['count'], 'Agent hedging scope must not leak another agent.');
+assertSameValue('balanced', $agentMonitor['lists'][0]['status'], 'Configured snapshots should retain their calculated status.');
+$platformMonitor = $hedgingService->search(new HedgingMonitorQuery(), new AllUsersScope());
+assertSameValue(2, $platformMonitor['count'], 'Platform hedging scope should include configured and unconfigured agents.');
+assertSameValue(2, $platformMonitor['summary']['items'], 'Platform summary should cover every scoped monitor row.');
 
 fwrite(STDOUT, "Shared user-list, user-asset, account-change, margin-change, current-position, history-position, current-order, history-order, liquidation, trade-fill, condition-order, online-user, user-detail, user-action, and handling-fee contract tests passed.\n");
