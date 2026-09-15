@@ -26,6 +26,10 @@ use SixMm\Shared\HistoryOrders\HistoryOrderListQuery;
 use SixMm\Shared\HistoryOrders\HistoryOrderUserContextService;
 use SixMm\Shared\Hedging\HedgingMonitorQuery;
 use SixMm\Shared\Hedging\HedgingMonitorQueryService;
+use SixMm\Shared\Hedging\HedgingExecutionQuery;
+use SixMm\Shared\Hedging\HedgingExecutionQueryService;
+use SixMm\Shared\Hedging\HedgingSymbolConfigQuery;
+use SixMm\Shared\Hedging\HedgingSymbolConfigQueryService;
 use SixMm\Shared\HandlingFees\HandlingFeeConfigListQuery;
 use SixMm\Shared\HandlingFees\HandlingFeeConfigQueryService;
 use SixMm\Shared\HandlingFees\HandlingFeeConfigRateConstraintViolation;
@@ -1656,7 +1660,29 @@ assertSameValue(HandlingFeeConfigRateConstraintViolation::UPPER_TIER_CEILING, $u
 
 $schema->create('hedge_configs', static function (Blueprint $table): void {
     $table->unsignedBigInteger('id')->primary();
+    $table->unsignedBigInteger('agent_id')->default(0);
+    $table->unsignedBigInteger('exchange_account_id')->default(0);
+    $table->string('source')->default('platform');
+    $table->string('symbol')->default('');
+    $table->string('target_symbol')->default('');
+    $table->decimal('target_hedge_ratio', 12, 6)->default(1);
+    $table->string('hedge_unit')->default('base');
+    foreach (['first_trigger_usdt', 'rebalance_usdt', 'exit_usdt', 'first_trigger_quantity', 'rebalance_quantity', 'exit_quantity'] as $column) $table->decimal($column, 24, 8)->default(0);
+    $table->integer('max_slippage_bps')->default(0);
     $table->boolean('enabled')->default(false);
+    $table->string('lifecycle_status')->default('disabled');
+    $table->dateTime('updated_at')->nullable();
+    $table->dateTime('deleted_at')->nullable();
+});
+$schema->create('exchange_accounts', static function (Blueprint $table): void {
+    $table->unsignedBigInteger('id')->primary();
+    $table->unsignedBigInteger('agent_id');
+    $table->string('name');
+    $table->string('exchange');
+    $table->boolean('sandbox')->default(false);
+    $table->boolean('is_primary')->default(false);
+    $table->string('status')->default('active');
+    $table->dateTime('deleted_at')->nullable();
 });
 $schema->create('hedging_settings', static function (Blueprint $table): void {
     $table->unsignedBigInteger('agent_id')->primary();
@@ -1679,9 +1705,43 @@ $schema->create('exposure_snapshots', static function (Blueprint $table): void {
     foreach (['net_quantity', 'long_quantity', 'short_quantity', 'net_notional_usdt'] as $column) $table->decimal($column, 24, 8)->default(0);
     $table->dateTime('observed_at'); $table->dateTime('updated_at');
 });
+$schema->create('order_plans', static function (Blueprint $table): void {
+    $table->unsignedBigInteger('id')->primary();
+    $table->string('idempotency_key')->unique();
+    $table->unsignedBigInteger('config_id');
+    $table->unsignedBigInteger('agent_id');
+    $table->unsignedBigInteger('exchange_account_id');
+    $table->string('exchange');
+    $table->string('account_name');
+    $table->string('symbol');
+    $table->string('side');
+    $table->string('reason');
+    $table->decimal('notional_usdt', 38, 18);
+    $table->dateTime('planned_at')->nullable();
+    $table->dateTime('created_at');
+    $table->dateTime('updated_at');
+});
+$schema->create('order_executions', static function (Blueprint $table): void {
+    $table->unsignedBigInteger('id')->primary();
+    $table->unsignedBigInteger('order_plan_id')->unique();
+    $table->string('status');
+    $table->text('error_message')->nullable();
+    $table->decimal('filled_quantity', 38, 18)->default(0);
+    $table->decimal('avg_price', 38, 18)->default(0);
+    $table->dateTime('submitted_at')->nullable();
+    $table->dateTime('filled_at')->nullable();
+    $table->dateTime('failed_at')->nullable();
+    $table->dateTime('created_at');
+    $table->dateTime('updated_at');
+});
 $database->getConnection()->table('hedge_configs')->insert([
-    ['id' => 11, 'enabled' => true],
-    ['id' => 12, 'enabled' => false],
+    ['id' => 11, 'agent_id' => 7, 'exchange_account_id' => 12, 'source' => 'platform', 'symbol' => 'BTCUSDT', 'target_symbol' => 'BTC/USDT:USDT', 'target_hedge_ratio' => 1, 'hedge_unit' => 'base', 'first_trigger_usdt' => 5000, 'rebalance_usdt' => 2000, 'exit_usdt' => 1500, 'first_trigger_quantity' => 2, 'rebalance_quantity' => 1, 'exit_quantity' => 1, 'max_slippage_bps' => 30, 'enabled' => true, 'lifecycle_status' => 'active', 'updated_at' => '2026-09-15 10:00:00'],
+    ['id' => 12, 'agent_id' => 7, 'exchange_account_id' => 12, 'source' => 'platform', 'symbol' => 'XRPUSDT', 'target_symbol' => 'XRP/USDT:USDT', 'target_hedge_ratio' => 0.8, 'hedge_unit' => 'usdt', 'first_trigger_usdt' => 1000, 'rebalance_usdt' => 500, 'exit_usdt' => 200, 'first_trigger_quantity' => 0, 'rebalance_quantity' => 0, 'exit_quantity' => 0, 'max_slippage_bps' => 20, 'enabled' => false, 'lifecycle_status' => 'disabled', 'updated_at' => '2026-09-15 10:00:00'],
+    ['id' => 13, 'agent_id' => 8, 'exchange_account_id' => 13, 'source' => 'platform', 'symbol' => 'ETHUSDT', 'target_symbol' => 'ETH/USDT:USDT', 'target_hedge_ratio' => 1, 'hedge_unit' => 'base', 'first_trigger_usdt' => 5000, 'rebalance_usdt' => 2000, 'exit_usdt' => 1500, 'first_trigger_quantity' => 2, 'rebalance_quantity' => 1, 'exit_quantity' => 1, 'max_slippage_bps' => 30, 'enabled' => true, 'lifecycle_status' => 'active', 'updated_at' => '2026-09-15 10:00:00'],
+]);
+$database->getConnection()->table('exchange_accounts')->insert([
+    ['id' => 12, 'agent_id' => 7, 'name' => 'agent-seven-binance', 'exchange' => 'Binance', 'sandbox' => false, 'is_primary' => true, 'status' => 'active'],
+    ['id' => 13, 'agent_id' => 8, 'name' => 'agent-eight-gate', 'exchange' => 'Gate', 'sandbox' => false, 'is_primary' => true, 'status' => 'active'],
 ]);
 $database->getConnection()->table('hedging_settings')->insert([
     ['agent_id' => 7, 'enabled' => true],
@@ -1707,6 +1767,14 @@ $database->getConnection()->table('exposure_snapshots')->insert([
     ['agent_id' => 7, 'source' => '6MM', 'symbol' => 'BTCUSDT', 'net_quantity' => '1', 'long_quantity' => '1', 'short_quantity' => '0', 'net_notional_usdt' => '100', 'observed_at' => '2026-09-15 10:00:00', 'updated_at' => '2026-09-15 10:00:00'],
     ['agent_id' => 8, 'source' => '6MM', 'symbol' => 'ETHUSDT', 'net_quantity' => '-2', 'long_quantity' => '0', 'short_quantity' => '2', 'net_notional_usdt' => '-50', 'observed_at' => '2026-09-15 11:00:00', 'updated_at' => '2026-09-15 11:00:00'],
 ]);
+$database->getConnection()->table('order_plans')->insert([
+    ['id' => 21, 'idempotency_key' => 'task-agent-seven', 'config_id' => 11, 'agent_id' => 7, 'exchange_account_id' => 12, 'exchange' => 'Binance', 'account_name' => 'agent-seven-binance', 'symbol' => 'BTC/USDT:USDT', 'side' => 'SELL', 'reason' => 'first_trigger', 'notional_usdt' => 100, 'planned_at' => '2026-09-15 10:00:00', 'created_at' => '2026-09-15 10:00:00', 'updated_at' => '2026-09-15 10:00:00'],
+    ['id' => 22, 'idempotency_key' => 'task-agent-eight', 'config_id' => 13, 'agent_id' => 8, 'exchange_account_id' => 13, 'exchange' => 'Gate', 'account_name' => 'agent-eight-gate', 'symbol' => 'ETH/USDT:USDT', 'side' => 'BUY', 'reason' => 'net exposure is below exit threshold', 'notional_usdt' => 50, 'planned_at' => '2026-09-15 11:00:00', 'created_at' => '2026-09-15 11:00:00', 'updated_at' => '2026-09-15 11:00:00'],
+]);
+$database->getConnection()->table('order_executions')->insert([
+    ['id' => 21, 'order_plan_id' => 21, 'status' => 'filled', 'error_message' => null, 'filled_quantity' => 1, 'avg_price' => 100, 'submitted_at' => '2026-09-15 10:00:00', 'filled_at' => '2026-09-15 10:00:05', 'failed_at' => null, 'created_at' => '2026-09-15 10:00:00', 'updated_at' => '2026-09-15 10:00:05'],
+    ['id' => 22, 'order_plan_id' => 22, 'status' => 'failed', 'error_message' => 'exchange rejected order', 'filled_quantity' => 0, 'avg_price' => 0, 'submitted_at' => null, 'filled_at' => null, 'failed_at' => '2026-09-15 11:00:06', 'created_at' => '2026-09-15 11:00:00', 'updated_at' => '2026-09-15 11:00:06'],
+]);
 $hedgingService = new HedgingMonitorQueryService($database->getConnection());
 $agentMonitor = $hedgingService->search(new HedgingMonitorQuery(), new AgentIdsScope([7]));
 assertSameValue(2, $agentMonitor['count'], 'Agent hedging scope must not leak another agent.');
@@ -1723,4 +1791,29 @@ assertSameValue(1, $symbolEnabledMonitor['count'], 'Symbol switch filter should 
 $symbolDisabledMonitor = $hedgingService->search(new HedgingMonitorQuery(1, 20, '', '', '', '0'), new AllUsersScope());
 assertSameValue(1, $symbolDisabledMonitor['count'], 'Symbol switch filter should include explicitly disabled configs and exclude unconfigured rows.');
 
-fwrite(STDOUT, "Shared user-list, user-asset, account-change, margin-change, current-position, history-position, current-order, history-order, liquidation, trade-fill, condition-order, online-user, user-detail, user-action, and handling-fee contract tests passed.\n");
+$symbolConfigService = new HedgingSymbolConfigQueryService($database->getConnection());
+$agentSymbolConfigs = $symbolConfigService->search(new HedgingSymbolConfigQuery(), new AgentIdsScope([7]));
+assertSameValue(2, $agentSymbolConfigs['count'], 'Agent symbol config scope must only return its persisted configurations.');
+assertSameValue(7, $agentSymbolConfigs['lists'][0]['agent_id'], 'Agent symbol config rows must retain their owner.');
+$allSymbolConfigs = $symbolConfigService->search(new HedgingSymbolConfigQuery(), new AllUsersScope());
+assertSameValue(3, $allSymbolConfigs['count'], 'Platform symbol config scope should return configured rows from every agent.');
+$filteredSymbolConfigs = $symbolConfigService->search(new HedgingSymbolConfigQuery(1, 20, '', 'Gate', null, '', '1'), new AllUsersScope());
+assertSameValue(1, $filteredSymbolConfigs['count'], 'Platform symbol config filters should combine exchange and enabled state.');
+assertSameValue('ETHUSDT', $filteredSymbolConfigs['lists'][0]['symbol'], 'Filtered symbol config result should match the configured row.');
+
+$executionService = new HedgingExecutionQueryService($database->getConnection());
+$agentExecutions = $executionService->search(new HedgingExecutionQuery(), new AgentIdsScope([7]));
+assertSameValue(1, $agentExecutions['count'], 'Agent execution scope must not leak another agent.');
+assertSameValue(7, $agentExecutions['lists'][0]['agent_id'], 'Execution rows must retain their owner.');
+assertSameValue('BTCUSDT', $agentExecutions['lists'][0]['symbol'], 'Execution symbols should use their display form.');
+$platformExecutions = $executionService->search(new HedgingExecutionQuery(), new AllUsersScope());
+assertSameValue(2, $platformExecutions['count'], 'Platform execution scope should include every agent.');
+$filteredExecutions = $executionService->search(
+    new HedgingExecutionQuery(1, 20, 'EIGHT', 'ETH/USDT:USDT', 'BUY', 'exit_hedge', 13),
+    new AllUsersScope()
+);
+assertSameValue(1, $filteredExecutions['count'], 'Execution filters should combine across the unrestricted platform scope.');
+assertSameValue('exit_hedge', $filteredExecutions['lists'][0]['reason'], 'Legacy execution reasons should be normalized.');
+assertSameValue('exchange rejected order', $filteredExecutions['lists'][0]['error_message'], 'Execution failures should retain their diagnostic message.');
+
+fwrite(STDOUT, "Shared user-list, user-asset, account-change, margin-change, current-position, history-position, current-order, history-order, liquidation, trade-fill, condition-order, online-user, user-detail, user-action, handling-fee, and hedging contract tests passed.\n");
