@@ -1654,6 +1654,14 @@ try {
 }
 assertSameValue(HandlingFeeConfigRateConstraintViolation::UPPER_TIER_CEILING, $upperTierViolation?->rule(), 'Rates must not be higher than the previous tier.');
 
+$schema->create('hedge_configs', static function (Blueprint $table): void {
+    $table->unsignedBigInteger('id')->primary();
+    $table->boolean('enabled')->default(false);
+});
+$schema->create('hedging_settings', static function (Blueprint $table): void {
+    $table->unsignedBigInteger('agent_id')->primary();
+    $table->boolean('enabled')->default(false);
+});
 $schema->create('hedge_monitor_snapshots', static function (Blueprint $table): void {
     $table->increments('id');
     $table->unsignedBigInteger('agent_id');
@@ -1671,12 +1679,29 @@ $schema->create('exposure_snapshots', static function (Blueprint $table): void {
     foreach (['net_quantity', 'long_quantity', 'short_quantity', 'net_notional_usdt'] as $column) $table->decimal($column, 24, 8)->default(0);
     $table->dateTime('observed_at'); $table->dateTime('updated_at');
 });
+$database->getConnection()->table('hedge_configs')->insert([
+    ['id' => 11, 'enabled' => true],
+    ['id' => 12, 'enabled' => false],
+]);
+$database->getConnection()->table('hedging_settings')->insert([
+    ['agent_id' => 7, 'enabled' => true],
+    ['agent_id' => 8, 'enabled' => false],
+]);
 $database->getConnection()->table('hedge_monitor_snapshots')->insert([
-    'agent_id' => 7, 'config_id' => 11, 'exchange_account_id' => 12, 'source' => '6MM', 'symbol' => 'BTCUSDT', 'target_symbol' => 'BTC/USDT:USDT',
-    'exchange' => 'Binance', 'account_name' => 'main', 'net_quantity' => '1', 'long_quantity' => '1', 'short_quantity' => '0', 'net_notional_usdt' => '100',
-    'target_hedge_usdt' => '-100', 'target_hedge_quantity' => '-1', 'actual_hedge_usdt' => '-100', 'actual_hedge_quantity' => '-1',
-    'switch_status' => 'on', 'health_status' => 'ok', 'action_status' => 'balanced', 'status' => 'balanced', 'status_reason' => '',
-    'exposure_observed_at' => '2026-09-15 10:00:00', 'position_observed_at' => '2026-09-15 10:00:00', 'calculated_at' => '2026-09-15 10:00:00', 'updated_at' => '2026-09-15 10:00:00',
+    [
+        'agent_id' => 7, 'config_id' => 11, 'exchange_account_id' => 12, 'source' => '6MM', 'symbol' => 'BTCUSDT', 'target_symbol' => 'BTC/USDT:USDT',
+        'exchange' => 'Binance', 'account_name' => 'main', 'net_quantity' => '1', 'long_quantity' => '1', 'short_quantity' => '0', 'net_notional_usdt' => '100',
+        'target_hedge_usdt' => '-100', 'target_hedge_quantity' => '-1', 'actual_hedge_usdt' => '-100', 'actual_hedge_quantity' => '-1',
+        'switch_status' => 'enabled', 'health_status' => 'ok', 'action_status' => 'balanced', 'status' => 'balanced', 'status_reason' => '',
+        'exposure_observed_at' => '2026-09-15 10:00:00', 'position_observed_at' => '2026-09-15 10:00:00', 'calculated_at' => '2026-09-15 10:00:00', 'updated_at' => '2026-09-15 10:00:00',
+    ],
+    [
+        'agent_id' => 7, 'config_id' => 12, 'exchange_account_id' => 12, 'source' => '6MM', 'symbol' => 'XRPUSDT', 'target_symbol' => 'XRP/USDT:USDT',
+        'exchange' => 'Binance', 'account_name' => 'main', 'net_quantity' => '2', 'long_quantity' => '2', 'short_quantity' => '0', 'net_notional_usdt' => '50',
+        'target_hedge_usdt' => '0', 'target_hedge_quantity' => '0', 'actual_hedge_usdt' => '0', 'actual_hedge_quantity' => '0',
+        'switch_status' => 'symbol_off', 'health_status' => 'ok', 'action_status' => 'balanced', 'status' => 'symbol_off', 'status_reason' => '币种对冲配置已关闭',
+        'exposure_observed_at' => '2026-09-15 10:00:00', 'position_observed_at' => '2026-09-15 10:00:00', 'calculated_at' => '2026-09-15 10:00:00', 'updated_at' => '2026-09-15 10:00:00',
+    ],
 ]);
 $database->getConnection()->table('exposure_snapshots')->insert([
     ['agent_id' => 7, 'source' => '6MM', 'symbol' => 'BTCUSDT', 'net_quantity' => '1', 'long_quantity' => '1', 'short_quantity' => '0', 'net_notional_usdt' => '100', 'observed_at' => '2026-09-15 10:00:00', 'updated_at' => '2026-09-15 10:00:00'],
@@ -1684,10 +1709,18 @@ $database->getConnection()->table('exposure_snapshots')->insert([
 ]);
 $hedgingService = new HedgingMonitorQueryService($database->getConnection());
 $agentMonitor = $hedgingService->search(new HedgingMonitorQuery(), new AgentIdsScope([7]));
-assertSameValue(1, $agentMonitor['count'], 'Agent hedging scope must not leak another agent.');
+assertSameValue(2, $agentMonitor['count'], 'Agent hedging scope must not leak another agent.');
 assertSameValue('balanced', $agentMonitor['lists'][0]['status'], 'Configured snapshots should retain their calculated status.');
 $platformMonitor = $hedgingService->search(new HedgingMonitorQuery(), new AllUsersScope());
-assertSameValue(2, $platformMonitor['count'], 'Platform hedging scope should include configured and unconfigured agents.');
-assertSameValue(2, $platformMonitor['summary']['items'], 'Platform summary should cover every scoped monitor row.');
+assertSameValue(3, $platformMonitor['count'], 'Platform hedging scope should include configured and unconfigured agents.');
+assertSameValue(3, $platformMonitor['summary']['items'], 'Platform summary should cover every scoped monitor row.');
+$globalEnabledMonitor = $hedgingService->search(new HedgingMonitorQuery(1, 20, '', '', '1'), new AllUsersScope());
+assertSameValue(2, $globalEnabledMonitor['count'], 'Global switch filter should include rows belonging to enabled agents.');
+$globalDisabledMonitor = $hedgingService->search(new HedgingMonitorQuery(1, 20, '', '', '0'), new AllUsersScope());
+assertSameValue(1, $globalDisabledMonitor['count'], 'Global switch filter should include rows belonging to disabled agents.');
+$symbolEnabledMonitor = $hedgingService->search(new HedgingMonitorQuery(1, 20, '', '', '', '1'), new AllUsersScope());
+assertSameValue(1, $symbolEnabledMonitor['count'], 'Symbol switch filter should include explicitly enabled configs.');
+$symbolDisabledMonitor = $hedgingService->search(new HedgingMonitorQuery(1, 20, '', '', '', '0'), new AllUsersScope());
+assertSameValue(1, $symbolDisabledMonitor['count'], 'Symbol switch filter should include explicitly disabled configs and exclude unconfigured rows.');
 
 fwrite(STDOUT, "Shared user-list, user-asset, account-change, margin-change, current-position, history-position, current-order, history-order, liquidation, trade-fill, condition-order, online-user, user-detail, user-action, and handling-fee contract tests passed.\n");

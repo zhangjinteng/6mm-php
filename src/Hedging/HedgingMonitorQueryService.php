@@ -33,7 +33,7 @@ final class HedgingMonitorQueryService
     public function search(HedgingMonitorQuery $criteria, UserDataScope $scope): array
     {
         $configured = $this->configuredRows();
-        $scope->apply($configured, 'agent_id');
+        $scope->apply($configured, 'monitor.agent_id');
 
         $unconfigured = $this->unconfiguredRows();
         $scope->apply($unconfigured, 'exposure.agent_id');
@@ -57,6 +57,12 @@ final class HedgingMonitorQueryService
         }
         if ($criteria->status() !== '') {
             $query->where('status', $criteria->status());
+        }
+        if ($criteria->globalEnabled() !== '') {
+            $query->where('global_enabled', (int) $criteria->globalEnabled());
+        }
+        if ($criteria->symbolEnabled() !== '') {
+            $query->where('symbol_enabled', (int) $criteria->symbolEnabled());
         }
 
         $total = (clone $query)->count();
@@ -86,15 +92,21 @@ final class HedgingMonitorQueryService
 
     private function configuredRows(): Builder
     {
-        return $this->connection->table('hedge_monitor_snapshots')->select(array_merge(
-            ['agent_id'],
-            $this->resultColumns()
-        ));
+        return $this->connection->table('hedge_monitor_snapshots as monitor')
+            ->leftJoin('hedge_configs as config', 'config.id', '=', 'monitor.config_id')
+            ->leftJoin('hedging_settings as setting', 'setting.agent_id', '=', 'monitor.agent_id')
+            ->select(array_map(
+                static fn (string $column): string => 'monitor.' . $column,
+                array_merge(['agent_id'], $this->resultColumns())
+            ))
+            ->selectRaw('CASE WHEN setting.enabled = ? THEN 1 ELSE 0 END AS global_enabled', [true])
+            ->selectRaw('CASE WHEN config.enabled = ? THEN 1 ELSE 0 END AS symbol_enabled', [true]);
     }
 
     private function unconfiguredRows(): Builder
     {
         return $this->connection->table('exposure_snapshots as exposure')
+            ->leftJoin('hedging_settings as setting', 'setting.agent_id', '=', 'exposure.agent_id')
             ->where('exposure.net_quantity', '<>', 0)
             ->whereNotExists(static function (Builder $query): void {
                 $query->selectRaw('1')
@@ -128,7 +140,9 @@ final class HedgingMonitorQueryService
                 exposure.observed_at AS exposure_observed_at,
                 NULL AS position_observed_at,
                 exposure.observed_at AS calculated_at,
-                exposure.updated_at");
+                exposure.updated_at,
+                CASE WHEN setting.enabled = true THEN 1 ELSE 0 END AS global_enabled,
+                NULL AS symbol_enabled");
     }
 
     /** @return string[] */
