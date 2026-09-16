@@ -1721,6 +1721,7 @@ $schema->create('order_plans', static function (Blueprint $table): void {
     $table->string('symbol');
     $table->string('side');
     $table->string('reason');
+    $table->decimal('quantity', 38, 18);
     $table->decimal('notional_usdt', 38, 18);
     $table->dateTime('planned_at')->nullable();
     $table->dateTime('created_at');
@@ -1773,8 +1774,8 @@ $database->getConnection()->table('exposure_snapshots')->insert([
     ['agent_id' => 8, 'source' => '6MM', 'symbol' => 'ETHUSDT', 'net_quantity' => '-2', 'long_quantity' => '0', 'short_quantity' => '2', 'net_notional_usdt' => '-50', 'observed_at' => '2026-09-15 11:00:00', 'updated_at' => '2026-09-15 11:00:00'],
 ]);
 $database->getConnection()->table('order_plans')->insert([
-    ['id' => 21, 'idempotency_key' => 'task-agent-seven', 'config_id' => 11, 'agent_id' => 7, 'exchange_account_id' => 12, 'exchange' => 'Binance', 'account_name' => 'agent-seven-binance', 'symbol' => 'BTC/USDT:USDT', 'side' => 'SELL', 'reason' => 'first_trigger', 'notional_usdt' => 100, 'planned_at' => '2026-09-15 10:00:00', 'created_at' => '2026-09-15 10:00:00', 'updated_at' => '2026-09-15 10:00:00'],
-    ['id' => 22, 'idempotency_key' => 'task-agent-eight', 'config_id' => 13, 'agent_id' => 8, 'exchange_account_id' => 13, 'exchange' => 'Gate', 'account_name' => 'agent-eight-gate', 'symbol' => 'ETH/USDT:USDT', 'side' => 'BUY', 'reason' => 'net exposure is below exit threshold', 'notional_usdt' => 50, 'planned_at' => '2026-09-15 11:00:00', 'created_at' => '2026-09-15 11:00:00', 'updated_at' => '2026-09-15 11:00:00'],
+    ['id' => 21, 'idempotency_key' => 'task-agent-seven', 'config_id' => 11, 'agent_id' => 7, 'exchange_account_id' => 12, 'exchange' => 'Binance', 'account_name' => 'agent-seven-binance', 'symbol' => 'BTC/USDT:USDT', 'side' => 'SELL', 'reason' => 'first_trigger', 'quantity' => 1, 'notional_usdt' => 100, 'planned_at' => '2026-09-15 10:00:00', 'created_at' => '2026-09-15 10:00:00', 'updated_at' => '2026-09-15 10:00:00'],
+    ['id' => 22, 'idempotency_key' => 'task-agent-eight', 'config_id' => 13, 'agent_id' => 8, 'exchange_account_id' => 13, 'exchange' => 'Gate', 'account_name' => 'agent-eight-gate', 'symbol' => 'ETH/USDT:USDT', 'side' => 'BUY', 'reason' => 'net exposure is below exit threshold', 'quantity' => 2, 'notional_usdt' => 50, 'planned_at' => '2026-09-15 11:00:00', 'created_at' => '2026-09-15 11:00:00', 'updated_at' => '2026-09-15 11:00:00'],
 ]);
 $database->getConnection()->table('order_executions')->insert([
     ['id' => 21, 'order_plan_id' => 21, 'status' => 'filled', 'error_message' => null, 'filled_quantity' => 1, 'avg_price' => 100, 'submitted_at' => '2026-09-15 10:00:00', 'filled_at' => '2026-09-15 10:00:05', 'failed_at' => null, 'created_at' => '2026-09-15 10:00:00', 'updated_at' => '2026-09-15 10:00:05'],
@@ -1819,6 +1820,7 @@ $agentExecutions = $executionService->search(new HedgingExecutionQuery(), new Ag
 assertSameValue(1, $agentExecutions['count'], 'Agent execution scope must not leak another agent.');
 assertSameValue(7, $agentExecutions['lists'][0]['agent_id'], 'Execution rows must retain their owner.');
 assertSameValue('BTCUSDT', $agentExecutions['lists'][0]['symbol'], 'Execution symbols should use their display form.');
+assertSameValue('1', $agentExecutions['lists'][0]['quantity'], 'Execution rows must include the planned base quantity.');
 $platformExecutions = $executionService->search(new HedgingExecutionQuery(), new AllUsersScope());
 assertSameValue(2, $platformExecutions['count'], 'Platform execution scope should include every agent.');
 $filteredExecutions = $executionService->search(
