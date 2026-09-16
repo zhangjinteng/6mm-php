@@ -61,6 +61,9 @@ final class HedgingExecutionQueryService
         if ($criteria->reason() !== '') {
             $query->whereIn('plan.reason', $this->reasonDatabaseValues($criteria->reason()));
         }
+        if ($criteria->status() !== '') {
+            $query->where('execution.status', $criteria->status());
+        }
         if ($criteria->accountId() !== null) {
             $query->where('plan.exchange_account_id', $criteria->accountId());
         }
@@ -107,6 +110,7 @@ final class HedgingExecutionQueryService
                 'symbols' => $this->symbolOptions(clone $scoped),
                 'directions' => $this->valueOptions(self::SIDES),
                 'reasons' => $this->valueOptions(self::REASONS),
+                'statuses' => $this->valueOptions(self::STATUSES),
                 'accounts' => $this->accountOptions(clone $scoped),
             ],
         ];

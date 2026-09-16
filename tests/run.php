@@ -30,6 +30,8 @@ use SixMm\Shared\Hedging\HedgingExecutionQuery;
 use SixMm\Shared\Hedging\HedgingExecutionQueryService;
 use SixMm\Shared\Hedging\HedgingSymbolConfigQuery;
 use SixMm\Shared\Hedging\HedgingSymbolConfigQueryService;
+use SixMm\Shared\Hedging\HedgingSubjectConfigQuery;
+use SixMm\Shared\Hedging\HedgingSubjectConfigQueryService;
 use SixMm\Shared\HandlingFees\HandlingFeeConfigListQuery;
 use SixMm\Shared\HandlingFees\HandlingFeeConfigQueryService;
 use SixMm\Shared\HandlingFees\HandlingFeeConfigRateConstraintViolation;
@@ -1682,11 +1684,14 @@ $schema->create('exchange_accounts', static function (Blueprint $table): void {
     $table->boolean('sandbox')->default(false);
     $table->boolean('is_primary')->default(false);
     $table->string('status')->default('active');
+    $table->text('metadata')->default('{}');
+    $table->dateTime('updated_at')->nullable();
     $table->dateTime('deleted_at')->nullable();
 });
 $schema->create('hedging_settings', static function (Blueprint $table): void {
     $table->unsignedBigInteger('agent_id')->primary();
     $table->boolean('enabled')->default(false);
+    $table->dateTime('updated_at')->nullable();
 });
 $schema->create('hedge_monitor_snapshots', static function (Blueprint $table): void {
     $table->increments('id');
@@ -1740,12 +1745,12 @@ $database->getConnection()->table('hedge_configs')->insert([
     ['id' => 13, 'agent_id' => 8, 'exchange_account_id' => 13, 'source' => 'platform', 'symbol' => 'ETHUSDT', 'target_symbol' => 'ETH/USDT:USDT', 'target_hedge_ratio' => 1, 'hedge_unit' => 'base', 'first_trigger_usdt' => 5000, 'rebalance_usdt' => 2000, 'exit_usdt' => 1500, 'first_trigger_quantity' => 2, 'rebalance_quantity' => 1, 'exit_quantity' => 1, 'max_slippage_bps' => 30, 'enabled' => true, 'lifecycle_status' => 'active', 'updated_at' => '2026-09-15 10:00:00'],
 ]);
 $database->getConnection()->table('exchange_accounts')->insert([
-    ['id' => 12, 'agent_id' => 7, 'name' => 'agent-seven-binance', 'exchange' => 'Binance', 'sandbox' => false, 'is_primary' => true, 'status' => 'active'],
-    ['id' => 13, 'agent_id' => 8, 'name' => 'agent-eight-gate', 'exchange' => 'Gate', 'sandbox' => false, 'is_primary' => true, 'status' => 'active'],
+    ['id' => 12, 'agent_id' => 7, 'name' => 'agent-seven-binance', 'exchange' => 'Binance', 'sandbox' => false, 'is_primary' => true, 'status' => 'active', 'metadata' => '{"connection_status":"connected"}', 'updated_at' => '2026-09-15 10:00:00'],
+    ['id' => 13, 'agent_id' => 8, 'name' => 'agent-eight-gate', 'exchange' => 'Gate', 'sandbox' => false, 'is_primary' => true, 'status' => 'active', 'metadata' => '{"connection_status":"failed"}', 'updated_at' => '2026-09-15 11:00:00'],
 ]);
 $database->getConnection()->table('hedging_settings')->insert([
-    ['agent_id' => 7, 'enabled' => true],
-    ['agent_id' => 8, 'enabled' => false],
+    ['agent_id' => 7, 'enabled' => true, 'updated_at' => '2026-09-15 10:00:00'],
+    ['agent_id' => 8, 'enabled' => false, 'updated_at' => '2026-09-15 11:00:00'],
 ]);
 $database->getConnection()->table('hedge_monitor_snapshots')->insert([
     [
@@ -1801,6 +1806,14 @@ $filteredSymbolConfigs = $symbolConfigService->search(new HedgingSymbolConfigQue
 assertSameValue(1, $filteredSymbolConfigs['count'], 'Platform symbol config filters should combine exchange and enabled state.');
 assertSameValue('ETHUSDT', $filteredSymbolConfigs['lists'][0]['symbol'], 'Filtered symbol config result should match the configured row.');
 
+$subjectService = new HedgingSubjectConfigQueryService($database->getConnection());
+$subjects = $subjectService->search(new HedgingSubjectConfigQuery(), new AllUsersScope());
+assertSameValue(2, $subjects['count'], 'Platform subject config should include every configured hedging subject.');
+assertSameValue('running', $subjects['lists'][0]['status'], 'Enabled subjects with connected execution accounts should be running.');
+assertSameValue(1, $subjects['lists'][0]['connected_account_count'], 'Connected account count should use connectivity metadata.');
+assertSameValue(1, $subjects['lists'][0]['enabled_symbol_count'], 'Enabled contract count should exclude disabled configs.');
+assertSameValue('disabled', $subjects['lists'][1]['status'], 'Disabled global switches should report a stopped subject.');
+
 $executionService = new HedgingExecutionQueryService($database->getConnection());
 $agentExecutions = $executionService->search(new HedgingExecutionQuery(), new AgentIdsScope([7]));
 assertSameValue(1, $agentExecutions['count'], 'Agent execution scope must not leak another agent.');
@@ -1809,11 +1822,12 @@ assertSameValue('BTCUSDT', $agentExecutions['lists'][0]['symbol'], 'Execution sy
 $platformExecutions = $executionService->search(new HedgingExecutionQuery(), new AllUsersScope());
 assertSameValue(2, $platformExecutions['count'], 'Platform execution scope should include every agent.');
 $filteredExecutions = $executionService->search(
-    new HedgingExecutionQuery(1, 20, 'EIGHT', 'ETH/USDT:USDT', 'BUY', 'exit_hedge', 13),
+    new HedgingExecutionQuery(1, 20, 'EIGHT', 'ETH/USDT:USDT', 'BUY', 'exit_hedge', 13, 'failed'),
     new AllUsersScope()
 );
 assertSameValue(1, $filteredExecutions['count'], 'Execution filters should combine across the unrestricted platform scope.');
 assertSameValue('exit_hedge', $filteredExecutions['lists'][0]['reason'], 'Legacy execution reasons should be normalized.');
 assertSameValue('exchange rejected order', $filteredExecutions['lists'][0]['error_message'], 'Execution failures should retain their diagnostic message.');
+assertSameValue(6, count($filteredExecutions['options']['statuses']), 'Execution filters should expose all supported statuses.');
 
 fwrite(STDOUT, "Shared user-list, user-asset, account-change, margin-change, current-position, history-position, current-order, history-order, liquidation, trade-fill, condition-order, online-user, user-detail, user-action, handling-fee, and hedging contract tests passed.\n");

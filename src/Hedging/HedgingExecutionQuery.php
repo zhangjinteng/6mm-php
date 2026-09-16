@@ -13,7 +13,8 @@ final class HedgingExecutionQuery
         private string $symbol = '',
         private string $side = '',
         private string $reason = '',
-        private ?int $accountId = null
+        private ?int $accountId = null,
+        private string $status = ''
     ) {
         $this->page = max(1, $this->page);
         $this->pageSize = min(100, max(1, $this->pageSize));
@@ -21,6 +22,7 @@ final class HedgingExecutionQuery
         $this->symbol = trim($this->symbol);
         $this->side = strtoupper(trim($this->side));
         $this->reason = strtolower(trim($this->reason));
+        $this->status = strtolower(trim($this->status));
         $this->accountId = $this->accountId !== null && $this->accountId > 0
             ? $this->accountId
             : null;
@@ -59,5 +61,10 @@ final class HedgingExecutionQuery
     public function accountId(): ?int
     {
         return $this->accountId;
+    }
+
+    public function status(): string
+    {
+        return $this->status;
     }
 }
