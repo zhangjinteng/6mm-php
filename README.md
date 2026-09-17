@@ -20,6 +20,32 @@ Shared PHP contracts, query objects, and domain services used by the 6MM adminis
 
 Authentication, routes, permissions, and application-specific data-scope resolution remain in each application.
 
+## Shared Google Translation configuration
+
+`TranslationConfigService` owns Google Translation Basic v2 configuration
+validation, persistence, API-key masking, verification status, and saved-key
+testing. `CurlGoogleTranslationVerifier` performs the verification request with
+the API key in the `X-goog-api-key` header rather than the URL.
+
+Applications inject a `TranslationConfigCipher`, normally backed by their own
+Laravel `Crypt` configuration or KMS implementation:
+
+```php
+use SixMm\Shared\TranslationConfig\CurlGoogleTranslationVerifier;
+use SixMm\Shared\TranslationConfig\TranslationConfigService;
+
+$service = new TranslationConfigService(
+    DB::connection(),
+    $applicationCipher,
+    new CurlGoogleTranslationVerifier(15),
+);
+```
+
+Authentication, primary-agent resolution, routes, localized response envelopes,
+the compatible `agent_translation_config` migration, and encryption-key
+management remain application-owned. See
+[`docs/adr/0006-shared-google-translation-config.md`](docs/adr/0006-shared-google-translation-config.md).
+
 ## Shared product-category catalog
 
 `ProductCategorySnapshot` defines the versioned Redis payload shared by the
