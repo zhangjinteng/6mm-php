@@ -13,15 +13,21 @@ final class SymbolTagService
     public function __construct(
         private ConnectionInterface $connection,
         private string $tagTable = 'symbol_tag',
-        private string $relationTable = 'symbol_config_tag'
+        private string $relationTable = 'symbol_config_tag',
+        private string $relationTagColumn = 'symbol_tag_id',
+        private string $relationSymbolColumn = 'symbol_config_id',
+        private ?int $ownerId = null,
+        private string $ownerColumn = 'agent_id'
     ) {
     }
 
     /** @return list<array<string, mixed>> */
     public function all(): array
     {
-        return $this->connection->table($this->tagTable)
-            ->whereNull('deleted_at')
+        $query = $this->connection->table($this->tagTable)->whereNull('deleted_at');
+        $this->applyOwnerScope($query);
+
+        return $query
             ->orderBy('parent_id')
             ->orderByDesc('sort')
             ->orderBy('id')
@@ -35,15 +41,17 @@ final class SymbolTagService
     public function search(SymbolTagQuery $criteria): array
     {
         $relationCounts = $this->connection->table($this->relationTable)
-            ->select('symbol_tag_id')
-            ->selectRaw('COUNT(DISTINCT symbol_config_id) AS symbol_count')
-            ->groupBy('symbol_tag_id');
+            ->select($this->relationTagColumn . ' as relation_tag_id')
+            ->selectRaw('COUNT(DISTINCT ' . $this->relationSymbolColumn . ') AS symbol_count')
+            ->groupBy($this->relationTagColumn);
+        $this->applyOwnerScope($relationCounts);
 
         $query = $this->connection->table($this->tagTable . ' as st')
             ->leftJoinSub($relationCounts, 'relations', static function ($join): void {
-                $join->on('relations.symbol_tag_id', '=', 'st.id');
+                $join->on('relations.relation_tag_id', '=', 'st.id');
             })
             ->whereNull('st.deleted_at');
+        $this->applyOwnerScope($query, 'st');
 
         if ($criteria->keyword() !== '') {
             $like = '%' . strtolower($this->escapeLike($criteria->keyword())) . '%';
@@ -60,8 +68,9 @@ final class SymbolTagService
             if ($parentId === 0) {
                 $rootIds = $this->connection->table($this->tagTable)
                     ->where('parent_id', 0)
-                    ->whereNull('deleted_at')
-                    ->pluck('id');
+                    ->whereNull('deleted_at');
+                $this->applyOwnerScope($rootIds);
+                $rootIds = $rootIds->pluck('id');
                 $query->where(static function (Builder $nested) use ($rootIds): void {
                     $nested->where('st.parent_id', 0);
                     if ($rootIds->isNotEmpty()) {
@@ -141,25 +150,30 @@ final class SymbolTagService
             $tag = $this->connection->table($this->tagTable)
                 ->where('id', $id)
                 ->whereNull('deleted_at')
-                ->lockForUpdate()
-                ->first();
+                ->lockForUpdate();
+            $this->applyOwnerScope($tag);
+            $tag = $tag->first();
             if ($tag === null) {
                 throw SymbolTagException::because(SymbolTagException::NOT_FOUND);
             }
-            if ($this->connection->table($this->tagTable)
+            $children = $this->connection->table($this->tagTable)
                 ->where('parent_id', $id)
-                ->whereNull('deleted_at')
-                ->exists()) {
+                ->whereNull('deleted_at');
+            $this->applyOwnerScope($children);
+            if ($children->exists()) {
                 throw SymbolTagException::because(SymbolTagException::HAS_CHILDREN);
             }
-            if ($this->connection->table($this->relationTable)
-                ->where('symbol_tag_id', $id)
-                ->exists()) {
+            $relations = $this->connection->table($this->relationTable)
+                ->where($this->relationTagColumn, $id);
+            $this->applyOwnerScope($relations);
+            if ($relations->exists()) {
                 throw SymbolTagException::because(SymbolTagException::IN_USE);
             }
 
             $now = $this->timestamp();
-            $this->connection->table($this->tagTable)->where('id', $id)->update([
+            $delete = $this->connection->table($this->tagTable)->where('id', $id);
+            $this->applyOwnerScope($delete);
+            $delete->update([
                 'deleted_at' => $now,
                 'updated_at' => $now,
             ]);
@@ -182,22 +196,27 @@ final class SymbolTagService
                 $parent = $this->connection->table($this->tagTable)
                     ->where('id', $parentId)
                     ->where('parent_id', 0)
-                    ->whereNull('deleted_at')
-                    ->first();
+                    ->whereNull('deleted_at');
+                $this->applyOwnerScope($parent);
+                $parent = $parent->first();
                 if ($parent === null) {
                     throw SymbolTagException::because(SymbolTagException::INVALID_PARENT);
                 }
-                if ($id !== null && $this->connection->table($this->tagTable)
-                    ->where('parent_id', $id)
-                    ->whereNull('deleted_at')
-                    ->exists()) {
-                    throw SymbolTagException::because(SymbolTagException::PARENT_WITH_CHILDREN);
+                if ($id !== null) {
+                    $children = $this->connection->table($this->tagTable)
+                        ->where('parent_id', $id)
+                        ->whereNull('deleted_at');
+                    $this->applyOwnerScope($children);
+                    if ($children->exists()) {
+                        throw SymbolTagException::because(SymbolTagException::PARENT_WITH_CHILDREN);
+                    }
                 }
             }
 
             $duplicate = $this->connection->table($this->tagTable)
                 ->whereRaw('LOWER(tag_code) = ?', [$data['tag_code']])
                 ->whereNull('deleted_at');
+            $this->applyOwnerScope($duplicate);
             if ($id !== null) {
                 $duplicate->where('id', '<>', $id);
             }
@@ -208,18 +227,24 @@ final class SymbolTagService
             $now = $this->timestamp();
             $values = $data + ['updated_at' => $now];
             if ($id === null) {
+                if ($this->ownerId !== null) {
+                    $values[$this->ownerColumn] = $this->ownerId;
+                }
                 $id = (int) $this->connection->table($this->tagTable)
                     ->insertGetId($values + ['created_at' => $now]);
             } else {
-                $this->connection->table($this->tagTable)->where('id', $id)->update($values);
+                $update = $this->connection->table($this->tagTable)->where('id', $id);
+                $this->applyOwnerScope($update);
+                $update->update($values);
             }
 
             if ((int) $data['is_enable'] === 0) {
-                $this->connection->table($this->tagTable)
+                $children = $this->connection->table($this->tagTable)
                     ->where('parent_id', $id)
                     ->whereNull('deleted_at')
-                    ->where('is_enable', '<>', 0)
-                    ->update(['is_enable' => 0, 'updated_at' => $now]);
+                    ->where('is_enable', '<>', 0);
+                $this->applyOwnerScope($children);
+                $children->update(['is_enable' => 0, 'updated_at' => $now]);
             }
 
             $row = $this->find($id);
@@ -269,6 +294,7 @@ final class SymbolTagService
         $query = $this->connection->table($this->tagTable)
             ->where('id', $id)
             ->whereNull('deleted_at');
+        $this->applyOwnerScope($query);
         if ($lock) {
             $query->lockForUpdate();
         }
@@ -315,5 +341,15 @@ final class SymbolTagService
     private function timestamp(): string
     {
         return (new DateTimeImmutable())->format('Y-m-d H:i:s');
+    }
+
+    private function applyOwnerScope(Builder $query, ?string $alias = null): void
+    {
+        if ($this->ownerId === null) {
+            return;
+        }
+
+        $column = ($alias !== null ? $alias . '.' : '') . $this->ownerColumn;
+        $query->where($column, $this->ownerId);
     }
 }

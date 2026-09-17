@@ -46,6 +46,26 @@ $schema->create('symbol_config_tag', static function (Blueprint $table): void {
     $table->unsignedInteger('symbol_config_id');
     $table->unsignedInteger('symbol_tag_id');
 });
+$schema->create('agent_symbol_tag', static function (Blueprint $table): void {
+    $table->increments('id');
+    $table->unsignedBigInteger('agent_id');
+    $table->unsignedInteger('parent_id')->default(0);
+    $table->string('tag_name');
+    $table->string('tag_code');
+    $table->string('tag_name_zh')->default('');
+    $table->string('tag_name_en')->default('');
+    $table->integer('sort')->default(1000);
+    $table->integer('is_enable')->default(1);
+    $table->dateTime('created_at')->nullable();
+    $table->dateTime('updated_at')->nullable();
+    $table->dateTime('deleted_at')->nullable();
+});
+$schema->create('agent_symbol_config_tag', static function (Blueprint $table): void {
+    $table->increments('id');
+    $table->unsignedBigInteger('agent_id');
+    $table->unsignedInteger('agent_symbol_config_id');
+    $table->unsignedInteger('agent_symbol_tag_id');
+});
 
 $connection->table('symbol_tag')->insert([
     ['id' => 10, 'parent_id' => 0, 'tag_name' => '加密货币', 'tag_code' => 'crypto', 'tag_name_zh' => '加密货币', 'tag_name_en' => 'Crypto', 'sort' => 800, 'is_enable' => 1],
@@ -55,6 +75,16 @@ $connection->table('symbol_config_tag')->insert([
     ['symbol_config_id' => 1, 'symbol_tag_id' => 10],
     ['symbol_config_id' => 2, 'symbol_tag_id' => 10],
     ['symbol_config_id' => 3, 'symbol_tag_id' => 11],
+]);
+$connection->table('agent_symbol_tag')->insert([
+    ['id' => 20, 'agent_id' => 7, 'parent_id' => 0, 'tag_name' => '代理标签', 'tag_code' => 'agent_root', 'tag_name_zh' => '代理标签', 'tag_name_en' => 'Agent Root', 'sort' => 900, 'is_enable' => 1],
+    ['id' => 21, 'agent_id' => 7, 'parent_id' => 20, 'tag_name' => '代理子标签', 'tag_code' => 'agent_child', 'tag_name_zh' => '代理子标签', 'tag_name_en' => 'Agent Child', 'sort' => 800, 'is_enable' => 1],
+    ['id' => 30, 'agent_id' => 8, 'parent_id' => 0, 'tag_name' => '其他代理', 'tag_code' => 'other_agent', 'tag_name_zh' => '其他代理', 'tag_name_en' => 'Other Agent', 'sort' => 999, 'is_enable' => 1],
+]);
+$connection->table('agent_symbol_config_tag')->insert([
+    ['agent_id' => 7, 'agent_symbol_config_id' => 101, 'agent_symbol_tag_id' => 20],
+    ['agent_id' => 7, 'agent_symbol_config_id' => 102, 'agent_symbol_tag_id' => 20],
+    ['agent_id' => 8, 'agent_symbol_config_id' => 201, 'agent_symbol_tag_id' => 30],
 ]);
 
 $service = new SymbolTagService($connection);
@@ -108,5 +138,28 @@ try {
 } catch (SymbolTagException $exception) {
     assertSymbolTagSame(SymbolTagException::IN_USE, $exception->reason(), 'The in-use error should be stable.');
 }
+
+$agentService = new SymbolTagService(
+    $connection,
+    'agent_symbol_tag',
+    'agent_symbol_config_tag',
+    'agent_symbol_tag_id',
+    'agent_symbol_config_id',
+    7
+);
+$agentResult = $agentService->search(new SymbolTagQuery());
+assertSymbolTagSame(2, $agentResult['count'], 'Agent tags must be isolated to the configured owner.');
+assertSymbolTagSame(2, $agentResult['lists'][0]['symbol_count'], 'Agent relation counts must use agent relation columns.');
+$agentCreated = $agentService->create([
+    'parent_id' => 20,
+    'tag_name' => '代理新增',
+    'tag_code' => 'agent_created',
+    'tag_name_zh' => '代理新增',
+    'tag_name_en' => 'Agent Created',
+    'sort' => 700,
+    'is_enable' => 1,
+]);
+assertSymbolTagSame(7, (int) $connection->table('agent_symbol_tag')->where('id', $agentCreated['id'])->value('agent_id'), 'Created tags must inherit the configured owner.');
+assertSymbolTagSame(3, $service->search(new SymbolTagQuery())['count'], 'The public tag service must remain independent.');
 
 echo "Symbol tag shared service tests passed.\n";
