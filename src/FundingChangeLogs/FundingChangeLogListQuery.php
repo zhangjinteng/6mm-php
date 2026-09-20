@@ -6,6 +6,9 @@ namespace SixMm\Shared\FundingChangeLogs;
 
 final class FundingChangeLogListQuery
 {
+    private string $startTime;
+    private string $endTimeExclusive;
+
     private const SORTABLE_FIELDS = ['ledger_id', 'balance_change', 'balance_before', 'balance_after', 'created_at'];
     private const CHANGE_TYPES = ['', 'deposit', 'stake', 'payout', 'refund'];
     private const GAMES = ['', 'prediction', 'prediction_updown', 'prediction_highlow', 'grid'];

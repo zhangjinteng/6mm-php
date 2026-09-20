@@ -6,6 +6,9 @@ namespace SixMm\Shared\FundingAccounts;
 
 final class FundingAccountListQuery
 {
+    private string $startTime;
+    private string $endTimeExclusive;
+
     private const SORTABLE_FIELDS = [
         'currency',
         'account_balance',
