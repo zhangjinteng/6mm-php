@@ -86,6 +86,8 @@ final class HedgingExecutionQueryService
                 'plan.planned_at',
                 'plan.created_at as plan_created_at',
                 'execution.status',
+                'execution.failure_code',
+                'execution.failure_reason',
                 'execution.error_message',
                 'execution.filled_quantity',
                 'execution.avg_price',
@@ -148,6 +150,8 @@ final class HedgingExecutionQueryService
             'account_name' => (string) $row->account_name,
             'status' => $status,
             'status_label' => $status,
+            'failure_code' => trim((string) ($row->failure_code ?? '')),
+            'failure_reason' => trim((string) ($row->failure_reason ?? '')),
             'error_message' => trim((string) ($row->error_message ?? '')),
             'executed_at' => $this->executionTime($row),
         ];

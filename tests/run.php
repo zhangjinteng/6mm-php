@@ -1731,6 +1731,8 @@ $schema->create('order_executions', static function (Blueprint $table): void {
     $table->unsignedBigInteger('id')->primary();
     $table->unsignedBigInteger('order_plan_id')->unique();
     $table->string('status');
+    $table->string('failure_code')->default('');
+    $table->text('failure_reason')->default('');
     $table->text('error_message')->nullable();
     $table->decimal('filled_quantity', 38, 18)->default(0);
     $table->decimal('avg_price', 38, 18)->default(0);
@@ -1778,8 +1780,8 @@ $database->getConnection()->table('order_plans')->insert([
     ['id' => 22, 'idempotency_key' => 'task-agent-eight', 'config_id' => 13, 'agent_id' => 8, 'exchange_account_id' => 13, 'exchange' => 'Gate', 'account_name' => 'agent-eight-gate', 'symbol' => 'ETH/USDT:USDT', 'side' => 'BUY', 'reason' => 'net exposure is below exit threshold', 'quantity' => 2, 'notional_usdt' => 50, 'planned_at' => '2026-09-15 11:00:00', 'created_at' => '2026-09-15 11:00:00', 'updated_at' => '2026-09-15 11:00:00'],
 ]);
 $database->getConnection()->table('order_executions')->insert([
-    ['id' => 21, 'order_plan_id' => 21, 'status' => 'filled', 'error_message' => null, 'filled_quantity' => 1, 'avg_price' => 100, 'submitted_at' => '2026-09-15 10:00:00', 'filled_at' => '2026-09-15 10:00:05', 'failed_at' => null, 'created_at' => '2026-09-15 10:00:00', 'updated_at' => '2026-09-15 10:00:05'],
-    ['id' => 22, 'order_plan_id' => 22, 'status' => 'failed', 'error_message' => 'exchange rejected order', 'filled_quantity' => 0, 'avg_price' => 0, 'submitted_at' => null, 'filled_at' => null, 'failed_at' => '2026-09-15 11:00:06', 'created_at' => '2026-09-15 11:00:00', 'updated_at' => '2026-09-15 11:00:06'],
+    ['id' => 21, 'order_plan_id' => 21, 'status' => 'filled', 'failure_code' => '', 'failure_reason' => '', 'error_message' => null, 'filled_quantity' => 1, 'avg_price' => 100, 'submitted_at' => '2026-09-15 10:00:00', 'filled_at' => '2026-09-15 10:00:05', 'failed_at' => null, 'created_at' => '2026-09-15 10:00:00', 'updated_at' => '2026-09-15 10:00:05'],
+    ['id' => 22, 'order_plan_id' => 22, 'status' => 'failed', 'failure_code' => 'invalid_order', 'failure_reason' => 'Invalid minimum quantity, precision, or unsupported symbol', 'error_message' => 'exchange rejected order', 'filled_quantity' => 0, 'avg_price' => 0, 'submitted_at' => null, 'filled_at' => null, 'failed_at' => '2026-09-15 11:00:06', 'created_at' => '2026-09-15 11:00:00', 'updated_at' => '2026-09-15 11:00:06'],
 ]);
 $hedgingService = new HedgingMonitorQueryService($database->getConnection());
 $agentMonitor = $hedgingService->search(new HedgingMonitorQuery(), new AgentIdsScope([7]));
@@ -1829,6 +1831,8 @@ $filteredExecutions = $executionService->search(
 );
 assertSameValue(1, $filteredExecutions['count'], 'Execution filters should combine across the unrestricted platform scope.');
 assertSameValue('exit_hedge', $filteredExecutions['lists'][0]['reason'], 'Legacy execution reasons should be normalized.');
+assertSameValue('invalid_order', $filteredExecutions['lists'][0]['failure_code'], 'Execution failures should expose their normalized failure code.');
+assertSameValue('Invalid minimum quantity, precision, or unsupported symbol', $filteredExecutions['lists'][0]['failure_reason'], 'Execution failures should expose their normalized failure reason.');
 assertSameValue('exchange rejected order', $filteredExecutions['lists'][0]['error_message'], 'Execution failures should retain their diagnostic message.');
 assertSameValue(6, count($filteredExecutions['options']['statuses']), 'Execution filters should expose all supported statuses.');
 
