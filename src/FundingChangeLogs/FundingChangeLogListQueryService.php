@@ -126,6 +126,20 @@ final class FundingChangeLogListQueryService
         if ($changeType === 'stake') $query->whereIn('ledger.business_type', ['SECONDS_BET_STAKE', 'SECONDS_BET_DEBIT']);
         if ($changeType === 'payout') $query->where('ledger.business_type', 'SECONDS_BET_PAYOUT');
         if ($changeType === 'refund') $query->where('ledger.business_type', 'SECONDS_BET_REFUND');
+
+        $ledgerTypes = [
+            'transfer_hold_created' => ['TRANSFER', 'TRANSFER_HOLD_CREATED'],
+            'transfer_hold_released' => ['TRANSFER', 'TRANSFER_HOLD_RELEASED'],
+            'transfer_out' => ['TRANSFER', 'TRANSFER_OUT'],
+            'transfer_in' => ['TRANSFER', 'TRANSFER_IN'],
+            'agent_transfer_in' => ['AGENT_TRANSFER_IN', 'CREDIT'],
+            'agent_transfer_out' => ['AGENT_TRANSFER_OUT', 'DEBIT'],
+        ];
+        if (isset($ledgerTypes[$changeType])) {
+            [$businessType, $entryType] = $ledgerTypes[$changeType];
+            $query->where('ledger.business_type', $businessType)
+                ->where('ledger.entry_type', $entryType);
+        }
     }
 
     private function applyOrder(Builder $query, string $orderBy, string $direction): void

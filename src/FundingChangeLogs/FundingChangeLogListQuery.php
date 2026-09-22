@@ -10,7 +10,18 @@ final class FundingChangeLogListQuery
     private string $endTimeExclusive;
 
     private const SORTABLE_FIELDS = ['ledger_id', 'balance_change', 'balance_before', 'balance_after', 'created_at'];
-    private const CHANGE_TYPES = ['', 'deposit', 'stake', 'payout', 'refund'];
+    public const CHANGE_TYPES = [
+        'deposit',
+        'stake',
+        'payout',
+        'refund',
+        'transfer_hold_created',
+        'transfer_hold_released',
+        'transfer_out',
+        'transfer_in',
+        'agent_transfer_in',
+        'agent_transfer_out',
+    ];
     private const GAMES = ['', 'prediction', 'prediction_updown', 'prediction_highlow', 'grid'];
 
     public function __construct(
@@ -28,7 +39,9 @@ final class FundingChangeLogListQuery
         $this->pageSize = min(100, max(1, $this->pageSize));
         $this->keyword = trim($this->keyword);
         $this->changeType = strtolower(trim($this->changeType));
-        $this->changeType = in_array($this->changeType, self::CHANGE_TYPES, true) ? $this->changeType : '';
+        $this->changeType = $this->changeType === '' || in_array($this->changeType, self::CHANGE_TYPES, true)
+            ? $this->changeType
+            : '';
         $this->game = strtolower(trim($this->game));
         $this->game = in_array($this->game, self::GAMES, true) ? $this->game : '';
         $this->startTime = trim((string) $startTime);

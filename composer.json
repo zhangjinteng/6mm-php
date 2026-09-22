@@ -32,6 +32,7 @@
     "scripts": {
         "test": [
             "@php tests/run.php",
+            "@php tests/funding_change_logs.php",
             "@php tests/ip_locations.php",
             "@php tests/symbol_tags.php",
             "@php tests/translation_config.php"
