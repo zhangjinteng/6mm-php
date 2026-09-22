@@ -7,6 +7,7 @@ namespace SixMm\Shared\AccountChangeLogs;
 use Illuminate\Database\ConnectionInterface;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Database\Query\JoinClause;
+use Illuminate\Support\Collection;
 use SixMm\Shared\Contracts\UserDataScope;
 use SixMm\Shared\Pagination\CursorPageResult;
 
@@ -23,28 +24,52 @@ final class AccountChangeLogListQueryService
     /** @return CursorPageResult<array<string, mixed>> */
     public function search(AccountChangeLogListQuery $criteria, UserDataScope $scope): CursorPageResult
     {
-        $query = $this->baseQuery();
-        $scope->apply($query, 'users.agent_id');
-        $this->applyFilters($query, $criteria);
+        $users = $this->scopedUsers($criteria, $scope);
+        if ($users->isEmpty()) {
+            return $this->emptyResult($criteria);
+        }
+
+        $query = $this->baseQuery($users->keys()->all());
+        $this->applyLogFilters($query, $criteria);
 
         $cursor = $this->decodeCursor($criteria->cursor(), $criteria);
         $isPreviousRequest = (bool) ($cursor['previous'] ?? false);
         $this->applyCursor($query, $criteria, $cursor, $isPreviousRequest);
         $this->applyOrdering($query, $criteria, $isPreviousRequest);
 
-        $rows = $query
+        $candidateIds = (clone $query)
             ->limit($criteria->pageSize() + 1)
-            ->get($this->columns());
-        $hasExtraItem = $rows->count() > $criteria->pageSize();
+            ->pluck('logs.id');
+        $hasExtraItem = $candidateIds->count() > $criteria->pageSize();
         if ($hasExtraItem) {
-            $rows->pop();
+            $candidateIds->pop();
         }
         if ($isPreviousRequest) {
-            $rows = $rows->reverse()->values();
+            $candidateIds = $candidateIds->reverse()->values();
         }
 
+        $rowsById = $candidateIds->isEmpty()
+            ? collect()
+            : (clone $query)
+                ->reorder()
+                ->whereIntegerInRaw(
+                    'logs.id',
+                    $candidateIds->map(static fn ($id): int => (int) $id)->all()
+                )
+                ->get($this->columns())
+                ->keyBy(static fn (object $row): string => (string) $row->id);
+        $rows = $candidateIds
+            ->map(static fn ($id) => $rowsById->get((string) $id))
+            ->filter()
+            ->values();
+
         $items = $rows
-            ->map(fn (object $row): array => $this->mapRow((array) $row))
+            ->map(function (object $row) use ($users): array {
+                $values = (array) $row;
+                $user = $users->get((string) $values['platform_user_id']);
+
+                return $this->mapRow($values, $user !== null ? (array) $user : []);
+            })
             ->all();
         $hasPrevious = $isPreviousRequest ? $hasExtraItem : $cursor !== null;
         $hasMore = $isPreviousRequest ? $items !== [] : $hasExtraItem;
@@ -61,7 +86,8 @@ final class AccountChangeLogListQueryService
         );
     }
 
-    private function baseQuery(): Builder
+    /** @return Collection<string, object> */
+    private function scopedUsers(AccountChangeLogListQuery $criteria, UserDataScope $scope): Collection
     {
         $bindings = $this->connection
             ->table('agent_user_bindings')
@@ -73,19 +99,15 @@ final class AccountChangeLogListQueryService
             ->whereIn('bind_status', self::ACTIVE_BINDING_STATUSES)
             ->groupBy('agent_id', 'platform_user_id');
 
-        return $this->connection
-            ->table('user_account_change_log AS logs')
-            ->join('users', 'users.user_id', '=', 'logs.user_id')
+        $query = $this->connection
+            ->table('users')
             ->leftJoinSub($bindings, 'aub', static function (JoinClause $join): void {
                 $join->on('aub.agent_id', '=', 'users.agent_id')
                     ->on('aub.platform_user_id', '=', 'users.user_id');
             })
-            ->whereNull('logs.deleted_at')
             ->whereNull('users.deleted_at');
-    }
+        $scope->apply($query, 'users.agent_id');
 
-    private function applyFilters(Builder $query, AccountChangeLogListQuery $criteria): void
-    {
         if ($criteria->keyword() !== '') {
             $keyword = $criteria->keyword();
             if (!ctype_digit($keyword)) {
@@ -94,11 +116,33 @@ final class AccountChangeLogListQueryService
                 $query->where('users.public_user_id', $keyword);
             }
         }
-
         if ($criteria->userType() !== null) {
             $query->where('users.user_type', $criteria->userType());
         }
 
+        return $query
+            ->get([
+                'users.user_id AS platform_user_id',
+                'users.public_user_id AS user_id',
+                'users.username',
+                'users.nick_name',
+                'users.user_type',
+                'aub.agent_user_id',
+            ])
+            ->keyBy(static fn (object $user): string => (string) $user->platform_user_id);
+    }
+
+    /** @param array<int, int|string> $platformUserIds */
+    private function baseQuery(array $platformUserIds): Builder
+    {
+        return $this->connection
+            ->table('user_account_change_log AS logs')
+            ->whereIntegerInRaw('logs.user_id', array_map('intval', $platformUserIds))
+            ->whereNull('logs.deleted_at');
+    }
+
+    private function applyLogFilters(Builder $query, AccountChangeLogListQuery $criteria): void
+    {
         if ($criteria->changeType() !== '') {
             if ($criteria->changeType() === self::TRANSFER_IN) {
                 $query->whereRaw('LOWER(logs.change_type) = ?', [self::TRANSFER_IN])
@@ -184,7 +228,7 @@ final class AccountChangeLogListQueryService
         return [
             'logs.id',
             'logs.user_id AS platform_user_id',
-            $this->connection->raw('COALESCE(logs.user_type, users.user_type) AS user_type'),
+            'logs.user_type',
             'logs.agent_id',
             'logs.profile_version',
             'logs.symbol',
@@ -199,15 +243,14 @@ final class AccountChangeLogListQueryService
             'logs.description',
             'logs.created_at',
             'logs.updated_at',
-            'users.public_user_id AS user_id',
-            'users.username',
-            'users.nick_name',
-            'aub.agent_user_id',
         ];
     }
 
-    /** @param array<string, mixed> $row */
-    private function mapRow(array $row): array
+    /**
+     * @param array<string, mixed> $row
+     * @param array<string, mixed> $user
+     */
+    private function mapRow(array $row, array $user): array
     {
         foreach ([
             'amount',
@@ -219,7 +262,11 @@ final class AccountChangeLogListQueryService
             $row[$field] = (string) ($row[$field] ?? '0');
         }
 
-        $row['nice_name'] = $row['nick_name'] ?? null;
+        $row['user_type'] = $row['user_type'] ?? $user['user_type'] ?? null;
+        $row['user_id'] = $user['user_id'] ?? $row['platform_user_id'];
+        $row['username'] = $user['username'] ?? null;
+        $row['nice_name'] = $user['nick_name'] ?? null;
+        $row['agent_user_id'] = $user['agent_user_id'] ?? null;
         $row['user'] = [
             'platform_user_id' => $row['platform_user_id'],
             'user_id' => $row['user_id'],
@@ -230,6 +277,12 @@ final class AccountChangeLogListQueryService
         ];
 
         return $row;
+    }
+
+    /** @return CursorPageResult<array<string, mixed>> */
+    private function emptyResult(AccountChangeLogListQuery $criteria): CursorPageResult
+    {
+        return new CursorPageResult([], $criteria->pageSize(), false, false, null, null);
     }
 
     /** @param array<string, mixed> $row */

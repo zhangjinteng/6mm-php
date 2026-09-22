@@ -724,10 +724,28 @@ $emptyAssetScope = $userAssetService->search(new UserAssetListQuery(), new Agent
 assertSameValue(0, $emptyAssetScope->total(), 'An empty asset scope must fail closed.');
 assertSameValue([], $emptyAssetScope->items(), 'An empty asset scope must not return rows.');
 
+$database->getConnection()->flushQueryLog();
+$database->getConnection()->enableQueryLog();
 $accountChangeService = new AccountChangeLogListQueryService($database->getConnection());
 $accountChanges = $accountChangeService->search(
     new AccountChangeLogListQuery(pageSize: 2),
     new AgentIdsScope([10])
+);
+$accountChangeQueries = array_values(array_filter(
+    $database->getConnection()->getQueryLog(),
+    static fn (array $entry): bool => str_contains($entry['query'], 'user_account_change_log')
+));
+$database->getConnection()->disableQueryLog();
+assertSameValue(2, count($accountChangeQueries), 'Account changes should load candidate IDs before loading full rows.');
+assertSameValue(
+    false,
+    str_contains(strtolower($accountChangeQueries[0]['query']), 'join "users"'),
+    'The candidate-ID query must not scan global logs and join users row by row.'
+);
+assertSameValue(
+    true,
+    str_contains($accountChangeQueries[0]['query'], 'select "logs"."id"'),
+    'The first account-change query should only select candidate IDs.'
 );
 assertSameValue([105, 104], array_column($accountChanges->items(), 'id'), 'Account changes should default to ID descending.');
 assertSameValue(9001, $accountChanges->items()[0]['user_id'], 'Account changes should expose the public UID.');
