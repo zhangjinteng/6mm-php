@@ -64,7 +64,7 @@ final class FundingChangeLogListQueryService
                 'assets.internal_scale',
             ])
             ->selectRaw('(ledger.available_delta + ledger.held_delta) as balance_change_atomic')
-            ->selectRaw('ABS(ledger.held_delta) as frozen_amount_atomic')
+            ->selectRaw('ledger.held_delta as frozen_amount_atomic')
             ->selectRaw('(ledger.available_before + ledger.held_before) as balance_before_atomic')
             ->selectRaw('(ledger.available_after + ledger.held_after) as balance_after_atomic');
 
