@@ -64,6 +64,7 @@ final class FundingChangeLogListQueryService
                 'assets.internal_scale',
             ])
             ->selectRaw('(ledger.available_delta + ledger.held_delta) as balance_change_atomic')
+            ->selectRaw('ABS(ledger.held_delta) as frozen_amount_atomic')
             ->selectRaw('(ledger.available_before + ledger.held_before) as balance_before_atomic')
             ->selectRaw('(ledger.available_after + ledger.held_after) as balance_after_atomic');
 
@@ -95,6 +96,7 @@ final class FundingChangeLogListQueryService
                 'related_operation_id' => $row->related_operation_id === null ? null : (string) $row->related_operation_id,
                 'currency' => (string) $row->currency,
                 'balance_change' => self::fromAtomic($row->balance_change_atomic, $scale),
+                'frozen_amount' => self::fromAtomic($row->frozen_amount_atomic, $scale),
                 'balance_before' => self::fromAtomic($row->balance_before_atomic, $scale),
                 'balance_after' => self::fromAtomic($row->balance_after_atomic, $scale),
                 'created_at' => $this->localizedDateTime($row->created_at),

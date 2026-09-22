@@ -101,6 +101,7 @@ $types = [
 ];
 $ledgerId = 1;
 foreach ($types as [$businessType, $entryType]) {
+    $isHoldCreated = $entryType === 'TRANSFER_HOLD_CREATED';
     $database->getConnection('asset')->table('funding_ledger_entries')->insert([
         'ledger_id' => $ledgerId,
         'user_id' => 100,
@@ -112,12 +113,12 @@ foreach ($types as [$businessType, $entryType]) {
         'business_id' => $ledgerId,
         'business_operation_id' => null,
         'related_operation_id' => null,
-        'available_delta' => 100000000,
-        'held_delta' => 0,
-        'available_before' => 0,
-        'available_after' => 100000000,
+        'available_delta' => $isHoldCreated ? -250000000 : 100000000,
+        'held_delta' => $isHoldCreated ? 250000000 : 0,
+        'available_before' => $isHoldCreated ? 500000000 : 0,
+        'available_after' => $isHoldCreated ? 250000000 : 100000000,
         'held_before' => 0,
-        'held_after' => 0,
+        'held_after' => $isHoldCreated ? 250000000 : 0,
         'created_at' => '2026-09-22 00:00:00',
     ]);
     $ledgerId++;
@@ -129,6 +130,15 @@ $service = new FundingChangeLogListQueryService(
 );
 foreach ($types as $filter => [$businessType, $entryType]) {
     assertFundingType($filter, $businessType, $entryType, $service);
+}
+
+$holdResult = $service->search(
+    new FundingChangeLogListQuery(changeType: 'transfer_hold_created'),
+    new AgentIdsScope([10]),
+    new AgentIdsScope([10])
+);
+if (($holdResult->items()[0]['frozen_amount'] ?? null) !== '2.50000000') {
+    throw new RuntimeException('Funding hold amount was not converted from atomic units.');
 }
 
 fwrite(STDOUT, "Funding change log type filters passed.\n");
