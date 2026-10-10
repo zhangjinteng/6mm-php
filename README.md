@@ -20,6 +20,14 @@ Shared PHP contracts, query objects, and domain services used by the 6MM adminis
 
 Authentication, routes, permissions, and application-specific data-scope resolution remain in each application.
 
+## Shared futures trading reports
+
+`FuturesReports` owns UTC hourly facts, merchant/white-label/platform trade
+aggregation, exact decimal amounts, monthly identity deduplication, and atomic
+PostgreSQL publication. Platform is the only producer; agent is a scoped reader.
+Public business tables and control_plane white-label directories use explicit
+schema names. See [integration and rollout](docs/shared-futures-trade-report.md).
+
 ## Shared Google Translation configuration
 
 `TranslationConfigService` owns Google Translation Basic v2 configuration

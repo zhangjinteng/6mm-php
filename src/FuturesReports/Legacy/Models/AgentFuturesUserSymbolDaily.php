@@ -1,0 +1,78 @@
+<?php
+
+namespace SixMm\Shared\FuturesReports\Legacy\Models;
+
+class AgentFuturesUserSymbolDaily extends PublicModel
+{
+    protected $table = 'admin_agent_futures_user_symbol_daily';
+
+    protected $fillable = [
+        'agent_id',
+        'stat_date',
+        'user_type',
+        'user_id',
+        'symbol',
+        'settle_asset',
+        'order_count',
+        'order_amount',
+        'filled_order_count',
+        'fill_count',
+        'trade_amount',
+        'cancel_order_count',
+        'cancel_amount',
+        'trading_fee',
+        'commission_count',
+        'maker_commission',
+        'taker_commission',
+        'fee_count',
+        'maker_trade_amount',
+        'taker_trade_amount',
+        'maker_handling_fee',
+        'taker_handling_fee',
+        'realized_pnl',
+        'funding_fee',
+        'funding_settlement_count',
+        'funding_settlement_position_amount',
+        'funding_fee_income',
+        'funding_fee_expense',
+        'liquidation_count',
+        'liquidation_fee',
+        'liquidation_position_amount',
+        'liquidation_trade_amount',
+        'liquidation_realized_pnl',
+        'bankruptcy_count',
+        'bankruptcy_loss',
+        'uncollected_liquidation_fee',
+        'uncollected_trading_fee',
+        'margin_change',
+        'closing_position_amount',
+        'long_position_amount',
+        'short_position_amount',
+        'occupied_margin',
+        'unrealized_pnl',
+        'position_snapshot_at',
+        'calculation_version',
+        'last_aggregated_at',
+    ];
+
+    protected $casts = [
+        'agent_id' => 'integer',
+        'stat_date' => 'date:Y-m-d',
+        'user_type' => 'integer',
+        'user_id' => 'integer',
+        'order_count' => 'integer',
+        'filled_order_count' => 'integer',
+        'fill_count' => 'integer',
+        'cancel_order_count' => 'integer',
+        'commission_count' => 'integer',
+        'fee_count' => 'integer',
+        'funding_settlement_count' => 'integer',
+        'liquidation_count' => 'integer',
+        'bankruptcy_count' => 'integer',
+        'calculation_version' => 'integer',
+        'position_snapshot_at' => 'datetime:Y-m-d H:i:s',
+        'last_aggregated_at' => 'datetime:Y-m-d H:i:s',
+        'created_at' => 'datetime:Y-m-d H:i:s',
+        'updated_at' => 'datetime:Y-m-d H:i:s',
+    ];
+}
