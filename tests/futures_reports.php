@@ -112,6 +112,15 @@ if ($pgPort !== null) {
     checkTrade(Agent::query()->count() === 2, 'Legacy models remain in public when search_path is control_plane');
     checkTrade((new SourceDirectory($connection))->load(['4'])['users']['4'] === '101', 'Directory qualifies both schemas');
     checkTrade($store->search(['start_date' => '2026-10-09', 'end_date' => '2026-10-09'], '1')['count'] === 1, 'Shared report query ignores search_path');
+    foreach ([['public'], ['control_plane'], ['control_plane', 'public']] as $configuredSchemas) {
+        // Reuse the fixture's PDO/transaction; a second physical connection cannot
+        // see the uncommitted test schema and would not test this Laravel 8 bug.
+        $configured = new Illuminate\Database\PostgresConnection($connection->getPdo(), 'futures_report_test', '', array_merge($connection->getConfig(), ['schema' => $configuredSchemas]));
+        TradeReportSchema::create($configured);
+        $resolved = (new SourceDirectory($configured))->load(['4']);
+        checkTrade(count($resolved['agents']) === 2 && $resolved['agents']['1']['source_code'] === 'MER1', 'Configured schema list must not hide public merchant fields');
+        checkTrade($configured->table('public.' . TradeReportSchema::TABLE)->count() > 0, 'Qualified reports support public-only and control_plane-only configuration');
+    }
 }
 $connection->rollBack();
 echo "Futures reports: schema, scopes, decimals, daily/monthly deduplication and atomic replacement passed.\n";

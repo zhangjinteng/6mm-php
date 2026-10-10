@@ -18,7 +18,12 @@ final class SourceDirectory
         $control = $pg ? 'control_plane.' : '';
         $agents = [];
         // Select display/origin fields only; do not load merchant credentials.
-        $columns = $this->database->getSchemaBuilder()->getColumnListing($public . 'agents');
+        // Laravel 8's schema introspection mishandles public.agents when the configured
+        // search_path contains only control_plane; query the qualified catalog directly.
+        $columns = $pg
+            ? $this->database->table('information_schema.columns')->where('table_schema', 'public')
+                ->where('table_name', 'agents')->pluck('column_name')->all()
+            : $this->database->getSchemaBuilder()->getColumnListing('agents');
         $displayFields = array_values(array_intersect(['id', 'home_site_id', 'agent_code', 'agent_name', 'user_name'], $columns));
         foreach ($this->database->table($public . 'agents')->where('pid', 0)->whereNull('deleted_at')->get($displayFields) as $agent) {
             $agents[(string) $agent->id] = [

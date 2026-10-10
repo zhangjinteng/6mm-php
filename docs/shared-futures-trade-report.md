@@ -126,7 +126,7 @@ PhpstormProjects/
   platform/platform_admin, platform_admin_view
 ```
 
-正式发布使用 6mm-php `v1.0.39`、6mm-ui `v1.0.56`（含 UI dist）。两应用须移除 Composer path 仓库，将 UI file 依赖切换为固定标签归档并重新生成锁文件；CI 不会取得未发布的本地目录。验收 vendor/node_modules 不再是本地共享目录的 symlink，并核对锁文件引用的提交/归档完整性。不要把本地 symlink vendor 复制到服务器。
+正式发布使用 6mm-php `v1.0.40`、6mm-ui `v1.0.56`（含 UI dist）。PHP 补丁版修复 Laravel 8 在连接只配置 control_plane 时对 public 表/字段的元数据误判，使用显式限定的目录查询。两应用须移除 Composer path 仓库，将 UI file 依赖切换为固定标签归档并重新生成锁文件；CI 不会取得未发布的本地目录。验收 vendor/node_modules 不再是本地共享目录的 symlink，并核对锁文件引用的提交/归档完整性。不要把本地 symlink vendor 复制到服务器。
 
 ## 验证
 

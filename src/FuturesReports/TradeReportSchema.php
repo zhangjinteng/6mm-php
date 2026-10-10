@@ -16,7 +16,12 @@ final class TradeReportSchema
         // Always public: search_path switches must not create a duplicate report table.
         $table = $connection->getDriverName() === 'pgsql' ? 'public.' . self::TABLE : self::TABLE;
         $schema = $connection->getSchemaBuilder();
-        if ($schema->hasTable($table)) return;
+        // Laravel 8 only recognizes schema qualifiers present in connection.schema.
+        // Catalog lookup is explicit even when the connection lists control_plane only.
+        $exists = $connection->getDriverName() === 'pgsql'
+            ? $connection->selectOne('SELECT to_regclass(?) AS table_name', [$table])->table_name !== null
+            : $schema->hasTable($table);
+        if ($exists) return;
         $schema->create($table, static function (Blueprint $t): void {
             $t->date('stat_date')->comment('UTC统计日期');
             $t->string('source_type', 16)->comment('来源类型：merchant商户、tenant白标、platform平台');
