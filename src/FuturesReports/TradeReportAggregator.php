@@ -14,18 +14,19 @@ final class TradeReportAggregator
     public function build(string $date, iterable $facts, array $directory, bool $completed): array
     {
         $groups = [];
+        $scope = new ReportUserScope($directory);
         $platform = ['source_type' => 'platform', 'source_id' => '0', 'source_code' => '6MM', 'source_name' => '6MM'];
         foreach (array_merge(array_values($directory['agents']), array_values($directory['tenants']), [$platform]) as $source) {
             $groups[$this->key($source, '')] = $this->emptyRow($date, $source, '', $completed);
         }
         foreach ($facts as $fact) {
-            $agent = $directory['agents'][(string) $fact['agent_id']] ?? null;
-            $userSite = $directory['users'][(string) $fact['user_id']] ?? '';
-            $agentSite = $agent['site_id'] ?? '';
-            $site = $userSite !== '' ? $userSite : $agentSite;
+            $user = $scope->user($fact);
+            if ($user === null) continue;
+            $agent = $scope->merchant($fact);
+            $site = $user['site_id'];
             $tenantId = $directory['sites'][$site] ?? null;
             $tenant = $directory['tenants'][(string) $tenantId] ?? null;
-            $complete = $tenant !== null && !($userSite !== '' && $agentSite !== '' && $userSite !== $agentSite);
+            $complete = $tenant !== null && ($agent !== null || ((string) $fact['agent_id'] === '0' && $user['agent_id'] === '0'));
             $sources = array_filter([$agent, $tenant, $platform]);
             foreach ($sources as $source) {
                 foreach (array_unique(['', (string) $fact['symbol']]) as $symbol) {
@@ -36,7 +37,7 @@ final class TradeReportAggregator
                 }
             }
             if (!$complete) {
-                // An unknown site cannot make any tenant look complete; retain merchant/platform totals.
+                // A positive but unmapped/conflicting origin is partial, not assigned to another merchant.
                 foreach ($groups as &$group) if ($group['source_type'] === 'tenant') $group['status'] = 2;
                 unset($group);
             }

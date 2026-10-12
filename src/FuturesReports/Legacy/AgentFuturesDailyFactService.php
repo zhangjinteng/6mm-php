@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace SixMm\Shared\FuturesReports\Legacy;
 
 use SixMm\Shared\FuturesReports\Legacy\Models\Agent;
@@ -8,6 +10,7 @@ use SixMm\Shared\FuturesReports\Legacy\Models\User;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
+use SixMm\Shared\FuturesReports\ReportUserScope;
 
 class AgentFuturesDailyFactService
 {
@@ -230,7 +233,7 @@ class AgentFuturesDailyFactService
                 'created_at' => $now,
                 'updated_at' => $now,
             ]),
-            array_values($facts)
+            $this->merchantRows(array_values($facts))
         );
 
         DB::transaction(static function () use ($agentIds, $statDate, $rows): void {
@@ -312,11 +315,16 @@ class AgentFuturesDailyFactService
             }
             $seenWindows[$windowStart] = true;
 
+            $merchantRows = [];
             foreach (($bucket['rows'] ?? []) as $row) {
                 if (!is_array($row)) {
                     throw new InvalidArgumentException('合约小时事实行格式无效');
                 }
-
+                // Shared caches retain white-label direct users; legacy reports are merchant-only.
+                if (!in_array((int) ($row['agent_id'] ?? -1), $agentIds, true)) continue;
+                $merchantRows[] = $row;
+            }
+            foreach ($this->merchantRows($merchantRows) as $row) {
                 $fact = &$this->fact($facts, $row);
                 $fact['order_count'] += max(0, (int) ($row['order_count'] ?? 0));
                 $fact['fill_count'] += max(0, (int) ($row['fill_count'] ?? 0));
@@ -434,11 +442,15 @@ class AgentFuturesDailyFactService
                 throw new InvalidArgumentException('当前持仓快照时间格式无效', 0, $e);
             }
 
+            $snapshotRows = [];
             foreach (($positionSnapshot['rows'] ?? []) as $row) {
                 if (!is_array($row)) {
                     throw new InvalidArgumentException('当前持仓快照行格式无效');
                 }
                 if (!in_array((int) ($row['agent_id'] ?? -1), $agentIds, true)) continue;
+                $snapshotRows[] = $row;
+            }
+            foreach ($this->merchantRows($snapshotRows) as $row) {
                 $fact = &$this->fact($facts, $row);
                 $this->mergePositionAmounts($fact, $row);
                 $fact['position_snapshot_at'] = $snapshotAt;
@@ -455,7 +467,7 @@ class AgentFuturesDailyFactService
                 'created_at' => $now,
                 'updated_at' => $now,
             ]),
-            array_values($facts)
+            $this->merchantRows(array_values($facts))
         );
 
         $this->replaceRows($agentIds, $statDate, $rows);
@@ -480,7 +492,7 @@ class AgentFuturesDailyFactService
         }
 
         $positions = [];
-        foreach ($this->sourceProvider->currentPositionRows($agentIds) as $row) {
+        foreach ($this->merchantRows($this->sourceProvider->currentPositionRows($agentIds)) as $row) {
             $row['settle_asset'] = FuturesDailySourceProvider::SETTLE_ASSET;
             $fact = &$this->fact($positions, $row);
             $this->mergePositionAmounts($fact, $row);
@@ -571,13 +583,12 @@ class AgentFuturesDailyFactService
                 'position_snapshot_at',
             ]);
 
-        foreach ($rows as $row) {
-            $payload = $row->toArray();
+        foreach ($this->merchantRows($rows->map(static fn ($row): array => $row->toArray())->all()) as $payload) {
             $fact = &$this->fact($facts, $payload);
             foreach (self::POSITION_AMOUNT_FIELDS as $field) {
                 $fact[$field] = $this->decimal($payload[$field] ?? '0');
             }
-            $fact['position_snapshot_at'] = $row->position_snapshot_at;
+            $fact['position_snapshot_at'] = $payload['position_snapshot_at'];
             unset($fact);
         }
     }
@@ -802,6 +813,12 @@ class AgentFuturesDailyFactService
             ->pluck('id')
             ->map(static fn ($agentId): int => (int) $agentId)
             ->all();
+    }
+
+    private function merchantRows(array $rows): array
+    {
+        if ($rows === []) return [];
+        return ReportUserScope::fromRows(DB::connection(), $rows)->filterMerchants($rows);
     }
 
     private function add($left, $right): string

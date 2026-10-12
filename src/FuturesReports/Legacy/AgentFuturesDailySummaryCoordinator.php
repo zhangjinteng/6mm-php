@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace SixMm\Shared\FuturesReports\Legacy;
 
 use SixMm\Shared\FuturesReports\Legacy\Models\AgentFuturesDailyStatistic;
@@ -8,6 +10,7 @@ use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 use RuntimeException;
+use SixMm\Shared\FuturesReports\ReportUserScope;
 
 class AgentFuturesDailySummaryCoordinator
 {
@@ -85,7 +88,6 @@ class AgentFuturesDailySummaryCoordinator
         array $agentIds,
         bool $force
     ): array {
-        $executionRows = [];
         $userPnlRows = [];
         $userTradeRows = [];
         $checksums = [];
@@ -105,7 +107,6 @@ class AgentFuturesDailySummaryCoordinator
                 if (!is_array($row)) {
                     throw new InvalidArgumentException('合约小时成交汇总行格式无效');
                 }
-                $executionRows[] = $row;
             }
             foreach ($bucket['user_pnl_rows'] as $row) {
                 if (!is_array($row)) {
@@ -121,9 +122,18 @@ class AgentFuturesDailySummaryCoordinator
             }
         }
 
+        $belongs = static fn (array $row): bool => in_array((int) ($row['agent_id'] ?? -1), $agentIds, true);
+        $userPnlRows = array_values(array_filter($userPnlRows, $belongs));
+        $userTradeRows = array_values(array_filter($userTradeRows, $belongs));
+        $scope = ReportUserScope::fromRows(DB::connection(), array_merge($userPnlRows, $userTradeRows));
+        $userPnlRows = $scope->filterMerchants($userPnlRows);
+        $userTradeRows = $scope->filterMerchants($userTradeRows);
+        $executionRows = ReportUserScope::executionRows($userTradeRows);
+
         $date = $day->toDateString();
         $checksum = hash('sha256', implode('|', array_merge([
             'user-pnl-v' . AgentFuturesUserPnlDailyStatisticService::CALCULATION_VERSION,
+            'positive-public-user-scope-v1:' . $scope->fingerprint(),
         ], $checksums)));
         if (!$force && $this->repository->getSummaryChecksum($day) === $checksum) {
             return [
@@ -133,11 +143,6 @@ class AgentFuturesDailySummaryCoordinator
                 'unchanged' => true,
             ];
         }
-
-        $belongs = static fn (array $row): bool => in_array((int) ($row['agent_id'] ?? -1), $agentIds, true);
-        $executionRows = array_values(array_filter($executionRows, $belongs));
-        $userPnlRows = array_values(array_filter($userPnlRows, $belongs));
-        $userTradeRows = array_values(array_filter($userTradeRows, $belongs));
 
         // 两类日报全部构造成功后，才进入同一事务替换，避免部分结果覆盖旧数据。
         $dailyRows = $this->dailyStatisticService->buildRows(

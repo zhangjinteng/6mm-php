@@ -11,6 +11,8 @@ use SixMm\Shared\FuturesReports\TradeReportAggregator;
 use SixMm\Shared\FuturesReports\TradeReportSchema;
 use SixMm\Shared\FuturesReports\TradeReportStore;
 use SixMm\Shared\FuturesReports\TradeReportPublisher;
+use SixMm\Shared\FuturesReports\MerchantReportScope;
+use SixMm\Shared\FuturesReports\ReportUserScope;
 use SixMm\Shared\FuturesReports\Legacy\AgentFuturesFactRedisRepository;
 use SixMm\Shared\FuturesReports\Legacy\AgentFuturesHourlyFactService;
 use SixMm\Shared\FuturesReports\Legacy\Models\Agent;
@@ -43,17 +45,52 @@ $schema->create('agents', function (Blueprint $t): void {
     $t->bigInteger('id'); $t->bigInteger('pid'); $t->string('agent_code'); $t->string('agent_name');
     $t->string('user_name'); $t->bigInteger('home_site_id')->nullable(); $t->timestamp('deleted_at')->nullable();
 });
-$schema->create('users', function (Blueprint $t): void { $t->bigInteger('user_id'); $t->bigInteger('home_site_id')->nullable(); });
+$schema->create('users', function (Blueprint $t): void { $t->bigInteger('user_id'); $t->bigInteger('home_site_id')->nullable(); $t->bigInteger('agent_id')->default(0); });
 $schema->create($control . 'wl_sites', function (Blueprint $t): void { $t->bigInteger('site_id'); $t->bigInteger('tenant_id'); });
 $schema->create($control . 'wl_tenants', function (Blueprint $t): void { $t->bigInteger('tenant_id'); $t->string('tenant_name'); });
 foreach ([1 => 100, 2 => 101] as $id => $site) $connection->table('agents')->insert(['id' => $id, 'pid' => 0, 'agent_code' => 'MER' . $id, 'agent_name' => 'Merchant' . $id, 'user_name' => 'merchant', 'home_site_id' => $site]);
 $connection->table($control . 'wl_sites')->insert([['site_id' => 100, 'tenant_id' => 1], ['site_id' => 101, 'tenant_id' => 1]]);
 $connection->table($control . 'wl_tenants')->insert(['tenant_id' => 1, 'tenant_name' => 'White label']);
-$connection->table('users')->insert([['user_id' => 9007199254740993, 'home_site_id' => 100], ['user_id' => 4, 'home_site_id' => 101]]);
+$connection->table('users')->insert([
+    ['user_id' => 9007199254740993, 'home_site_id' => 100, 'agent_id' => 1],
+    ['user_id' => 4, 'home_site_id' => 101, 'agent_id' => 2],
+    ['user_id' => 5, 'home_site_id' => 100, 'agent_id' => 0],
+    ['user_id' => 6, 'home_site_id' => 0, 'agent_id' => 1],
+    ['user_id' => 7, 'home_site_id' => null, 'agent_id' => 1],
+    ['user_id' => 8, 'home_site_id' => -1, 'agent_id' => 1],
+    ['user_id' => 9, 'home_site_id' => 101, 'agent_id' => 1],
+    ['user_id' => 10, 'home_site_id' => 999, 'agent_id' => 0],
+]);
 $directory = (new SourceDirectory($connection))->load(['9007199254740993', '4']);
 $base = ['agent_id' => 1, 'user_id' => '9007199254740993', 'symbol' => 'BTCUSDT', 'order_count' => 1, 'order_amount' => '20', 'cancel_order_count' => 0, 'cancel_amount' => '0', 'fill_count' => 1, 'filled_order_ids' => ['10001'], 'execution_details' => [['9007199254740994', '10.1234567890123456']]];
 $other = array_merge($base, ['agent_id' => 2, 'user_id' => '4', 'filled_order_ids' => ['10002']]);
 $aggregator = new TradeReportAggregator();
+$scopedDirectory = (new SourceDirectory($connection))->load(['9007199254740993', '4', '5', '6', '7', '8', '9', '10', '777']);
+$scopedRows = $aggregator->build('2026-10-09', [$base,
+    array_merge($base, ['agent_id' => 0, 'user_id' => '5']),
+    array_merge($base, ['user_id' => '6']), array_merge($base, ['user_id' => '7']),
+    array_merge($base, ['user_id' => '8']), array_merge($base, ['user_id' => '777']),
+], $scopedDirectory, true);
+checkTrade(sourceTrade($scopedRows, 'platform', '0')['order_count'] === 2, 'Exclude zero, null, negative and missing public user origins');
+checkTrade(sourceTrade($scopedRows, 'tenant', '1')['trading_user_count'] === 2, 'White-label direct users remain in shared tenant totals');
+checkTrade(sourceTrade($scopedRows, 'merchant', '1')['order_count'] === 1, 'Direct users must not enter a merchant total');
+$crossSite = $aggregator->build('2026-10-09', [array_merge($base, ['user_id' => '9'])], $scopedDirectory, true);
+checkTrade(sourceTrade($crossSite, 'merchant', '1')['order_count'] === 0, 'Merchant user must match the merchant site');
+$crossMerchant = $aggregator->build('2026-10-09', [array_merge($base, ['user_id' => '4'])], $scopedDirectory, true);
+checkTrade(sourceTrade($crossMerchant, 'merchant', '1')['order_count'] === 0, 'Do not reassign a different public merchant into the historical merchant');
+$connection->table('agents')->insert(['id' => 3, 'pid' => 0, 'agent_code' => 'M3', 'agent_name' => 'Other', 'user_name' => 'other', 'home_site_id' => 100]);
+$connection->table('agents')->insert(['id' => 11, 'pid' => 1, 'agent_code' => 'sub', 'agent_name' => 'Sub', 'user_name' => 'sub', 'home_site_id' => 100]);
+$connection->table('agents')->insert(['id' => 12, 'pid' => 1, 'agent_code' => 'bad', 'agent_name' => 'Bad', 'user_name' => 'bad', 'home_site_id' => 101]);
+checkTrade(MerchantReportScope::forAccount($connection, '11')->merchantId === '1', 'Subaccounts inherit the authenticated root merchant');
+checkTrade(MerchantReportScope::forAccount($connection, '2')->siteId === '101', 'Shared merchant backend resolves different white-label sites dynamically');
+foreach ([['1', '101'], ['12', null], ['404', null]] as [$account, $site]) {
+    try { MerchantReportScope::forAccount($connection, $account, $site); throw new RuntimeException('Accepted invalid account/site'); }
+    catch (InvalidArgumentException $e) {}
+}
+checkTrade($scopedDirectory['users']['9007199254740993']['agent_id'] === '1', 'Public user ownership is included in the directory');
+checkTrade(ReportUserScope::executionRows([array_merge($base, ['user_type' => 1]), array_merge($base, ['user_type' => 2])])[0]['fill_count'] === 1, 'Legacy all-user execution scope deduplicates both user types');
+try { ReportUserScope::executionRows([array_merge($base, ['user_type' => 1, 'execution_details' => []])]); throw new RuntimeException('Accepted unfilterable execution facts'); }
+catch (InvalidArgumentException $e) {}
 $rows = $aggregator->build('2026-10-09', [$base, $other], $directory, true);
 $tenant = sourceTrade($rows, 'tenant', '1');
 checkTrade($tenant['trading_user_count'] === 2 && $tenant['fill_count'] === 1 && $tenant['filled_order_count'] === 2, 'Tenant must deduplicate both sides across multiple sites');
@@ -71,6 +108,10 @@ checkTrade($monthly['stat_status'] === 0, 'Current month stays processing');
 checkTrade(!isset($monthly['identities']) && is_string($monthly['source_id']), 'Do not expose raw identity sets or numeric BIGINTs');
 $own = $store->search(array_merge($params, ['source_id' => '2', 'source_type' => 'platform']), '1');
 checkTrade($own['count'] === 1 && $own['lists'][0]['source_type'] === 'merchant' && $own['lists'][0]['source_id'] === '1', 'Server-derived merchant scope overrides hostile params');
+foreach (['day', 'month'] as $period) {
+    try { $store->search(array_merge($params, ['period' => $period]), '1', '101'); throw new RuntimeException('Accepted wrong merchant site'); }
+    catch (InvalidArgumentException $e) {}
+}
 $btc = $store->search(array_merge($params, ['symbol' => 'ETHUSDT']))['lists'][0];
 checkTrade($btc['fill_count'] === 0, 'Single contract retains zero-day skeleton');
 $connection->enableQueryLog();
@@ -95,8 +136,8 @@ $publisher->publish('2026-10-09', 1, true, [0, 1, 2]);
 $buckets->bucket['agent_ids'] = [1, 2];
 try { $publisher->publish('2026-10-09', 1, true, [0, 1, 2]); throw new RuntimeException('Accepted incomplete collection scope'); } catch (RuntimeException $e) { checkTrade(str_contains($e->getMessage(), '小时桶'), 'Scope mismatch rejects publication'); }
 checkTrade($store->search(['start_date' => '2026-10-09', 'end_date' => '2026-10-09'], '1')['lists'][0]['fill_count'] === 1, 'Failed publication retains the previous report');
-$unmapped = $aggregator->build('2026-10-08', [array_merge($base, ['agent_id' => 0, 'user_id' => '777'])], $directory, true);
-checkTrade(sourceTrade($unmapped, 'platform', '0')['status'] === 2, 'Missing site retains totals and partial status');
+$unmapped = $aggregator->build('2026-10-08', [array_merge($base, ['agent_id' => 0, 'user_id' => '10'])], $scopedDirectory, true);
+checkTrade(sourceTrade($unmapped, 'platform', '0')['status'] === 2, 'Positive user origin with missing tenant directory retains platform totals as partial');
 $failed = false;
 try { $store->replace('2026-10-09', [$rows[0], $rows[0]]); } catch (Throwable $e) { $failed = true; }
 checkTrade($failed && $store->search(['start_date' => '2026-10-09', 'end_date' => '2026-10-09'], '1')['count'] === 1, 'Failed replacement rolls back');
@@ -109,8 +150,8 @@ $provider->fillRows([0, 1], CarbonImmutable::parse('2026-10-09', 'UTC'), CarbonI
 checkTrade(str_contains($sqls[0], 'execution_details') && str_contains($sqls[0], 'WHERE user_id IN') && str_contains($sqls[0], 'agent_id IN (0, 1)'), 'SQL retains FINAL, candidate users, execution amounts and platform users');
 if ($pgPort !== null) {
     $connection->statement('SET LOCAL search_path TO control_plane');
-    checkTrade(Agent::query()->count() === 2, 'Legacy models remain in public when search_path is control_plane');
-    checkTrade((new SourceDirectory($connection))->load(['4'])['users']['4'] === '101', 'Directory qualifies both schemas');
+    checkTrade(Agent::query()->count() === 5, 'Legacy models remain in public when search_path is control_plane');
+    checkTrade((new SourceDirectory($connection))->load(['4'])['users']['4']['site_id'] === '101', 'Directory qualifies both schemas');
     checkTrade($store->search(['start_date' => '2026-10-09', 'end_date' => '2026-10-09'], '1')['count'] === 1, 'Shared report query ignores search_path');
     foreach ([['public'], ['control_plane'], ['control_plane', 'public']] as $configuredSchemas) {
         // Reuse the fixture's PDO/transaction; a second physical connection cannot
@@ -118,7 +159,7 @@ if ($pgPort !== null) {
         $configured = new Illuminate\Database\PostgresConnection($connection->getPdo(), 'futures_report_test', '', array_merge($connection->getConfig(), ['schema' => $configuredSchemas]));
         TradeReportSchema::create($configured);
         $resolved = (new SourceDirectory($configured))->load(['4']);
-        checkTrade(count($resolved['agents']) === 2 && $resolved['agents']['1']['source_code'] === 'MER1', 'Configured schema list must not hide public merchant fields');
+        checkTrade(count($resolved['agents']) === 3 && $resolved['agents']['1']['source_code'] === 'MER1', 'Configured schema list must not hide public merchant fields');
         checkTrade($configured->table('public.' . TradeReportSchema::TABLE)->count() > 0, 'Qualified reports support public-only and control_plane-only configuration');
     }
 }

@@ -34,9 +34,11 @@ final class TradeReportStore
         return count($rows);
     }
 
-    /** $merchantId is server-derived; passing it prevents any tenant/platform scope escape. */
-    public function search(array $params, ?string $merchantId = null): array
+    /** Both merchant ID and optional site constraint are server-derived, never request parameters. */
+    public function search(array $params, ?string $merchantId = null, ?string $merchantSiteId = null): array
     {
+        $merchantScope = $merchantId === null ? null : MerchantReportScope::forAccount($this->database, $merchantId, $merchantSiteId);
+        $merchantId = $merchantScope?->merchantId;
         $period = (string) ($params['period'] ?? 'day');
         if (!in_array($period, ['day', 'month'], true)) throw new InvalidArgumentException('无效的统计周期');
         $today = CarbonImmutable::now('UTC')->startOfDay();
@@ -55,17 +57,18 @@ final class TradeReportStore
         $page = max(1, (int) ($params['page_no'] ?? 1));
         $size = min(100, max(1, (int) ($params['page_size'] ?? 20)));
         if ($period === 'day') {
-            return $this->database->transaction(function () use ($params, $merchantId, $start, $end, $symbol, $sort, $page, $size): array {
+            return $this->database->transaction(function () use ($params, $merchantScope, $start, $end, $symbol, $sort, $page, $size): array {
                 if ($this->database->getDriverName() === 'pgsql' && $this->database->transactionLevel() === 1) {
                     $this->database->statement('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
                 }
-                return $this->dailyPage($params, $merchantId, $start, $end, $symbol, $sort, $page, $size);
+                return $this->dailyPage($params, $merchantScope, $start, $end, $symbol, $sort, $page, $size);
             });
         }
         $query = $this->database->table($this->table())->whereBetween('stat_date', [$start->toDateString(), $end->toDateString()])
             ->whereIn('symbol', $symbol === '' ? [''] : ['', $symbol]);
         if ($merchantId !== null) {
             $query->where('source_type', 'merchant')->where('source_id', $merchantId);
+            $this->constrainMerchantSite($query, $merchantScope);
         } else {
             $type = (string) ($params['source_type'] ?? '');
             if ($type !== '' && !in_array($type, ['merchant', 'tenant', 'platform'], true)) throw new InvalidArgumentException('无效的来源类型');
@@ -107,13 +110,15 @@ final class TradeReportStore
     }
 
     /** Daily pages never fetch the potentially large JSON identity sets. */
-    private function dailyPage(array $params, ?string $merchantId, CarbonImmutable $start, CarbonImmutable $end,
+    private function dailyPage(array $params, ?MerchantReportScope $merchantScope, CarbonImmutable $start, CarbonImmutable $end,
         string $symbol, string $sort, int $page, int $size): array
     {
         $query = $this->database->table($this->table() . ' as totals')
             ->where('totals.symbol', '')->whereBetween('totals.stat_date', [$start->toDateString(), $end->toDateString()]);
-        if ($merchantId !== null) $query->where('totals.source_type', 'merchant')->where('totals.source_id', $merchantId);
-        else {
+        if ($merchantScope !== null) {
+            $query->where('totals.source_type', 'merchant')->where('totals.source_id', $merchantScope->merchantId);
+            $this->constrainMerchantSite($query, $merchantScope);
+        } else {
             $type = (string) ($params['source_type'] ?? '');
             if ($type !== '' && !in_array($type, ['merchant', 'tenant', 'platform'], true)) throw new InvalidArgumentException('无效的来源类型');
             $query->whereIn('totals.source_type', $type === '' ? ['merchant', 'tenant'] : [$type]);
@@ -158,6 +163,15 @@ final class TradeReportStore
         foreach (['order_amount', 'trade_amount', 'cancel_amount'] as $field) $row[$field] = (string) $row[$field];
         unset($row['identities']);
         return $row;
+    }
+
+    private function constrainMerchantSite(\Illuminate\Database\Query\Builder $query, MerchantReportScope $scope): void
+    {
+        $table = ($this->database->getDriverName() === 'pgsql' ? 'public.' : '') . 'agents';
+        $query->whereExists(static function ($merchant) use ($table, $scope): void {
+            $merchant->selectRaw('1')->from($table)->where('id', $scope->merchantId)
+                ->where('pid', 0)->whereNull('deleted_at')->where('home_site_id', $scope->siteId);
+        });
     }
 
     private function date(string $value, CarbonImmutable $fallback): CarbonImmutable
