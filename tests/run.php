@@ -311,7 +311,7 @@ $database->getConnection()->table('users')->insert([
         'username' => 'offline',
         'nick_name' => null,
         'user_type' => 1,
-        'vip_level' => 1,
+        'vip_level' => 0,
         'online_status' => 0,
         'last_login_ip' => null,
         'last_login_at' => '2026-08-03 12:00:00',
@@ -637,6 +637,12 @@ $userList = $userListService->search(
 assertSameValue(3, $userList->total(), 'The shared user list should include all users inside the supplied scope.');
 assertSameValue([9003, 9002, 9001], array_column($userList->items(), 'user_id'), 'The shared user list should sort by registration time descending.');
 assertSameValue('Bob', $userList->items()[1]['nice_name'], 'The shared user list should expose the preferred display name.');
+
+$v0UserList = $userListService->search(
+    new UserListQuery(vipLevel: 0, volumeSince: '2026-07-01'),
+    new AgentIdsScope([10])
+);
+assertSameValue([9003], array_column($v0UserList->items(), 'user_id'), 'VIP level zero should filter users instead of behaving like all levels.');
 
 $filteredUserList = $userListService->search(
     new UserListQuery(
