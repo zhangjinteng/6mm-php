@@ -51,6 +51,13 @@ final class TradeReportStore
         if ($end->lessThan($start) || $start->diffInDays($end) > 365) throw new InvalidArgumentException('统计范围最多366天');
         $symbol = strtoupper(trim((string) ($params['symbol'] ?? '')));
         if (strlen($symbol) > 64 || !preg_match('/^[A-Z0-9_:\/-]*$/D', $symbol)) throw new InvalidArgumentException('合约格式不正确');
+        // A base ticker in the USDT-settled report (e.g. btc) means its USDT contract.
+        // Keep complete symbols and explicitly formatted contracts as exact matches.
+        if ($symbol !== '' && preg_match('/^[A-Z0-9]+$/D', $symbol)
+            && !preg_match('/(?:USDT|USDC|FDUSD|BUSD|USD)$/D', $symbol)) {
+            $symbol .= 'USDT';
+        }
+        if (strlen($symbol) > 64) throw new InvalidArgumentException('合约格式不正确');
         $sort = (string) ($params['order_by'] ?? 'stat_date');
         $allowed = ['stat_date', 'source_id', 'source_code', 'source_name', 'source_type', 'trading_user_count', 'order_count', 'order_amount', 'filled_order_count', 'fill_count', 'trade_amount', 'cancel_order_count', 'cancel_amount', 'amount_fill_rate', 'stat_status'];
         if (!in_array($sort, $allowed, true)) throw new InvalidArgumentException('不支持的排序字段');
@@ -79,6 +86,7 @@ final class TradeReportStore
                 if (!preg_match('/^\d+$/D', $id)) throw new InvalidArgumentException('无效的来源ID');
                 $query->where('source_id', $id);
             }
+            $this->applySourceKeyword($query, $params);
         }
         $daily = [];
         foreach ($query->get() as $record) {
@@ -127,6 +135,7 @@ final class TradeReportStore
                 if (!preg_match('/^\d+$/D', $id)) throw new InvalidArgumentException('无效的来源ID');
                 $query->where('totals.source_id', $id);
             }
+            $this->applySourceKeyword($query, $params, 'totals.');
         }
         $count = (clone $query)->count();
         $metrics = ['trading_user_count', 'order_count', 'order_amount', 'filled_order_count', 'fill_count', 'trade_amount', 'cancel_order_count', 'cancel_amount'];
@@ -151,6 +160,22 @@ final class TradeReportStore
         $query->orderByRaw($expression . ' ' . $direction)->orderBy('totals.stat_date')->orderBy('totals.source_type')->orderBy('totals.source_id');
         $rows = $query->offset(($page - 1) * $size)->limit($size)->get()->map(fn ($row): array => $this->responseRow((array) $row, 'day', $symbol))->all();
         return ['lists' => $rows, 'count' => $count, 'page' => $page, 'limit' => $size];
+    }
+
+    /** A bound literal substring, OR an exact BIGINT ID; used before counting and pagination. */
+    private function applySourceKeyword(\Illuminate\Database\Query\Builder $query, array $params, string $prefix = ''): void
+    {
+        $keyword = trim((string) ($params['source_keyword'] ?? ''));
+        if ($keyword === '') return;
+        if (mb_strlen($keyword, 'UTF-8') > 128) throw new InvalidArgumentException('来源搜索内容最多128个字符');
+        $pattern = '%' . strtr($keyword, ['!' => '!!', '%' => '!%', '_' => '!_']) . '%';
+        $id = ctype_digit($keyword) ? (ltrim($keyword, '0') ?: '0') : null;
+        if ($id !== null && (strlen($id) > 19 || (strlen($id) === 19 && strcmp($id, '9223372036854775807') > 0))) $id = null;
+        $query->where(static function ($search) use ($prefix, $pattern, $id): void {
+            // The prefix is internal, not supplied by the request; all text is bound.
+            $search->whereRaw("LOWER({$prefix}source_name) LIKE LOWER(?) ESCAPE '!'", [$pattern]);
+            if ($id !== null) $search->orWhere($prefix . 'source_id', $id);
+        });
     }
 
     private function responseRow(array $row, string $period, string $symbol): array

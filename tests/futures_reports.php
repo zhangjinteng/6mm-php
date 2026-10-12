@@ -112,11 +112,37 @@ $store = new TradeReportStore($connection);
 $store->replace('2026-10-09', $rows);
 $next = $aggregator->build('2026-10-10', [$base], $directory, false);
 $store->replace('2026-10-10', $next);
+foreach (['day', 'month'] as $searchPeriod) {
+    $searchParams = ['start_date' => '2026-10-09', 'end_date' => '2026-10-10', 'period' => $searchPeriod];
+    $nameResult = $store->search(array_merge($searchParams, ['source_keyword' => 'CHANT1']));
+    checkTrade($nameResult['count'] === ($searchPeriod === 'day' ? 2 : 1)
+        && array_unique(array_column($nameResult['lists'], 'source_id')) === ['1'], 'Source names match case-insensitive partial text before aggregation');
+    $idResult = $store->search(array_merge($searchParams, ['source_keyword' => '2']));
+    checkTrade($idResult['count'] === ($searchPeriod === 'day' ? 2 : 1)
+        && array_unique(array_column($idResult['lists'], 'source_id')) === ['2'], 'Source ID matches exactly');
+    foreach (['%', '_', "' OR 1=1 --", '9223372036854775808'] as $literal) {
+        checkTrade($store->search(array_merge($searchParams, ['source_keyword' => $literal]))['count'] === 0, 'Wildcards, quotes and oversized IDs do not broaden results or overflow');
+    }
+    $ownSearch = $store->search(array_merge($searchParams, ['source_keyword' => 'Merchant2']), '1');
+    checkTrade($ownSearch['count'] === ($searchPeriod === 'day' ? 2 : 1)
+        && array_unique(array_column($ownSearch['lists'], 'source_id')) === ['1'], 'Source keyword cannot override the authenticated merchant scope');
+}
+$namePage = $store->search(['start_date' => '2026-10-09', 'end_date' => '2026-10-10', 'source_keyword' => 'Merchant', 'page_size' => 1, 'page_no' => 3]);
+checkTrade($namePage['count'] === 4 && count($namePage['lists']) === 1 && $namePage['page'] === 3, 'Source-name filters share the total and pagination predicate');
 $params = ['start_date' => '2026-10-09', 'end_date' => '2026-10-10', 'period' => 'month', 'source_type' => 'tenant', 'source_id' => '1'];
 $monthly = $store->search($params)['lists'][0];
 checkTrade($monthly['trading_user_count'] === 2 && $monthly['filled_order_count'] === 2 && $monthly['fill_count'] === 1, 'Month uses identity union, not daily sums');
 checkTrade($monthly['stat_status'] === 0, 'Current month stays processing');
 checkTrade(!isset($monthly['identities']) && is_string($monthly['source_id']), 'Do not expose raw identity sets or numeric BIGINTs');
+foreach (['day', 'month'] as $period) {
+    $symbolParams = array_merge($params, ['period' => $period]);
+    $fullSymbol = $store->search(array_merge($symbolParams, ['symbol' => 'BTCUSDT']));
+    checkTrade($fullSymbol['count'] > 0 && $fullSymbol['lists'][0]['order_count'] > 0, 'Full contract symbol retains matching report data');
+    foreach (['btc', 'BTC', 'btcusdt'] as $alias) {
+        $matched = $store->search(array_merge($symbolParams, ['symbol' => $alias]));
+        checkTrade($matched === $fullSymbol, 'Base ticker and mixed-case contract resolve to BTCUSDT for daily and monthly reports');
+    }
+}
 $own = $store->search(array_merge($params, ['source_id' => '2', 'source_type' => 'platform']), '1');
 checkTrade($own['count'] === 1 && $own['lists'][0]['source_type'] === 'merchant' && $own['lists'][0]['source_id'] === '1', 'Server-derived merchant scope overrides hostile params');
 foreach (['day', 'month'] as $period) {
@@ -174,5 +200,17 @@ if ($pgPort !== null) {
         checkTrade($configured->table('public.' . TradeReportSchema::TABLE)->count() > 0, 'Qualified reports support public-only and control_plane-only configuration');
     }
 }
+$literalDirectory = ['agents' => [[
+    'source_type' => 'merchant', 'source_id' => '9007199254740993', 'source_code' => 'BIG', 'source_name' => '100%_!交易台',
+]], 'tenants' => [], 'sites' => [], 'users' => []];
+$store->replace('2026-09-01', $aggregator->build('2026-09-01', [], $literalDirectory, true));
+foreach (['day', 'month'] as $period) {
+    foreach (['%_!', '交易台', '9007199254740993'] as $keyword) {
+        $literal = $store->search(['start_date' => '2026-09-01', 'end_date' => '2026-09-01', 'period' => $period, 'source_keyword' => $keyword]);
+        checkTrade($literal['count'] === 1 && $literal['lists'][0]['source_id'] === '9007199254740993', 'Literal wildcards, Chinese names and BIGINT IDs remain searchable');
+    }
+}
+try { $store->search(['source_keyword' => str_repeat('字', 129)]); throw new RuntimeException('Accepted excessive source keyword'); }
+catch (InvalidArgumentException $e) {}
 $connection->rollBack();
 echo "Futures reports: schema, scopes, decimals, daily/monthly deduplication and atomic replacement passed.\n";
