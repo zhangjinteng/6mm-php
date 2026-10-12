@@ -17,6 +17,7 @@ use SixMm\Shared\FuturesReports\Legacy\AgentFuturesFactRedisRepository;
 use SixMm\Shared\FuturesReports\Legacy\AgentFuturesHourlyFactService;
 use SixMm\Shared\FuturesReports\Legacy\Models\Agent;
 use SixMm\Shared\FuturesReports\Legacy\FuturesDailySourceProvider;
+use SixMm\Shared\FuturesReports\Legacy\LegacySummaryAccumulator;
 
 require dirname(__DIR__) . '/vendor/autoload.php';
 
@@ -91,6 +92,16 @@ checkTrade($scopedDirectory['users']['9007199254740993']['agent_id'] === '1', 'P
 checkTrade(ReportUserScope::executionRows([array_merge($base, ['user_type' => 1]), array_merge($base, ['user_type' => 2])])[0]['fill_count'] === 1, 'Legacy all-user execution scope deduplicates both user types');
 try { ReportUserScope::executionRows([array_merge($base, ['user_type' => 1, 'execution_details' => []])]); throw new RuntimeException('Accepted unfilterable execution facts'); }
 catch (InvalidArgumentException $e) {}
+$compact = new LegacySummaryAccumulator();
+$trade = array_merge($base, ['user_type' => 2, 'settle_asset' => 'USDT', 'trading_fee' => '1.1234567890123456']);
+$settlement = ['agent_id' => 1, 'user_type' => 2, 'user_id' => '9007199254740993', 'settle_asset' => 'USDT',
+    'close_order_ids' => ['10001'], 'close_amount' => '10', 'realized_pnl' => '2.5'];
+$compact->merge([$settlement], [$trade]);
+$compact->merge([array_merge($settlement, ['close_order_ids' => ['10001', '10002']])], [$trade]);
+checkTrade($compact->executionRows()[0]['fill_count'] === 1, 'Streaming execution union deduplicates across hours');
+checkTrade($compact->executionRows()[0]['trade_amount'] === '10.1234567890123456', 'Streaming execution amount is not summed twice');
+checkTrade($compact->settlementRows()[0]['close_order_count'] === 2 && $compact->settlementRows()[0]['close_amount'] === '20.0000000000000000', 'Streaming settlement IDs are distinct but monetary flows are summed');
+checkTrade($compact->feeRows()[0]['trading_fee'] === '2.2469135780246912' && !isset($compact->feeRows()[0]['execution_details']), 'Streaming fees retain exact decimals, not full hourly facts');
 $rows = $aggregator->build('2026-10-09', [$base, $other], $directory, true);
 $tenant = sourceTrade($rows, 'tenant', '1');
 checkTrade($tenant['trading_user_count'] === 2 && $tenant['fill_count'] === 1 && $tenant['filled_order_count'] === 2, 'Tenant must deduplicate both sides across multiple sites');

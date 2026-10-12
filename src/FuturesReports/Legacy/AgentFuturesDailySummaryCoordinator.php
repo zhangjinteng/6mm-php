@@ -88,9 +88,9 @@ class AgentFuturesDailySummaryCoordinator
         array $agentIds,
         bool $force
     ): array {
-        $userPnlRows = [];
-        $userTradeRows = [];
+        $accumulator = new LegacySummaryAccumulator();
         $checksums = [];
+        $belongs = static fn (array $row): bool => in_array((int) ($row['agent_id'] ?? -1), $agentIds, true);
 
         for ($index = 0; $index < $hourCount; $index++) {
             $hour = $day->addHours($index);
@@ -108,32 +108,31 @@ class AgentFuturesDailySummaryCoordinator
                     throw new InvalidArgumentException('合约小时成交汇总行格式无效');
                 }
             }
+            $userPnlRows = [];
+            $userTradeRows = [];
             foreach ($bucket['user_pnl_rows'] as $row) {
                 if (!is_array($row)) {
                     throw new InvalidArgumentException('合约小时用户盈亏行格式无效');
                 }
-                $userPnlRows[] = $row;
+                if ($belongs($row)) $userPnlRows[] = $row;
             }
             foreach ($bucket['rows'] as $row) {
                 if (!is_array($row)) {
                     throw new InvalidArgumentException('合约小时用户成交汇总行格式无效');
                 }
-                $userTradeRows[] = $row;
+                if ($belongs($row)) $userTradeRows[] = $row;
             }
+            $scope = ReportUserScope::fromRows(DB::connection(), array_merge($userPnlRows, $userTradeRows));
+            $checksums[] = $scope->fingerprint();
+            $accumulator->merge($scope->filterMerchants($userPnlRows), $scope->filterMerchants($userTradeRows));
+            // Release the large execution detail arrays BEFORE the next Redis GET.
+            unset($bucket, $row, $userPnlRows, $userTradeRows, $scope);
         }
-
-        $belongs = static fn (array $row): bool => in_array((int) ($row['agent_id'] ?? -1), $agentIds, true);
-        $userPnlRows = array_values(array_filter($userPnlRows, $belongs));
-        $userTradeRows = array_values(array_filter($userTradeRows, $belongs));
-        $scope = ReportUserScope::fromRows(DB::connection(), array_merge($userPnlRows, $userTradeRows));
-        $userPnlRows = $scope->filterMerchants($userPnlRows);
-        $userTradeRows = $scope->filterMerchants($userTradeRows);
-        $executionRows = ReportUserScope::executionRows($userTradeRows);
 
         $date = $day->toDateString();
         $checksum = hash('sha256', implode('|', array_merge([
             'user-pnl-v' . AgentFuturesUserPnlDailyStatisticService::CALCULATION_VERSION,
-            'positive-public-user-scope-v1:' . $scope->fingerprint(),
+            'positive-public-user-scope-v2-streaming',
         ], $checksums)));
         if (!$force && $this->repository->getSummaryChecksum($day) === $checksum) {
             return [
@@ -147,15 +146,16 @@ class AgentFuturesDailySummaryCoordinator
         // 两类日报全部构造成功后，才进入同一事务替换，避免部分结果覆盖旧数据。
         $dailyRows = $this->dailyStatisticService->buildRows(
             $date,
-            $executionRows,
+            $accumulator->executionRows(),
             $agentIds
         );
         $userPnlDailyRows = $this->userPnlStatisticService->buildRows(
             $date,
-            $userPnlRows,
+            $accumulator->settlementRows(),
             $agentIds,
-            $userTradeRows
+            $accumulator->feeRows()
         );
+        unset($accumulator);
 
         DB::transaction(static function () use (
             $agentIds,

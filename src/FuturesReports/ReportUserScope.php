@@ -62,6 +62,13 @@ final class ReportUserScope
     public static function executionRows(array $rows): array
     {
         $groups = [];
+        self::mergeExecutions($groups, $rows);
+        return self::finishExecutions($groups);
+    }
+
+    /** Merge one filtered hour without retaining the original fact rows. */
+    public static function mergeExecutions(array &$groups, array $rows): void
+    {
         foreach ($rows as $row) {
             $details = $row['execution_details'] ?? [];
             if ((int) ($row['fill_count'] ?? 0) > 0 && $details === []) {
@@ -85,6 +92,10 @@ final class ReportUserScope
                 }
             }
         }
+    }
+
+    public static function finishExecutions(array $groups): array
+    {
         $result = [];
         foreach ($groups as $group) {
             $group['trade_ids'] = array_map('strval', array_keys($group['executions']));

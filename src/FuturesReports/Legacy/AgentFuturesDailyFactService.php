@@ -405,6 +405,7 @@ class AgentFuturesDailyFactService
                 }
                 unset($fact);
             }
+            unset($bucket, $row, $merchantRows);
         }
 
         foreach ($facts as $key => &$fact) {

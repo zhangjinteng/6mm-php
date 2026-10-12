@@ -122,7 +122,9 @@ class AgentFuturesHourlyFactCoordinator
         array $agentIds
     ): \Generator {
         for ($index = 0; $index < $hourCount; $index++) {
-            yield $this->hourBucket($start->addHours($index), $agentIds, false);
+            $bucket = $this->hourBucket($start->addHours($index), $agentIds, false);
+            yield $bucket;
+            unset($bucket);
         }
     }
 
@@ -138,7 +140,9 @@ class AgentFuturesHourlyFactCoordinator
     ): \Generator {
         for ($index = 0; $index < 24; $index++) {
             $force = $repairedHour === null ? $forceAll : false;
-            yield $this->hourBucket($day->addHours($index), $agentIds, $force);
+            $bucket = $this->hourBucket($day->addHours($index), $agentIds, $force);
+            yield $bucket;
+            unset($bucket);
         }
     }
 
@@ -162,6 +166,7 @@ class AgentFuturesHourlyFactCoordinator
             }
         }
 
+        unset($existing);
         // 先完成全部数据源查询，成功后才原子替换Redis，失败时保留旧桶。
         $bucket = $this->hourlyFactService->build($hour, $agentIds);
         $this->repository->putHour($hour, $bucket);

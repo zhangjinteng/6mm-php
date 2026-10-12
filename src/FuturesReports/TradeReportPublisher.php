@@ -23,12 +23,16 @@ final class TradeReportPublisher
             foreach ($bucket['rows'] as $row) {
                 $ids[(string) $row['user_id']] = true;
             }
+            unset($bucket, $row);
         }
         $directory = $this->directory->load(array_keys($ids));
+        unset($ids);
         // Keep only one decoded hour in memory, not a full day's fact arrays.
         $facts = (function () use ($day, $hours, $sourceIds): \Generator {
             for ($i = 0; $i < $hours; $i++) {
-                foreach ($this->hour($day->addHours($i), $sourceIds)['rows'] as $row) yield $row;
+                $bucket = $this->hour($day->addHours($i), $sourceIds);
+                foreach ($bucket['rows'] as $row) yield $row;
+                unset($bucket, $row);
             }
         })();
         $rows = (new TradeReportAggregator())->build($date, $facts, $directory, $completed);
