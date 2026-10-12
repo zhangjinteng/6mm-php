@@ -38,7 +38,9 @@
             "@php tests/symbol_tags.php",
             "@php tests/translation_config.php",
             "@php tests/user_mappings.php",
-            "@php tests/futures_reports.php"
+            "@php tests/futures_reports.php",
+            "@php tests/risk_reports.php",
+            "@php tests/user_net_pnl_reports.php"
         ]
     },
     "config": {

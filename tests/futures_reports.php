@@ -11,6 +11,14 @@ use SixMm\Shared\FuturesReports\TradeReportAggregator;
 use SixMm\Shared\FuturesReports\TradeReportSchema;
 use SixMm\Shared\FuturesReports\TradeReportStore;
 use SixMm\Shared\FuturesReports\TradeReportPublisher;
+use SixMm\Shared\FuturesReports\PnlReportAggregator;
+use SixMm\Shared\FuturesReports\PnlReportPublisher;
+use SixMm\Shared\FuturesReports\PnlReportSchema;
+use SixMm\Shared\FuturesReports\PnlReportStore;
+use SixMm\Shared\FuturesReports\FundingFeeReportAggregator;
+use SixMm\Shared\FuturesReports\FundingFeeReportSchema;
+use SixMm\Shared\FuturesReports\FundingFeeReportStore;
+use SixMm\Shared\FuturesReports\FundingFeeReportPublisher;
 use SixMm\Shared\FuturesReports\MerchantReportScope;
 use SixMm\Shared\FuturesReports\ReportUserScope;
 use SixMm\Shared\FuturesReports\Legacy\AgentFuturesFactRedisRepository;
@@ -40,7 +48,9 @@ $connection->beginTransaction();
 if ($pgPort !== null) $connection->statement('CREATE SCHEMA control_plane');
 $control = $pgPort === null ? '' : 'control_plane.';
 TradeReportSchema::create($connection);
-TradeReportSchema::create($connection);
+PnlReportSchema::create($connection);
+FundingFeeReportSchema::create($connection);
+FundingFeeReportSchema::create($connection);
 $schema = $connection->getSchemaBuilder();
 $schema->create('agents', function (Blueprint $t): void {
     $t->bigInteger('id'); $t->bigInteger('pid'); $t->string('agent_code'); $t->string('agent_name');
@@ -63,6 +73,52 @@ $connection->table('users')->insert([
     ['user_id' => 10, 'home_site_id' => 999, 'agent_id' => 0],
 ]);
 $directory = (new SourceDirectory($connection))->load(['9007199254740993', '4']);
+$fundingAggregator = new FundingFeeReportAggregator();
+$fundingFact = [
+    'agent_id' => 1, 'user_type' => 2, 'user_id' => '9007199254740993', 'symbol' => 'BTCUSDT',
+    'settle_asset' => 'USDT', 'funding_settlement_count' => 2,
+    'funding_settlement_position_amount' => '100.0000000000000001',
+    'funding_fee_income' => '1.2000000000000001', 'funding_fee_expense' => '0.2', 'funding_fee' => '1.0000000000000001',
+];
+$fundingRows = $fundingAggregator->build('2026-10-09', [
+    $fundingFact, array_merge($fundingFact, ['funding_settlement_count' => 1, 'funding_settlement_position_amount' => '50', 'funding_fee_income' => '0', 'funding_fee_expense' => '0.4', 'funding_fee' => '-0.4']),
+    array_merge($fundingFact, ['user_type' => 1, 'funding_fee' => '1000']),
+], $directory, true);
+$fundingMerchant = sourceTrade($fundingRows, 'merchant', '1');
+checkTrade($fundingMerchant['funding_settlement_user_count'] === 1 && $fundingMerchant['funding_settlement_count'] === 3,
+    'Funding users deduplicate within a day and only simulated users contribute');
+checkTrade($fundingMerchant['funding_fee_net_income'] === '0.6000000000000001', 'Funding decimals remain exact');
+$fundingStore = new FundingFeeReportStore($connection);
+$fundingStore->replace('2026-10-09', $fundingRows);
+$fundingStore->replace('2026-10-10', $fundingAggregator->build('2026-10-10', [$fundingFact], $directory, false));
+$fundingMonthly = $fundingStore->search(['period' => 'month', 'start_date' => '2026-10-09', 'end_date' => '2026-10-10'], '1')['lists'][0];
+checkTrade($fundingMonthly['funding_settlement_user_count'] === 1 && $fundingMonthly['funding_settlement_count'] === 5
+    && $fundingMonthly['stat_status'] === 0, 'Funding month deduplicates users and preserves processing status');
+$fundingZero = $fundingStore->search(['start_date' => '2026-10-09', 'end_date' => '2026-10-09', 'symbol' => 'ETHUSDT'], '1')['lists'][0];
+checkTrade($fundingZero['funding_settlement_user_count'] === 0 && $fundingZero['funding_fee_net_income'] === '0', 'Missing contract retains zero-day skeleton');
+checkTrade($fundingStore->search(['start_date' => '2026-10-09', 'end_date' => '2026-10-10', 'source_type' => 'tenant', 'source_keyword' => 'White label'])['count'] === 2,
+    'Source search filters funding totals before pagination');
+checkTrade($fundingStore->search(['start_date' => '2026-10-09', 'end_date' => '2026-10-10', 'source_type' => 'platform'])['count'] === 2,
+    'Platform scope exists independently from merchants');
+try { $fundingStore->search(['order_by' => 'user_ids']); throw new RuntimeException('Accepted private funding sort'); }
+catch (InvalidArgumentException $e) {}
+$fundingBuckets = new class extends AgentFuturesFactRedisRepository {
+    public array $bucket = [];
+    public function __construct() {}
+    public function getHour(CarbonImmutable $hourStart): ?array { return $this->bucket ?: null; }
+};
+$fundingBuckets->bucket = [
+    'status' => 'completed', 'calculation_version' => AgentFuturesHourlyFactService::CALCULATION_VERSION,
+    'agent_ids' => [0, 1, 2], 'window_start' => '2026-10-09 00:00:00', 'window_end' => '2026-10-09 01:00:00',
+    'rows' => [$fundingFact],
+];
+(new FundingFeeReportPublisher($fundingBuckets, new SourceDirectory($connection), $fundingStore))
+    ->publish('2026-10-09', 1, true, [0, 1, 2]);
+checkTrade($fundingStore->search(['start_date' => '2026-10-09', 'end_date' => '2026-10-09'], '1')['lists'][0]['funding_settlement_count'] === 2,
+    'Funding publisher replaces the daily snapshot');
+$fundingBuckets->bucket['agent_ids'] = [1, 2];
+try { (new FundingFeeReportPublisher($fundingBuckets, new SourceDirectory($connection), $fundingStore))->publish('2026-10-09', 1, true, [0, 1, 2]); throw new RuntimeException('Accepted mismatched funding bucket'); }
+catch (RuntimeException $e) { checkTrade(str_contains($e->getMessage(), '小时桶'), 'Mismatched bucket cannot overwrite funding report'); }
 $base = ['agent_id' => 1, 'user_id' => '9007199254740993', 'symbol' => 'BTCUSDT', 'order_count' => 1, 'order_amount' => '20', 'cancel_order_count' => 0, 'cancel_amount' => '0', 'fill_count' => 1, 'filled_order_ids' => ['10001'], 'execution_details' => [['9007199254740994', '10.1234567890123456']]];
 $other = array_merge($base, ['agent_id' => 2, 'user_id' => '4', 'filled_order_ids' => ['10002']]);
 $aggregator = new TradeReportAggregator();
@@ -212,5 +268,67 @@ foreach (['day', 'month'] as $period) {
 }
 try { $store->search(['source_keyword' => str_repeat('字', 129)]); throw new RuntimeException('Accepted excessive source keyword'); }
 catch (InvalidArgumentException $e) {}
+$pnlAggregator = new PnlReportAggregator();
+$pnlStore = new PnlReportStore($connection);
+$pnlDayOneFacts = [array_merge($base, ['realized_pnl' => '2.0000000000000000']),
+    array_merge($other, ['realized_pnl' => '-1.0000000000000000'])];
+$pnlDayTwoFacts = [array_merge($base, ['realized_pnl' => '-3.0000000000000000']),
+    array_merge($other, ['realized_pnl' => '2.0000000000000000'])];
+$pnlDayOne = $pnlAggregator->build('2026-10-09', $pnlDayOneFacts, $directory,
+    $aggregator->build('2026-10-09', $pnlDayOneFacts, $directory, true));
+$pnlDayTwo = $pnlAggregator->build('2026-10-10', $pnlDayTwoFacts, $directory,
+    $aggregator->build('2026-10-10', $pnlDayTwoFacts, $directory, false));
+$pnlStore->replace('2026-10-09', $pnlDayOne);
+$pnlStore->replace('2026-10-10', $pnlDayTwo);
+$pnlDaily = $pnlStore->search(['period' => 'day', 'start_date' => '2026-10-09', 'end_date' => '2026-10-10',
+    'source_type' => 'tenant', 'source_id' => '1']);
+checkTrade($pnlDaily['count'] === 2 && $pnlDaily['lists'][1]['profitable_user_count'] === 1
+    && $pnlDaily['lists'][1]['losing_user_count'] === 1, 'Daily user PnL classifies after per-user aggregation');
+$pnlMonthly = $pnlStore->search(['period' => 'month', 'start_date' => '2026-10-09', 'end_date' => '2026-10-10',
+    'source_type' => 'tenant', 'source_id' => '1'])['lists'][0];
+checkTrade($pnlMonthly['trading_user_count'] === 2 && $pnlMonthly['profitable_user_count'] === 1
+    && $pnlMonthly['losing_user_count'] === 1 && bccomp($pnlMonthly['profit_amount'], '1', 16) === 0
+    && bccomp($pnlMonthly['loss_amount'], '1', 16) === 0 && bccomp($pnlMonthly['net_pnl'], '0', 16) === 0,
+    'Monthly PnL reclassifies per user across dates, rather than summing daily winners');
+checkTrade(!isset($pnlMonthly['user_metrics']) && $pnlMonthly['stat_status'] === 0, 'Response hides identity JSON and keeps processing state');
+$pnlMerchant = $pnlStore->search(['period' => 'month', 'start_date' => '2026-10-09', 'end_date' => '2026-10-10',
+    'source_type' => 'platform', 'source_id' => '2'], '1')['lists'][0];
+checkTrade($pnlMerchant['source_type'] === 'merchant' && $pnlMerchant['source_id'] === '1'
+    && $pnlMerchant['profitable_user_count'] === 0, 'Authenticated merchant scope cannot be replaced by request scope');
+$pnlZero = $pnlStore->search(['period' => 'day', 'start_date' => '2026-10-09', 'end_date' => '2026-10-10',
+    'source_type' => 'tenant', 'source_id' => '1', 'symbol' => 'ETHUSDT']);
+checkTrade($pnlZero['count'] === 2 && bccomp($pnlZero['lists'][0]['net_pnl'], '0', 16) === 0,
+    'Unknown symbol retains zero-valued date skeleton');
+foreach (['btc', 'BTC', 'BTCUSDT'] as $alias) {
+    $matched = $pnlStore->search(['period' => 'month', 'start_date' => '2026-10-09', 'end_date' => '2026-10-10',
+        'source_type' => 'tenant', 'source_id' => '1', 'symbol' => $alias]);
+    checkTrade($matched['count'] === 1 && $matched['lists'][0]['trading_user_count'] === 2,
+        'Daily symbol facts are available under base ticker and full symbol in monthly PnL');
+}
+$connection->enableQueryLog();
+$pnlStore->search(['period' => 'day', 'start_date' => '2026-10-09', 'end_date' => '2026-10-10'], '1');
+foreach ($connection->getQueryLog() as $query) checkTrade(!str_contains($query['query'], 'user_metrics'), 'Daily PnL pages must not fetch identity JSON');
+$connection->disableQueryLog();
+try { $pnlStore->search(['order_by' => 'user_metrics']); throw new RuntimeException('Accepted private PnL sort'); }
+catch (InvalidArgumentException $e) {}
+$buckets->bucket = ['status' => 'completed', 'calculation_version' => AgentFuturesHourlyFactService::CALCULATION_VERSION,
+    'agent_ids' => [0, 1, 2], 'window_start' => '2026-10-09 00:00:00', 'window_end' => '2026-10-09 01:00:00',
+    'rows' => $pnlDayOneFacts];
+$pnlPublisher = new PnlReportPublisher($buckets, new SourceDirectory($connection), $connection, $pnlStore);
+checkTrade($pnlPublisher->publish('2026-10-09', 1, [0, 1, 2]) > 0,
+    'PnL publisher consumes validated shared hour facts and the trade-report notional');
+$publishedPnl = $pnlStore->search(['start_date' => '2026-10-09', 'end_date' => '2026-10-09',
+    'source_type' => 'tenant', 'source_id' => '1'])['lists'][0];
+checkTrade($publishedPnl['profitable_user_count'] === 1 && $publishedPnl['losing_user_count'] === 1
+    && bccomp($publishedPnl['trade_amount'], sourceTrade($store->search([
+        'start_date' => '2026-10-09', 'end_date' => '2026-10-09', 'source_type' => 'tenant', 'source_id' => '1',
+    ])['lists'], 'tenant', '1')['trade_amount'], 16) === 0,
+    'Published PnL reuses exactly the shared trade-report成交金额');
+$buckets->bucket['agent_ids'] = [1, 2];
+try { $pnlPublisher->publish('2026-10-09', 1, [0, 1, 2]); throw new RuntimeException('Accepted mismatched PnL bucket'); }
+catch (RuntimeException $e) { checkTrade(str_contains($e->getMessage(), '小时桶'), 'Invalid PnL bucket cannot overwrite the report'); }
+checkTrade($pnlStore->search(['start_date' => '2026-10-09', 'end_date' => '2026-10-09',
+    'source_type' => 'tenant', 'source_id' => '1'])['lists'][0]['net_pnl'] === $publishedPnl['net_pnl'],
+    'Failed PnL publication preserves the previous report');
 $connection->rollBack();
 echo "Futures reports: schema, scopes, decimals, daily/monthly deduplication and atomic replacement passed.\n";

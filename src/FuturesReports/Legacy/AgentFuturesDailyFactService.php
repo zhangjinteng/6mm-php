@@ -481,7 +481,7 @@ class AgentFuturesDailyFactService
      *
      * @return int 写入持仓快照的用户合约行数
      */
-    public function snapshotBoundary(?string $date = null): int
+    public function snapshotBoundary(?string $date = null, ?array $snapshot = null): int
     {
         $boundaryDate = $this->parseDate($date);
         $boundaryAt = $boundaryDate->startOfDay();
@@ -493,7 +493,11 @@ class AgentFuturesDailyFactService
         }
 
         $positions = [];
-        foreach ($this->merchantRows($this->sourceProvider->currentPositionRows($agentIds)) as $row) {
+        if ($snapshot !== null && (($snapshot['status'] ?? null) !== 'completed' || !is_array($snapshot['rows'] ?? null))) {
+            throw new InvalidArgumentException('持仓边界快照无效');
+        }
+        $sourceRows = $snapshot === null ? $this->sourceProvider->currentPositionRows($agentIds) : $snapshot['rows'];
+        foreach ($this->merchantRows($sourceRows) as $row) {
             $row['settle_asset'] = FuturesDailySourceProvider::SETTLE_ASSET;
             $fact = &$this->fact($positions, $row);
             $this->mergePositionAmounts($fact, $row);

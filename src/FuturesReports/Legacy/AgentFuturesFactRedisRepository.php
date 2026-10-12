@@ -75,6 +75,17 @@ class AgentFuturesFactRedisRepository
         return $this->decodeCompleted($this->redis()->get($this->snapshotKey($date)));
     }
 
+    /** Immutable UTC boundary snapshot, kept separately from the same day's live snapshot. */
+    public function putBoundarySnapshot(CarbonImmutable $date, array $payload): void
+    {
+        $this->putValue($this->boundarySnapshotKey($date), $payload);
+    }
+
+    public function getBoundarySnapshot(CarbonImmutable $date): ?array
+    {
+        return $this->decodeCompleted($this->redis()->get($this->boundarySnapshotKey($date)));
+    }
+
     public function putFinalizationMarker(CarbonImmutable $date): void
     {
         $this->putValue($this->finalizationKey($date), [
@@ -168,6 +179,12 @@ class AgentFuturesFactRedisRepository
         $day = $date->setTimezone('UTC')->toDateString();
 
         return "{$this->keyPrefix}:{$this->version}:snapshot:{{$day}}";
+    }
+
+    private function boundarySnapshotKey(CarbonImmutable $date): string
+    {
+        $day = $date->setTimezone('UTC')->toDateString();
+        return "{$this->keyPrefix}:{$this->version}:boundary-snapshot:{{$day}}";
     }
 
     private function finalizationKey(CarbonImmutable $date): string
