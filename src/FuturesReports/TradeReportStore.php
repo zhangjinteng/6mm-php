@@ -34,7 +34,7 @@ final class TradeReportStore
         return count($rows);
     }
 
-    /** Both merchant ID and optional site constraint are server-derived, never request parameters. */
+    /** Merchant ID is server-derived; the legacy site argument no longer constrains published reports. */
     public function search(array $params, ?string $merchantId = null, ?string $merchantSiteId = null): array
     {
         $merchantScope = $merchantId === null ? null : MerchantReportScope::forAccount($this->database, $merchantId, $merchantSiteId);
@@ -75,7 +75,7 @@ final class TradeReportStore
             ->whereIn('symbol', $symbol === '' ? [''] : ['', $symbol]);
         if ($merchantId !== null) {
             $query->where('source_type', 'merchant')->where('source_id', $merchantId);
-            $this->constrainMerchantSite($query, $merchantScope);
+            $this->constrainMerchantIdentity($query, $merchantScope);
         } else {
             $type = (string) ($params['source_type'] ?? '');
             if ($type !== '' && !in_array($type, ['merchant', 'tenant', 'platform'], true)) throw new InvalidArgumentException('无效的来源类型');
@@ -125,7 +125,7 @@ final class TradeReportStore
             ->where('totals.symbol', '')->whereBetween('totals.stat_date', [$start->toDateString(), $end->toDateString()]);
         if ($merchantScope !== null) {
             $query->where('totals.source_type', 'merchant')->where('totals.source_id', $merchantScope->merchantId);
-            $this->constrainMerchantSite($query, $merchantScope);
+            $this->constrainMerchantIdentity($query, $merchantScope);
         } else {
             $type = (string) ($params['source_type'] ?? '');
             if ($type !== '' && !in_array($type, ['merchant', 'tenant', 'platform'], true)) throw new InvalidArgumentException('无效的来源类型');
@@ -190,12 +190,12 @@ final class TradeReportStore
         return $row;
     }
 
-    private function constrainMerchantSite(\Illuminate\Database\Query\Builder $query, MerchantReportScope $scope): void
+    private function constrainMerchantIdentity(\Illuminate\Database\Query\Builder $query, MerchantReportScope $scope): void
     {
         $table = ($this->database->getDriverName() === 'pgsql' ? 'public.' : '') . 'agents';
         $query->whereExists(static function ($merchant) use ($table, $scope): void {
             $merchant->selectRaw('1')->from($table)->where('id', $scope->merchantId)
-                ->where('pid', 0)->whereNull('deleted_at')->where('home_site_id', $scope->siteId);
+                ->where('pid', 0)->whereNull('deleted_at');
         });
     }
 

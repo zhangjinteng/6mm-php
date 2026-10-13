@@ -121,7 +121,7 @@ final class RiskReportStore
             $query->where($prefix . 'source_type', 'merchant')->where($prefix . 'source_id', $scope->merchantId);
             $table = ($this->database->getDriverName() === 'pgsql' ? 'public.' : '') . 'agents';
             $query->whereExists(static function ($merchant) use ($table, $scope): void {
-                $merchant->selectRaw('1')->from($table)->where('id', $scope->merchantId)->where('pid', 0)->whereNull('deleted_at')->where('home_site_id', $scope->siteId);
+                $merchant->selectRaw('1')->from($table)->where('id', $scope->merchantId)->where('pid', 0)->whereNull('deleted_at');
             });
             return;
         }

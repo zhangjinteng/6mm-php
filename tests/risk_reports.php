@@ -82,7 +82,8 @@ foreach (['day', 'month'] as $period) {
     riskCheck($store->search($q + ['source_keyword' => '%'])['count'] === 0, 'LIKE wildcards are literal');
     $scoped = $store->search($q + ['source_type' => 'platform', 'source_id' => '2', 'source_keyword' => 'Two'], '11', '100');
     riskCheck($scoped['lists'][0]['source_id'] === '1', 'Server-derived root merchant/site override hostile query scope');
-    try { $store->search($q, '1', '200'); throw new RuntimeException('Accepted wrong merchant site'); } catch (InvalidArgumentException $e) {}
+    $own = $store->search($q, '1', '200');
+    riskCheck($own['lists'][0]['source_type'] === 'merchant' && $own['lists'][0]['source_id'] === '1', 'Site metadata does not block own published risk reports');
 }
 $db->enableQueryLog();
 $daily = $store->search($params + ['page_no' => 2, 'page_size' => 1]);

@@ -140,7 +140,9 @@ $connection->table('agents')->insert(['id' => 11, 'pid' => 1, 'agent_code' => 's
 $connection->table('agents')->insert(['id' => 12, 'pid' => 1, 'agent_code' => 'bad', 'agent_name' => 'Bad', 'user_name' => 'bad', 'home_site_id' => 101]);
 checkTrade(MerchantReportScope::forAccount($connection, '11')->merchantId === '1', 'Subaccounts inherit the authenticated root merchant');
 checkTrade(MerchantReportScope::forAccount($connection, '2')->siteId === '101', 'Shared merchant backend resolves different white-label sites dynamically');
-foreach ([['1', '101'], ['12', null], ['404', null]] as [$account, $site]) {
+checkTrade(MerchantReportScope::forAccount($connection, '1', '101')->merchantId === '1', 'Deployment site is not a merchant-report access prerequisite');
+checkTrade(MerchantReportScope::forAccount($connection, '12')->merchantId === '1', 'Subaccount reads the authenticated parent despite different white-label metadata');
+foreach ([['0', null], ['404', null]] as [$account, $site]) {
     try { MerchantReportScope::forAccount($connection, $account, $site); throw new RuntimeException('Accepted invalid account/site'); }
     catch (InvalidArgumentException $e) {}
 }
@@ -202,8 +204,8 @@ foreach (['day', 'month'] as $period) {
 $own = $store->search(array_merge($params, ['source_id' => '2', 'source_type' => 'platform']), '1');
 checkTrade($own['count'] === 1 && $own['lists'][0]['source_type'] === 'merchant' && $own['lists'][0]['source_id'] === '1', 'Server-derived merchant scope overrides hostile params');
 foreach (['day', 'month'] as $period) {
-    try { $store->search(array_merge($params, ['period' => $period]), '1', '101'); throw new RuntimeException('Accepted wrong merchant site'); }
-    catch (InvalidArgumentException $e) {}
+    $scoped = $store->search(array_merge($params, ['period' => $period]), '1', '101');
+    checkTrade($scoped['lists'][0]['source_type'] === 'merchant' && $scoped['lists'][0]['source_id'] === '1', 'Merchant reads its published rows regardless of legacy site constraint');
 }
 $btc = $store->search(array_merge($params, ['symbol' => 'ETHUSDT']))['lists'][0];
 checkTrade($btc['fill_count'] === 0, 'Single contract retains zero-day skeleton');

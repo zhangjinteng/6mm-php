@@ -39,6 +39,7 @@
             "@php tests/translation_config.php",
             "@php tests/user_mappings.php",
             "@php tests/futures_reports.php",
+            "@php tests/report_access_scope.php",
             "@php tests/risk_reports.php",
             "@php tests/fee_reports.php",
             "@php tests/user_net_pnl_reports.php"

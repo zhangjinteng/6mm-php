@@ -165,7 +165,7 @@ final class FundingFeeReportStore
             $agents = ($this->database->getDriverName() === 'pgsql' ? 'public.' : '') . 'agents';
             $query->whereExists(static function ($sub) use ($agents, $merchant): void {
                 $sub->selectRaw('1')->from($agents)->where('id', $merchant->merchantId)
-                    ->where('pid', 0)->whereNull('deleted_at')->where('home_site_id', $merchant->siteId);
+                    ->where('pid', 0)->whereNull('deleted_at');
             });
             return;
         }

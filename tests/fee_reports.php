@@ -80,7 +80,8 @@ foreach (['day', 'month'] as $period) {
     feeCheck($store->search($q + ['source_keyword' => '%'])['count'] === 0, 'Wildcard characters are literal');
     $scoped = $store->search($q + ['source_type' => 'platform', 'source_id' => '2', 'source_keyword' => 'Two'], '11', '100');
     feeCheck($scoped['lists'][0]['source_id'] === '1', 'Subaccount scope ignores hostile external source parameters');
-    try { $store->search($q, '1', '200'); throw new RuntimeException('Cross-site scope accepted'); } catch (InvalidArgumentException $e) {}
+    $own = $store->search($q, '1', '200');
+    feeCheck($own['lists'][0]['source_type'] === 'merchant' && $own['lists'][0]['source_id'] === '1', 'Site metadata does not block own published fee reports');
 }
 $db->enableQueryLog(); $page = $store->search($params + ['page_no' => 2, 'page_size' => 1]);
 feeCheck($page['count'] === 2 && count($page['lists']) === 1, 'Daily count/page share filters');

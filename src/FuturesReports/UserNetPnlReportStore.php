@@ -54,7 +54,7 @@ final class UserNetPnlReportStore
         $query = $this->database->table($this->table())->whereBetween('stat_date', [$start->toDateString(), $end->toDateString()]);
         if ($scope !== null) {
             $query->where('source_type', 'merchant')->where('source_id', $scope->merchantId);
-            $this->constrainMerchantSite($query, $scope);
+            $this->constrainMerchantIdentity($query, $scope);
         } else {
             $type = (string) ($params['source_type'] ?? 'platform');
             if (!in_array($type, ['platform', 'tenant', 'merchant'], true)) throw new InvalidArgumentException('无效的来源类型');
@@ -127,12 +127,12 @@ final class UserNetPnlReportStore
         });
     }
 
-    private function constrainMerchantSite(Builder $query, MerchantReportScope $scope): void
+    private function constrainMerchantIdentity(Builder $query, MerchantReportScope $scope): void
     {
         $table = ($this->database->getDriverName() === 'pgsql' ? 'public.' : '') . 'agents';
         $query->whereExists(static function (Builder $merchant) use ($table, $scope): void {
             $merchant->selectRaw('1')->from($table)->where('id', $scope->merchantId)
-                ->where('pid', 0)->whereNull('deleted_at')->where('home_site_id', $scope->siteId);
+                ->where('pid', 0)->whereNull('deleted_at');
         });
     }
 
