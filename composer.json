@@ -45,6 +45,7 @@
             "@php tests/fee_reports.php",
             "@php tests/user_net_pnl_reports.php",
             "@php tests/platform_pnl_reports.php",
+            "@php tests/asset_balance_reports.php",
             "@php tests/prediction_user_pnl_reports.php"
         ]
     },
