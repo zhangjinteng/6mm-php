@@ -26,7 +26,7 @@ $schema->create('agents', static function (Blueprint $t): void {
     $t->string('agent_code'); $t->string('agent_name'); $t->string('user_name'); $t->timestamp('deleted_at')->nullable();
 });
 $schema->create('users', static function (Blueprint $t): void {
-    $t->bigInteger('user_id'); $t->bigInteger('home_site_id'); $t->bigInteger('agent_id'); $t->timestamp('deleted_at')->nullable();
+    $t->bigInteger('user_id'); $t->bigInteger('home_site_id')->nullable(); $t->bigInteger('agent_id'); $t->timestamp('deleted_at')->nullable();
 });
 $schema->create('wl_sites', static function (Blueprint $t): void { $t->bigInteger('site_id'); $t->bigInteger('tenant_id'); });
 $schema->create('wl_tenants', static function (Blueprint $t): void { $t->bigInteger('tenant_id'); $t->string('tenant_name'); });
@@ -99,6 +99,20 @@ $db->table('user_assets')->insert(['user_id'=>100,'asset_type'=>'USDT','wallet_b
 $asset->table('funding_accounts')->insert(['account_id'=>1,'user_id'=>100,'agent_id'=>0,'status'=>'ACTIVE']);
 $asset->table('funding_assets')->insert(['asset_id'=>1,'asset_code'=>'USDT','internal_scale'=>2,'status'=>'ENABLED']);
 $asset->table('funding_balances')->insert(['account_id'=>1,'asset_id'=>1,'available_amount'=>300,'held_amount'=>100]);
+$excludedUsers = [
+    ['user_id'=>101,'home_site_id'=>null,'agent_id'=>0,'deleted_at'=>null],
+    ['user_id'=>102,'home_site_id'=>0,'agent_id'=>0,'deleted_at'=>null],
+    ['user_id'=>103,'home_site_id'=>-1,'agent_id'=>0,'deleted_at'=>null],
+    ['user_id'=>104,'home_site_id'=>100,'agent_id'=>1,'deleted_at'=>null],
+    ['user_id'=>105,'home_site_id'=>100,'agent_id'=>0,'deleted_at'=>'2026-10-13 12:00:00'],
+];
+$db->table('users')->insert($excludedUsers);
+foreach ($excludedUsers as $excludedUser) {
+    $id = $excludedUser['user_id'];
+    $db->table('user_assets')->insert(['user_id'=>$id,'asset_type'=>'USDT','wallet_balance'=>'1000','frozen_balance'=>'100']);
+    $asset->table('funding_accounts')->insert(['account_id'=>$id,'user_id'=>$id,'agent_id'=>$excludedUser['agent_id'],'status'=>'ACTIVE']);
+    $asset->table('funding_balances')->insert(['account_id'=>$id,'asset_id'=>1,'available_amount'=>100000,'held_amount'=>10000]);
+}
 CarbonImmutable::setTestNow('2026-10-14 00:00:00 UTC');
 $publisher = new AssetBalanceDirectSnapshotPublisher($db, $asset);
 assetCheck($publisher->capture(CarbonImmutable::now('UTC'), true) === 2, 'Boundary captures both account types');
@@ -109,11 +123,28 @@ assetCheck(bccomp((string) $snapshot->opening_total, '12', 16) === 0 && bccomp((
 $funding = $db->table(AssetBalanceReportSchema::DIRECT_TABLE)->where('stat_date','2026-10-14')
     ->where('account_type','funding')->first();
 assetCheck(bccomp((string) $funding->opening_total, '4', 16) === 0, 'Funding minor units use asset scale');
+assetCheck((int) $snapshot->funded_user_count === 1 && (int) $funding->funded_user_count === 1,
+    'Missing/non-positive sites, merchant users and deleted users are excluded from both account snapshots');
 $closed = $db->table(AssetBalanceReportSchema::DIRECT_TABLE)->where('stat_date','2026-10-13')
     ->where('account_type','contract')->first();
 assetCheck((bool) $closed->is_finalized && bccomp((string) $closed->opening_total, '30', 16) === 0
     && bccomp((string) $closed->closing_total, '12', 16) === 0,
     'UTC boundary closes prior day without replacing its opening snapshot');
+$beforeInvalidOrigin = $db->table(AssetBalanceReportSchema::DIRECT_TABLE)->orderBy('stat_date')->orderBy('account_type')->get()->toJson();
+$db->table('wl_sites')->insert(['site_id'=>200,'tenant_id'=>99]);
+foreach ([999, 200] as $invalidSite) {
+    $db->table('users')->insert(['user_id'=>106,'home_site_id'=>$invalidSite,'agent_id'=>0]);
+    try {
+        $publisher->capture(CarbonImmutable::now('UTC'));
+        throw new RuntimeException('Unmapped positive site was accepted');
+    } catch (InvalidArgumentException $e) {
+        assetCheck($e->getMessage() === '直客缺少有效白标来源，拒绝发布不完整资产快照',
+            'Positive sites still require a valid site-to-tenant mapping');
+    }
+    assetCheck($db->table(AssetBalanceReportSchema::DIRECT_TABLE)->orderBy('stat_date')->orderBy('account_type')->get()->toJson() === $beforeInvalidOrigin,
+        'Invalid positive origins cannot partially modify snapshots');
+    $db->table('users')->where('user_id', 106)->delete();
+}
 try {
     $publisher->capture(CarbonImmutable::parse('2026-10-13 12:00:00', 'UTC'));
     throw new RuntimeException('Historical balance backfill accepted');

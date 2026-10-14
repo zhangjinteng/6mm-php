@@ -24,6 +24,7 @@ final class AssetBalanceDirectSnapshotPublisher
         $directory = (new SourceDirectory($this->db))->load();
         $prefix = $this->db->getDriverName() === 'pgsql' ? 'public.' : '';
         $users = $this->db->table($prefix . 'users')->where('agent_id', 0)->whereNull('deleted_at')
+            ->where('home_site_id', '>', 0)
             ->get(['user_id', 'home_site_id']);
         $siteByUser = [];
         foreach ($users as $user) {
