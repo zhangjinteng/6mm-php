@@ -1327,6 +1327,16 @@ $emptyScope = $service->search(new OnlineUserQuery(), new AgentIdsScope([]));
 assertSameValue(0, $emptyScope->total(), 'An empty scope must fail closed.');
 assertSameValue([], $emptyScope->items(), 'An empty scope must not return rows.');
 
+// V0 must not be interpreted as an absent filter, and must retain online/agent scope.
+$database->getConnection()->table('users')->whereIn('user_id', [1, 4])->update(['vip_level' => 0]);
+$v0Online = $service->search(new OnlineUserQuery(vipLevel: 0, pageSize: 1), new AgentIdsScope([10]));
+assertSameValue(1, $v0Online->total(), 'V0 should count only online level-zero users inside the merchant scope.');
+assertSameValue([9001], array_column($v0Online->items(), 'user_id'), 'V0 must exclude other levels, offline users and another merchant.');
+assertSameValue(0, $v0Online->items()[0]['vip_level'], 'Returned V0 rows should keep their zero level.');
+assertSameValue(2, $service->search(new OnlineUserQuery(), new AgentIdsScope([10]))->total(), 'An omitted VIP filter should still include all online VIP levels.');
+$database->getConnection()->table('users')->where('user_id', 1)->update(['vip_level' => 2]);
+$database->getConnection()->table('users')->where('user_id', 4)->update(['vip_level' => 1]);
+
 $detailService = new UserDetailQueryService($database->getConnection());
 $detail = $detailService->findByPublicUserId(9001, new AgentIdsScope([10]));
 assertSameValue(1, $detail?->platformUserId(), 'The internal platform user ID should be available to the host application.');

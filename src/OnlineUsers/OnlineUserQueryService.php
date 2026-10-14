@@ -201,7 +201,7 @@ final class OnlineUserQueryService
             $query->where('users.user_type', $criteria->userType());
         }
 
-        if ($criteria->vipLevel() !== null && $criteria->vipLevel() > 0) {
+        if ($criteria->vipLevel() !== null && $criteria->vipLevel() >= 0) {
             $query->where('users.vip_level', $criteria->vipLevel());
         }
 
