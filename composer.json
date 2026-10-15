@@ -39,6 +39,7 @@
             "@php tests/symbol_tags.php",
             "@php tests/translation_config.php",
             "@php tests/user_mappings.php",
+            "@php tests/funding_overview.php",
             "@php tests/futures_reports.php",
             "@php tests/platform_trade_summary.php",
             "@php tests/report_access_scope.php",
