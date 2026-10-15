@@ -1870,4 +1870,72 @@ assertSameValue('Invalid minimum quantity, precision, or unsupported symbol', $f
 assertSameValue('exchange rejected order', $filteredExecutions['lists'][0]['error_message'], 'Execution failures should retain their diagnostic message.');
 assertSameValue(6, count($filteredExecutions['options']['statuses']), 'Execution filters should expose all supported statuses.');
 
+$schema->create('agents', static function (Blueprint $table): void {
+    $table->bigInteger('id'); $table->bigInteger('home_site_id')->nullable();
+    $table->string('agent_name'); $table->string('user_name'); $table->timestamp('deleted_at')->nullable();
+});
+$schema->create('wl_sites', static function (Blueprint $table): void {
+    $table->bigInteger('site_id'); $table->bigInteger('tenant_id');
+});
+$schema->create('wl_tenants', static function (Blueprint $table): void {
+    $table->bigInteger('tenant_id'); $table->string('tenant_name');
+});
+$main = $database->getConnection();
+$main->table('agents')->insert([
+    ['id'=>7, 'home_site_id'=>100, 'agent_name'=>'Merchant 7', 'user_name'=>'merchant-7', 'deleted_at'=>null],
+    ['id'=>8, 'home_site_id'=>200, 'agent_name'=>'Tenant agent 8', 'user_name'=>'agent-8', 'deleted_at'=>null],
+    ['id'=>9, 'home_site_id'=>100, 'agent_name'=>'Deleted', 'user_name'=>'deleted', 'deleted_at'=>'2026-10-15'],
+    ['id'=>10, 'home_site_id'=>0, 'agent_name'=>'Unknown home', 'user_name'=>'unknown', 'deleted_at'=>null],
+    ['id'=>11, 'home_site_id'=>201, 'agent_name'=>'Tenant agent 11', 'user_name'=>'agent-11', 'deleted_at'=>null],
+]);
+$main->table('wl_sites')->insert([['site_id'=>200, 'tenant_id'=>300], ['site_id'=>201, 'tenant_id'=>300]]);
+$main->table('wl_tenants')->insert(['tenant_id'=>300, 'tenant_name'=>'White label 300']);
+$main->table('hedging_settings')->insert(['agent_id'=>0, 'enabled'=>true]);
+$main->table('exposure_snapshots')->insert([
+    'agent_id'=>0, 'source'=>'platform', 'symbol'=>'SOLUSDT', 'net_quantity'=>'1',
+    'long_quantity'=>'1', 'short_quantity'=>'0', 'net_notional_usdt'=>'25',
+    'observed_at'=>'2026-10-15 00:00:00', 'updated_at'=>'2026-10-15 00:00:00',
+]);
+$sources = new \SixMm\Shared\ContractSources\ContractSourceService($main, 100);
+$merchantIds = $sources->matchingAgentIds(new \SixMm\Shared\ContractSources\ContractSourceFilter('merchant'));
+$tenantIds = $sources->matchingAgentIds(new \SixMm\Shared\ContractSources\ContractSourceFilter('white_label', null, 300));
+assertSameValue([7], $merchantIds, 'Subject categories must use agent home site, not a representative user.');
+assertSameValue([8, 11], $tenantIds, 'Tenant selection includes subjects on all its sites.');
+assertSameValue([0], $sources->matchingAgentIds(new \SixMm\Shared\ContractSources\ContractSourceFilter('platform')), 'Zero is the platform hedging subject.');
+assertSameValue([], $sources->matchingAgentIds(new \SixMm\Shared\ContractSources\ContractSourceFilter('merchant', 8)), 'Merchant names cannot select a white-label subject.');
+$merchantScope = new \SixMm\Shared\ContractSources\ContractSubjectSourceScope(new AllUsersScope(), $merchantIds);
+$tenantScope = new \SixMm\Shared\ContractSources\ContractSubjectSourceScope(new AllUsersScope(), $tenantIds);
+$platformScope = new \SixMm\Shared\ContractSources\ContractSubjectSourceScope(new AllUsersScope(), [0]);
+$merchantMonitor = $hedgingService->search(new HedgingMonitorQuery(2, 1), $merchantScope);
+assertSameValue(2, $merchantMonitor['count'], 'Monitor count is scoped before pagination.');
+assertSameValue(1, count($merchantMonitor['lists']), 'Monitor page is not filtered after slicing.');
+assertSameValue(2, $merchantMonitor['summary']['items'], 'Monitor summary retains only the chosen source population.');
+assertSameValue('150', $merchantMonitor['summary']['net_exposure_usdt'], 'Monitor summary excludes other sources.');
+$tenantMonitor = $hedgingService->search(new HedgingMonitorQuery(), $tenantScope);
+assertSameValue([8], array_column($tenantMonitor['lists'], 'agent_id'), 'Source filtering applies to the unconfigured exposure branch.');
+assertSameValue('50', $tenantMonitor['summary']['net_exposure_usdt'], 'Unconfigured tenant exposures retain their existing amounts.');
+$zeroMonitor = $hedgingService->search(new HedgingMonitorQuery(), $platformScope);
+assertSameValue([0], array_column($zeroMonitor['lists'], 'agent_id'), 'Platform subject zero is not dropped by positive-only agent scopes.');
+$tenantExecutions = $executionService->search(new HedgingExecutionQuery(), $tenantScope);
+assertSameValue(1, $tenantExecutions['count'], 'Execution count uses the source scope.');
+assertSameValue([8], array_column($tenantExecutions['lists'], 'agent_id'), 'Execution rows use the source scope.');
+assertSameValue([8], array_column($tenantExecutions['options']['accounts'], 'agent_id'), 'Execution account options do not leak other sources.');
+assertSameValue(['ETH/USDT:USDT'], array_column($tenantExecutions['options']['symbols'], 'value'), 'Execution symbol options use the same scope.');
+$tenantSubjects = $subjectService->search(new HedgingSubjectConfigQuery(), $tenantScope);
+assertSameValue([8], array_column($tenantSubjects['lists'], 'agent_id'), 'Subject status aggregation uses source scope.');
+$emptyScope = new \SixMm\Shared\ContractSources\ContractSubjectSourceScope(new AllUsersScope(), []);
+assertSameValue(0, $executionService->search(new HedgingExecutionQuery(), $emptyScope)['count'], 'Empty source mappings fail closed.');
+$restricted = new \SixMm\Shared\ContractSources\ContractSubjectSourceScope(new AgentIdsScope([7]), $tenantIds);
+assertSameValue(0, $hedgingService->search(new HedgingMonitorQuery(), $restricted)['count'], 'Source selections cannot widen the authenticated agent scope.');
+$subjectRows = array_map(static fn ($id): array => ['agent_id'=>$id, 'source'=>'platform'], [0, 7, 8, 9, 10, 999, null]);
+$main->enableQueryLog(); $main->flushQueryLog();
+$sources->appendToSubjects($subjectRows);
+assertSameValue(2, count($main->getQueryLog()), 'Subject enrichment batches directory queries per page.');
+assertSameValue(['platform', 'merchant', 'white_label', null, null, null, null], array_column($subjectRows, 'source_type'), 'Subject display follows the same classification as its filters.');
+assertSameValue(['平台用户', 'Merchant 7', 'White label 300', '-', '-', '-', '-'], array_column($subjectRows, 'source_name'), 'Subjects display resolved source names without guessing.');
+assertSameValue(['0', '7', '300', null, null, null, null], array_column($subjectRows, 'source_id'), 'Source IDs are separate from execution owner IDs.');
+assertSameValue(8, $subjectRows[2]['agent_id'], 'Tenant display never rewrites execution ownership.');
+assertSameValue('Tenant agent 8', $subjectRows[2]['agent_name'], 'Detail navigation retains the actual subject name.');
+assertSameValue('platform', $subjectRows[2]['source'], 'The bot business source field must not be repurposed.');
+
 fwrite(STDOUT, "Shared user-list, user-asset, account-change, margin-change, current-position, history-position, current-order, history-order, liquidation, trade-fill, condition-order, online-user, user-detail, user-action, handling-fee, and hedging contract tests passed.\n");

@@ -31,6 +31,7 @@
     },
     "scripts": {
         "test": [
+            "@php tests/contract_sources.php",
             "@php tests/run.php",
             "@php tests/user_contract_metrics.php",
             "@php tests/funding_change_logs.php",
