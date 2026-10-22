@@ -30,6 +30,46 @@ final class AccountChangeLogListQueryService
         }
 
         $query = $this->baseQuery($users->keys()->all());
+
+        return $this->paginate($criteria, $query, $users);
+    }
+
+    /**
+     * Merchant history is owned by the event snapshot, not the user's current owner.
+     * The host MUST derive $agentId from its authenticated merchant identity.
+     *
+     * @return CursorPageResult<array<string, mixed>>
+     */
+    public function searchByAgent(AccountChangeLogListQuery $criteria, int $agentId): CursorPageResult
+    {
+        if ($agentId <= 0) {
+            return $this->emptyResult($criteria);
+        }
+
+        $query = $this->connection
+            ->table('user_account_change_log AS logs')
+            ->where('logs.agent_id', $agentId)
+            ->whereNull('logs.deleted_at');
+
+        if ($criteria->keyword() !== '' || $criteria->userType() !== null) {
+            $query->whereExists(function (Builder $users) use ($criteria): void {
+                $users->selectRaw('1')->from('users')
+                    ->whereColumn('users.user_id', 'logs.user_id')
+                    ->whereNull('users.deleted_at');
+                $this->applyUserFilters($users, $criteria);
+            });
+        }
+
+        return $this->paginate($criteria, $query, null, $agentId);
+    }
+
+    /** @return CursorPageResult<array<string, mixed>> */
+    private function paginate(
+        AccountChangeLogListQuery $criteria,
+        Builder $query,
+        ?Collection $users = null,
+        ?int $bindingAgentId = null
+    ): CursorPageResult {
         $this->applyLogFilters($query, $criteria);
 
         $cursor = $this->decodeCursor($criteria->cursor(), $criteria);
@@ -63,6 +103,16 @@ final class AccountChangeLogListQueryService
             ->filter()
             ->values();
 
+        if ($users === null) {
+            // Only hydrate the authorized page; do not enumerate a merchant's users.
+            $users = $rows->isEmpty() ? collect() : $this->getUsers(
+                $this->usersQuery($bindingAgentId)->whereIntegerInRaw(
+                    'users.user_id',
+                    $rows->pluck('platform_user_id')->map(static fn ($id): int => (int) $id)->unique()->all()
+                )
+            );
+        }
+
         $items = $rows
             ->map(function (object $row) use ($users): array {
                 $values = (array) $row;
@@ -89,6 +139,15 @@ final class AccountChangeLogListQueryService
     /** @return Collection<string, object> */
     private function scopedUsers(AccountChangeLogListQuery $criteria, UserDataScope $scope): Collection
     {
+        $query = $this->usersQuery()->whereNull('users.deleted_at');
+        $scope->apply($query, 'users.agent_id');
+        $this->applyUserFilters($query, $criteria);
+
+        return $this->getUsers($query);
+    }
+
+    private function usersQuery(?int $bindingAgentId = null): Builder
+    {
         $bindings = $this->connection
             ->table('agent_user_bindings')
             ->select([
@@ -99,15 +158,20 @@ final class AccountChangeLogListQueryService
             ->whereIn('bind_status', self::ACTIVE_BINDING_STATUSES)
             ->groupBy('agent_id', 'platform_user_id');
 
-        $query = $this->connection
+        return $this->connection
             ->table('users')
-            ->leftJoinSub($bindings, 'aub', static function (JoinClause $join): void {
-                $join->on('aub.agent_id', '=', 'users.agent_id')
-                    ->on('aub.platform_user_id', '=', 'users.user_id');
-            })
-            ->whereNull('users.deleted_at');
-        $scope->apply($query, 'users.agent_id');
+            ->leftJoinSub($bindings, 'aub', static function (JoinClause $join) use ($bindingAgentId): void {
+                $join->on('aub.platform_user_id', '=', 'users.user_id');
+                if ($bindingAgentId === null) {
+                    $join->on('aub.agent_id', '=', 'users.agent_id');
+                } else {
+                    $join->where('aub.agent_id', '=', $bindingAgentId);
+                }
+            });
+    }
 
+    private function applyUserFilters(Builder $query, AccountChangeLogListQuery $criteria): void
+    {
         if ($criteria->keyword() !== '') {
             $keyword = $criteria->keyword();
             if (!ctype_digit($keyword)) {
@@ -119,7 +183,11 @@ final class AccountChangeLogListQueryService
         if ($criteria->userType() !== null) {
             $query->where('users.user_type', $criteria->userType());
         }
+    }
 
+    /** @return Collection<string, object> */
+    private function getUsers(Builder $query): Collection
+    {
         return $query
             ->get([
                 'users.user_id AS platform_user_id',

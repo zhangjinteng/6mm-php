@@ -833,6 +833,45 @@ assertSameValue([103, 101], array_column($timeAccountChanges->items(), 'id'), 'T
 $emptyAccountChangeScope = $accountChangeService->search(new AccountChangeLogListQuery(), new AgentIdsScope([]));
 assertSameValue([], $emptyAccountChangeScope->items(), 'An empty account-change scope must fail closed.');
 
+// Event-agent mode is opt-in: legacy/platform current-user scope stays unchanged.
+$database->getConnection()->beginTransaction();
+$database->getConnection()->table('user_account_change_log')->insert([
+    ['id' => 106, 'user_id' => 1, 'agent_id' => 0, 'amount' => 1, 'change_type' => 'legacy', 'symbol' => 'ETHUSDT', 'created_at' => '2026-08-08 10:00:00', 'deleted_at' => null],
+    ['id' => 107, 'user_id' => 4, 'agent_id' => 10, 'amount' => 2, 'change_type' => 'REALIZED_PNL', 'symbol' => 'ETHUSDT', 'created_at' => '2026-08-08 11:00:00', 'deleted_at' => null],
+    ['id' => 108, 'user_id' => 2, 'agent_id' => 20, 'amount' => 3, 'change_type' => 'foreign', 'symbol' => 'ETHUSDT', 'created_at' => '2026-08-08 12:00:00', 'deleted_at' => null],
+    ['id' => 109, 'user_id' => 2, 'agent_id' => 10, 'amount' => 4, 'change_type' => 'deleted', 'symbol' => 'ETHUSDT', 'created_at' => '2026-08-08 13:00:00', 'deleted_at' => '2026-08-08 14:00:00'],
+]);
+$database->getConnection()->flushQueryLog();
+$database->getConnection()->enableQueryLog();
+$eventPage = $accountChangeService->searchByAgent(new AccountChangeLogListQuery(pageSize: 2), 10);
+$eventQueries = $database->getConnection()->getQueryLog();
+$database->getConnection()->disableQueryLog();
+assertSameValue([107, 105], array_column($eventPage->items(), 'id'), 'Event-agent scope must include its historical owner and exclude zero/foreign/deleted events.');
+assertSameValue(true, str_contains($eventQueries[0]['query'], '"logs"."agent_id" = ?'), 'Candidate lookup must use an agent equality predicate.');
+assertSameValue(false, str_contains($eventQueries[0]['query'], '"logs"."user_id" in'), 'Default event lookup must not enumerate current user IDs.');
+assertSameValue([10], $eventQueries[0]['bindings'], 'The exact trusted merchant ID must be bound to SQL.');
+assertSameValue(9004, $eventPage->items()[0]['user_id'], 'Historical owners must still receive the public UID projection.');
+assertSameValue(null, $eventPage->items()[0]['agent_user_id'], 'Another current owner\'s external user binding must not leak.');
+$eventNext = $accountChangeService->searchByAgent(new AccountChangeLogListQuery(pageSize: 2, cursor: $eventPage->nextCursor()), 10);
+assertSameValue([104, 103], array_column($eventNext->items(), 'id'), 'Event scope must retain forward cursor pagination.');
+$eventPrevious = $accountChangeService->searchByAgent(new AccountChangeLogListQuery(pageSize: 2, cursor: $eventNext->previousCursor()), 10);
+assertSameValue([107, 105], array_column($eventPrevious->items(), 'id'), 'Event scope must retain backward cursor pagination.');
+$eventUid = $accountChangeService->searchByAgent(new AccountChangeLogListQuery(keyword: '9002', userType: 2), 10);
+assertSameValue([104, 103, 101], array_column($eventUid->items(), 'id'), 'UID/current-type filters must not override event ownership.');
+$eventHistoricalUid = $accountChangeService->searchByAgent(new AccountChangeLogListQuery(keyword: '9004'), 10);
+assertSameValue([107], array_column($eventHistoricalUid->items(), 'id'), 'UID filtering must retain the selected historical owner only.');
+$eventSymbol = $accountChangeService->searchByAgent(new AccountChangeLogListQuery(symbol: 'btc'), 10);
+assertSameValue([105, 100], array_column($eventSymbol->items(), 'id'), 'Event scope must preserve symbol filtering.');
+$eventTime = $accountChangeService->searchByAgent(new AccountChangeLogListQuery(createdAtStart: '2026-08-03 00:00:00', createdAtEndExclusive: '2026-08-06 00:00:00'), 10);
+assertSameValue([103, 101], array_column($eventTime->items(), 'id'), 'Event scope must preserve exclusive end-time filtering.');
+$eventTransfer = $accountChangeService->searchByAgent(new AccountChangeLogListQuery(changeType: 'agent_transfer_all_out'), 10);
+assertSameValue([104], array_column($eventTransfer->items(), 'id'), 'Event scope must preserve transfer direction filtering.');
+assertSameValue([], $accountChangeService->searchByAgent(new AccountChangeLogListQuery(), 0)->items(), 'Agent zero must never open a merchant history scope.');
+assertSameValue([], $accountChangeService->searchByAgent(new AccountChangeLogListQuery(), -1)->items(), 'Invalid agent IDs must fail closed.');
+$legacyPage = $accountChangeService->search(new AccountChangeLogListQuery(), new AgentIdsScope([10]));
+assertSameValue([108, 106, 105, 104, 103, 101, 100], array_column($legacyPage->items(), 'id'), 'Existing current-user search semantics must remain unchanged.');
+$database->getConnection()->rollBack();
+
 $marginChangeService = new MarginChangeLogListQueryService(
     $database->getConnection(),
     'Asia/Shanghai'

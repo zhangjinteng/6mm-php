@@ -190,6 +190,15 @@ Authentication, HTTP response envelopes, local-time to UTC conversion, product
 category enrichment, and business-specific detail actions remain
 application-owned.
 
+Merchant hosts may call `searchByAgent($criteria, $authenticatedRootAgentId)` to
+filter the event snapshot with `logs.agent_id = ?`, rather than enumerate current
+users. The ID must be derived from authentication, never request input. This
+intentionally excludes legacy `agent_id=0` events and includes merchant-owned
+history even if a user's current owner changed. User details are hydrated only
+for the returned page, and external bindings remain restricted to the event
+merchant. Optional UID/current-user-type filters still apply. The existing
+`search($criteria, $scope)` entry point keeps its current-user scope semantics.
+
 ## Shared fee commission list
 
 `FeeCommissionListQueryService` owns the reusable relational commission
