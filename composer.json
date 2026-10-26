@@ -72,6 +72,5 @@
             "url": "https://repo.packagist.org"
         }
     ],
-    "version": "1.0.75-beta.2",
     "archive": { "exclude": ["/vendor", "/agent_admin", "/composer.lock", "/.git*", "/.phpunit.result.cache"] }
 }
