@@ -4,6 +4,8 @@
     "type": "library",
     "license": "proprietary",
     "require": {
+        "brick/math": "^0.9.3 || ^0.10 || ^0.11 || ^0.12 || ^0.13 || ^0.14",
+        "illuminate/validation": "^8.75",
         "php": "^8.2",
         "ext-bcmath": "*",
         "ext-curl": "*",
@@ -53,7 +55,8 @@
             "@php tests/platform_pnl_reports.php",
             "@php tests/asset_balance_reports.php",
             "@php tests/prediction_user_pnl_reports.php",
-            "@php tests/prediction_operations.php"
+            "@php tests/prediction_operations.php",
+            "@php tests/prediction_configuration.php"
         ]
     },
     "config": {
