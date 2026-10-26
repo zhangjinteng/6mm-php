@@ -9,7 +9,10 @@
         "ext-curl": "*",
         "ext-intl": "*",
         "illuminate/database": "^8.75",
-        "zhangjinteng/6mm-addr": "^1.0.1"
+        "zhangjinteng/6mm-addr": "^1.0.1",
+        "illuminate/http": "^8.75",
+        "ext-mbstring": "*",
+        "ramsey/uuid": "^4.7"
     },
     "suggest": {
         "zhangjinteng/6mm-addr": "Adds versioned English and Chinese country, region, and city names to IP locations."
@@ -49,20 +52,26 @@
             "@php tests/user_net_pnl_reports.php",
             "@php tests/platform_pnl_reports.php",
             "@php tests/asset_balance_reports.php",
-            "@php tests/prediction_user_pnl_reports.php"
+            "@php tests/prediction_user_pnl_reports.php",
+            "@php tests/prediction_operations.php"
         ]
     },
     "config": {
         "sort-packages": true
     },
-    "repositories": [{
-        "name": "6mm-addr",
-        "type": "vcs",
-        "url": "https://github.com/zhangjinteng/6mm-addr.git",
-        "no-api": true
-    }, {
-        "name": "packagist.org",
-        "type": "composer",
-        "url": "https://repo.packagist.org"
-    }]
+    "repositories": [
+        {
+            "name": "6mm-addr",
+            "type": "vcs",
+            "url": "https://github.com/zhangjinteng/6mm-addr.git",
+            "no-api": true
+        },
+        {
+            "name": "packagist.org",
+            "type": "composer",
+            "url": "https://repo.packagist.org"
+        }
+    ],
+    "version": "1.0.75-beta.2",
+    "archive": { "exclude": ["/vendor", "/agent_admin", "/composer.lock", "/.git*", "/.phpunit.result.cache"] }
 }
