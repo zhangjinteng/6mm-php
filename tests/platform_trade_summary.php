@@ -62,16 +62,16 @@ $facts = [$fact, array_merge($fact, ['user_id' => '810', 'outcome' => 'loss']), 
 $publisher->publish('2026-10-12', $facts); $publisher->publish('2026-10-13', [$fact]);
 $params = ['start_date' => '2026-10-12', 'end_date' => '2026-10-13'];
 $own = $store->search($params, '1')['lists'];
-summaryCheck(count($own) === 2 && $own[1]['total_trading_user_count'] === 2, 'Union user count avoids double counting overlapping futures and prediction users');
-summaryCheck($own[1]['trading_user_count'] === 1 && $own[1]['prediction_trading_user_count'] === 2, 'Business user counts retain their own sets');
-summaryCheck($own[1]['prediction_valid_order_count'] === 4 && $own[1]['prediction_valid_stake_amount'] === '0.4000000000000002', 'Valid orders only; exact prediction decimals');
+summaryCheck(count($own) === 2 && $own[1]['total_trading_user_count'] === 3, 'Union user count avoids double counting overlapping futures and prediction users, including robots');
+summaryCheck($own[1]['trading_user_count'] === 1 && $own[1]['prediction_trading_user_count'] === 3, 'Business user counts retain their own sets');
+summaryCheck($own[1]['prediction_valid_order_count'] === 6 && $own[1]['prediction_valid_stake_amount'] === '0.6000000000000003', 'Valid orders only; exact prediction decimals');
 summaryCheck($own[1]['contract_trade_count'] === 3 && $own[1]['contract_trade_amount'] === '0.1000000000000001', 'Shared futures fill count and exact amount reused');
 $platform = $store->search($params)['lists'];
-summaryCheck($platform[1]['total_trading_user_count'] === 3, 'Platform includes white-label direct users, excludes missing sites and robots');
+summaryCheck($platform[1]['total_trading_user_count'] === 4, 'Platform includes direct users and robots but excludes missing sites');
 $month = $store->search($params + ['period' => 'month'], '1')['lists'][0];
-summaryCheck($month['total_trading_user_count'] === 2 && $month['trading_user_count'] === 1 && $month['prediction_trading_user_count'] === 2, 'Month unions identities rather than summing daily users');
-summaryCheck($month['contract_trade_count'] === 6 && $month['prediction_valid_order_count'] === 6, 'Month sums disjoint UTC daily business actions');
-summaryCheck($month['contract_trade_amount'] === '0.2000000000000002' && $month['prediction_valid_stake_amount'] === '0.6000000000000003', 'Monthly decimal precision retained');
+summaryCheck($month['total_trading_user_count'] === 3 && $month['trading_user_count'] === 1 && $month['prediction_trading_user_count'] === 3, 'Month unions identities rather than summing daily users');
+summaryCheck($month['contract_trade_count'] === 6 && $month['prediction_valid_order_count'] === 8, 'Month sums disjoint UTC daily business actions');
+summaryCheck($month['contract_trade_amount'] === '0.2000000000000002' && $month['prediction_valid_stake_amount'] === '0.8000000000000004', 'Monthly decimal precision retained');
 summaryCheck(!isset($month['identities']) && is_string($month['source_id']), 'Private user IDs never serialized');
 foreach (['day', 'month'] as $period) {
     $query = $params + ['period' => $period];
@@ -82,7 +82,7 @@ foreach (['day', 'month'] as $period) {
     summaryCheck($store->search($query + ['source_keyword' => '%'])['count'] === 0, 'Search wildcards treated literally');
 }
 $db->enableQueryLog(); $page = $store->search($params + ['source_type' => 'merchant', 'page_no' => 2, 'page_size' => 1]);
-summaryCheck($page['count'] === 4 && count($page['lists']) === 1, 'Count and pagination use the same filters');
+summaryCheck($page['count'] === 6 && count($page['lists']) === 1, 'Count and pagination include the direct child-merchant source skeleton');
 foreach ($db->getQueryLog() as $query) summaryCheck(!str_contains($query['query'], 'identities'), 'Daily pages never read private user identity sets');
 $db->disableQueryLog();
 foreach ([['order_by' => 'identities'], ['source_type' => 'bad'], ['period' => 'week'], ['start_date' => '2026-02-30']] as $bad) {
@@ -98,6 +98,9 @@ $current = $store->search(['start_date' => '2026-10-14', 'end_date' => '2026-10-
 summaryCheck($current['stat_status'] === 2, 'Missing futures source is incomplete, not fake completed zero');
 $publisher->publish('2026-10-13', [array_merge($fact, ['user_id' => '814'])]);
 $conflict = $store->search($params + ['source_type' => 'tenant', 'source_id' => '900002'])['lists'][0];
-summaryCheck($conflict['stat_status'] === 2 && $conflict['prediction_trading_user_count'] === 1, 'Cross-site merchant conflict never assigned to wrong merchant');
+summaryCheck($conflict['stat_status'] === 2 && $conflict['prediction_trading_user_count'] === 1, 'Tenant follows the user site; missing tenant contract facts still mark the summary incomplete');
+$crossMerchant = $store->search(['start_date' => '2026-10-13', 'end_date' => '2026-10-13'], '1')['lists'][0];
+summaryCheck($crossMerchant['stat_status'] === 1 && $crossMerchant['prediction_trading_user_count'] === 1,
+    'A different user site does not prevent attribution to users.agent_id');
 CarbonImmutable::setTestNow();
 echo "PASS {$checks} platform trade summary checks\n";

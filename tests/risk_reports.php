@@ -60,19 +60,20 @@ $rows = $agg->build('2026-10-09', [$base, $later, $direct, array_merge($base, ['
     array_merge($base, ['settle_asset' => 'BTC']), array_merge($base, ['user_id' => '812']), array_merge($base, ['user_id' => '999'])], $directory, true);
 $merchant = riskSource($rows, 'merchant', '1');
 riskCheck($merchant['liquidation_user_count'] === 1 && $merchant['liquidation_count'] === 1, 'Risk users and positions deduplicate across hours');
-riskCheck($merchant['liquidation_position_amount'] === '120.0000000000000000' && $merchant['liquidation_trade_amount'] === '100.0000000000000000', 'Position notionals union while actual trade flows sum');
-riskCheck($merchant['liquidation_realized_pnl'] === '-13.3400000000000000' && $merchant['liquidation_fee'] === '0.1500000000000000', 'Signed PnL and fees retain exact decimals');
+riskCheck($merchant['liquidation_position_amount'] === '120.0000000000000000' && $merchant['liquidation_trade_amount'] === '198.0000000000000000', 'Position notionals union while actual trade flows sum across all user types');
+riskCheck($merchant['liquidation_realized_pnl'] === '-25.6800000000000000' && $merchant['liquidation_fee'] === '0.2500000000000000', 'Signed PnL and fees retain exact decimals');
 riskCheck($merchant['bankruptcy_count'] === 1 && $merchant['bankruptcy_loss'] === '2.5000000000000000', 'Final bankruptcy loss uses the unique ledger event maximum');
-riskCheck(riskSource($rows, 'tenant', '900001')['liquidation_user_count'] === 2, 'White-label includes direct simulated users');
-riskCheck(riskSource($rows, 'platform', '0')['liquidation_user_count'] === 2, 'Real users, non-USDT and missing/non-positive origins are excluded');
+riskCheck(riskSource($rows, 'tenant', '900001')['liquidation_user_count'] === 2, 'White-label includes direct users');
+riskCheck(riskSource($rows, 'platform', '0')['liquidation_user_count'] === 2, 'User type is unrestricted; non-USDT and missing/non-positive origins are excluded');
 $conflict = $agg->build('2026-10-09', [array_merge($base, ['user_id' => '813'])], $directory, true);
-riskCheck(riskSource($conflict, 'merchant', '1')['liquidation_count'] === 0 && riskSource($conflict, 'tenant', '900002')['status'] === 2, 'Merchant cannot absorb another site; unresolved attribution is partial');
+riskCheck(riskSource($conflict, 'merchant', '1')['liquidation_count'] === 1 && riskSource($conflict, 'tenant', '900002')['status'] === 1,
+    'User agent and user site independently determine complete report scopes');
 $store = new RiskReportStore($db); $store->replace('2026-10-09', $rows);
 $store->replace('2026-10-10', $agg->build('2026-10-10', [$base], $directory, false));
 $params = ['start_date' => '2026-10-09', 'end_date' => '2026-10-10', 'source_type' => 'merchant', 'source_id' => '1'];
 $month = $store->search($params + ['period' => 'month'])['lists'][0];
 riskCheck($month['liquidation_user_count'] === 1 && $month['liquidation_count'] === 1 && $month['bankruptcy_count'] === 1, 'Monthly users, positions and bankruptcy events union rather than sum');
-riskCheck($month['liquidation_trade_amount'] === '198.0000000000000000' && $month['bankruptcy_loss'] === '2.5000000000000000', 'Monthly flows and ledger dedup preserve their different meanings');
+riskCheck($month['liquidation_trade_amount'] === '296.0000000000000000' && $month['bankruptcy_loss'] === '2.5000000000000000', 'Monthly flows and ledger dedup preserve their different meanings');
 riskCheck($month['stat_status'] === 0 && !isset($month['identities']) && is_string($month['source_id']), 'Monthly status and public serialization are compatible');
 foreach (['day', 'month'] as $period) {
     $q = ['start_date' => '2026-10-09', 'end_date' => '2026-10-10', 'period' => $period];

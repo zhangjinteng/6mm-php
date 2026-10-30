@@ -36,6 +36,12 @@ final class PositionReportStore
         return count($rows);
     }
 
+    /** Old filtered snapshots cannot be reconstructed from a live position query. */
+    public function markIncomplete(string $date): void
+    {
+        $this->database->table($this->table())->where('stat_date', $date)->update(['status' => 2]);
+    }
+
     /** One-time legacy migration: never overwrite rows already published by the shared producer. */
     public function insertMissingMerchantRows(string $date, array $rows): int
     {

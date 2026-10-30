@@ -22,13 +22,13 @@ final class FundingFeeReportAggregator
         }
 
         foreach ($facts as $fact) {
-            if ((int) ($fact['user_type'] ?? 0) !== 2 || strtoupper((string) ($fact['settle_asset'] ?? '')) !== 'USDT') continue;
+            if (strtoupper((string) ($fact['settle_asset'] ?? '')) !== 'USDT') continue;
             $user = $scope->user($fact);
             if ($user === null) continue;
             $merchant = $scope->merchant($fact);
             $tenantId = $directory['sites'][$user['site_id']] ?? null;
             $tenant = $directory['tenants'][(string) $tenantId] ?? null;
-            $complete = $tenant !== null && ($merchant !== null || ((string) $fact['agent_id'] === '0' && $user['agent_id'] === '0'));
+            $complete = $tenant !== null && ($merchant !== null || !ReportUserScope::positiveId((string) $user['agent_id']));
             foreach (array_filter([$merchant, $tenant, $platform]) as $source) {
                 foreach (array_unique(['', strtoupper((string) ($fact['symbol'] ?? ''))]) as $symbol) {
                     $key = $this->key($source, $symbol);

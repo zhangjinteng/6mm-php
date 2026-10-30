@@ -23,23 +23,21 @@ final class PlatformPnlReportAggregator
             $groups[$this->key($source)] = $this->emptyRow($date, $source, $completed);
         }
         foreach ($facts as $fact) {
-            if (!is_array($fact) || !in_array((int) ($fact['user_type'] ?? 0), [1, 2], true)
+            if (!is_array($fact)
                 || strtoupper((string) ($fact['settle_asset'] ?? '')) !== 'USDT') continue;
             $user = $scope->user($fact);
-            if ($user === null) {
-                $groups[$this->key($platform)]['status'] = 2;
-                continue;
-            }
+            if ($user === null) continue; // Missing/non-positive user sites are outside the cohort.
             $merchant = $scope->merchant($fact);
             $tenantId = $directory['sites'][(string) $user['site_id']] ?? null;
             $tenant = $directory['tenants'][(string) $tenantId] ?? null;
             $complete = $tenant !== null && ($merchant !== null
-                || ((string) ($fact['agent_id'] ?? '') === '0' && (string) $user['agent_id'] === '0'));
+                || !ReportUserScope::positiveId((string) $user['agent_id']));
             $realized = $this->decimal($fact['realized_pnl'] ?? '0');
             $fee = $this->decimal($fact['trading_fee'] ?? '0');
             $liquidation = $this->decimal($fact['liquidation_fee'] ?? '0');
             $funding = $this->decimal($fact['funding_fee'] ?? '0');
             foreach (array_filter([$merchant, $tenant, $platform]) as $source) {
+                $groups[$this->key($source)] ??= $this->emptyRow($date, $source, $completed);
                 $row = &$groups[$this->key($source)];
                 $row['contract_trade_pnl'] = bcsub($row['contract_trade_pnl'], $realized, 16);
                 $row['contract_trading_fee_income'] = bcadd($row['contract_trading_fee_income'], $fee, 16);

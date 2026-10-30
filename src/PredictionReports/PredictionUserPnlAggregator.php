@@ -20,7 +20,7 @@ final class PredictionUserPnlAggregator
         $incompletePlatform = false;
         foreach ($facts as $fact) {
             $id = (string) ($fact['user_id'] ?? '');
-            if (!ReportUserScope::positiveId($id) || isset($robotIds[$id])) continue;
+            if (!ReportUserScope::positiveId($id)) continue;
             $play = strtolower((string) ($fact['play_type'] ?? ''));
             $symbol = strtoupper(trim((string) ($fact['symbol'] ?? '')));
             $outcome = strtolower((string) ($fact['outcome'] ?? ''));
@@ -30,16 +30,13 @@ final class PredictionUserPnlAggregator
             if (strlen($symbol) > 40) throw new InvalidArgumentException('预测合约编码过长');
             $user = $directory['users'][$id] ?? null;
             if (!is_array($user) || !ReportUserScope::positiveId((string) ($user['site_id'] ?? ''))) {
-                $incompletePlatform = true;
                 continue;
             }
             $siteId = (string) $user['site_id'];
             $tenantId = $directory['sites'][$siteId] ?? null;
             $tenant = $directory['tenants'][(string) $tenantId] ?? null;
-            $rootId = $roots[(string) ($user['agent_id'] ?? '')] ?? null;
-            $merchant = $directory['agents'][(string) $rootId] ?? null;
-            if ($merchant !== null && (string) $merchant['site_id'] !== $siteId) $merchant = null;
-            if ((string) ($user['agent_id'] ?? '') !== '0' && $merchant === null) $incompletePlatform = true;
+            $merchant = (new ReportUserScope($directory))->merchant($fact);
+            if (ReportUserScope::positiveId((string) ($user['agent_id'] ?? '0')) && $merchant === null) $incompletePlatform = true;
             if ($tenant === null) $incompletePlatform = true;
             $stake = $this->decimal($fact['stake_amount'] ?? '0');
             $returned = $this->decimal($fact['return_amount'] ?? '0');

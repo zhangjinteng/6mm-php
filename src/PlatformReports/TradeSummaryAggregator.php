@@ -19,7 +19,7 @@ final class TradeSummaryAggregator
         }
         foreach ($contracts as $contract) {
             $key = $this->key($contract);
-            if (!isset($groups[$key])) continue;
+            $groups[$key] ??= $this->emptyRow($date, $contract);
             $row = &$groups[$key];
             $users = is_string($contract['contract_users']) ? json_decode($contract['contract_users'], true, 512, JSON_THROW_ON_ERROR) : $contract['contract_users'];
             if (!is_array($users) || count($users) !== (int) $contract['trading_user_count']) throw new InvalidArgumentException('合约日报缺少交易用户去重明细');
@@ -36,17 +36,16 @@ final class TradeSummaryAggregator
             if (!in_array($fact['outcome'] ?? '', ['win', 'loss'], true)) continue;
             $id = (string) ($fact['user_id'] ?? '');
             $user = $directory['users'][$id] ?? null;
-            if ($user === null || !in_array((int) ($user['user_type'] ?? 0), [1, 2], true)) continue;
+            if ($user === null || !\SixMm\Shared\FuturesReports\ReportUserScope::positiveId((string) ($user['site_id'] ?? ''))) continue;
             $count = $this->count($fact['order_count'] ?? 0);
             if ($count === 0) continue;
             $amount = $this->decimal($fact['stake_amount'] ?? '0');
             $tenantId = (string) ($directory['sites'][$user['site_id']] ?? '');
             $tenant = $directory['tenants'][$tenantId] ?? null;
-            $agentId = (string) ($directory['roots'][$user['agent_id']] ?? $user['agent_id']);
-            $merchant = $directory['agents'][$agentId] ?? null;
-            if ($merchant !== null && $merchant['site_id'] !== $user['site_id']) $merchant = null;
+            $merchant = (new \SixMm\Shared\FuturesReports\ReportUserScope($directory))->merchant($fact);
             $partial = $tenant === null || ($user['agent_id'] !== '0' && $merchant === null);
             foreach (array_filter([$merchant, $tenant, $platform]) as $source) {
+                $groups[$this->key($source)] ??= $this->emptyRow($date, $source);
                 $row = &$groups[$this->key($source)];
                 $row['identities']['prediction_users']['u:' . $id] = true;
                 $row['prediction_valid_order_count'] += $count;

@@ -34,13 +34,13 @@ final class ReportUserScope
     public function merchant(array $row): ?array
     {
         $user = $this->user($row);
-        $id = (string) ($row['agent_id'] ?? '');
+        $id = (string) ($user['agent_id'] ?? '0');
         $merchant = $this->directory['agents'][$id] ?? null;
-        if ($user === null || !self::positiveId($id) || $merchant === null
-            || (string) $user['agent_id'] !== $id || (string) $merchant['site_id'] !== $user['site_id']) {
+        if ($user === null || !self::positiveId($id)) {
             return null;
         }
-        return $merchant;
+        return $merchant ?? ['source_type' => 'merchant', 'source_id' => $id,
+            'source_code' => $id, 'source_name' => $id, 'site_id' => '0'];
     }
 
     public function filterMerchants(array $rows): array

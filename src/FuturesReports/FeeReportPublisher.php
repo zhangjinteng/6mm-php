@@ -20,7 +20,7 @@ final class FeeReportPublisher
         $ids = [];
         for ($i = 0; $i < $hours; $i++) {
             $bucket = $this->hour($day->addHours($i), $sourceIds);
-            foreach ($bucket['rows'] as $row) if ((int) ($row['user_type'] ?? 0) === 2) $ids[(string) $row['user_id']] = true;
+            foreach ($bucket['rows'] as $row) $ids[(string) $row['user_id']] = true;
             unset($bucket, $row);
         }
         $directory = $this->directory->load(array_keys($ids));

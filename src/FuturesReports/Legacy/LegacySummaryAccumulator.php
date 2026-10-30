@@ -18,7 +18,9 @@ final class LegacySummaryAccumulator
     {
         ReportUserScope::mergeExecutions($this->executions, $trades);
         foreach ($settlements as $row) {
-            if ((int) ($row['user_type'] ?? 0) === User::USER_TYPE_NORMAL) continue;
+            // This compatibility table is simulated-only. Shared platform reports consume
+            // the unfiltered hourly streams directly, including every other user type.
+            if ((int) ($row['user_type'] ?? 0) !== User::USER_TYPE_SIMULATE) continue;
             $key = $this->key($row);
             $this->settlements[$key] ??= $this->identity($row) + [
                 'close_order_ids' => [], 'close_order_count' => 0,

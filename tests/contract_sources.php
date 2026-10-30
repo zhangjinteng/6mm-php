@@ -64,14 +64,16 @@ $db->table('wl_tenants')->insert([
     ['tenant_id'=>100, 'tenant_name'=>'Home'], ['tenant_id'=>12, 'tenant_name'=>' White label '],
 ]);
 $sources = new ContractSourceService($db, 100);
-sourceCheck($sources->matchingPlatformUserIds(new ContractSourceFilter('platform')) === [1, 2], 'Platform includes only agent zero with null/zero home site');
-sourceCheck($sources->matchingPlatformUserIds(new ContractSourceFilter('merchant')) === [3, 6], 'Merchant follows the injected home site');
+// User-list source categories are exclusive; report attribution is tested separately.
+sourceCheck($sources->matchingPlatformUserIds(new ContractSourceFilter('platform')) === [1, 2, 7, 9], 'Platform includes null/zero home sites, including anomalous merchant profiles');
+sourceCheck($sources->matchingPlatformUserIds(new ContractSourceFilter('merchant')) === [3], 'Merchant requires the injected home site and a positive user agent ID');
 sourceCheck($sources->matchingPlatformUserIds(new ContractSourceFilter('merchant', 12)) === [3], 'Merchant names narrow the category');
 sourceCheck($sources->matchingPlatformUserIds(new ContractSourceFilter('white_label', null, 12)) === [4, 5], 'Tenant selection includes all its non-home sites');
-sourceCheck($sources->matchingPlatformUserIds(new ContractSourceFilter('white_label')) === [4, 5, 10], 'Unknown tenant retains the positive non-home category');
+sourceCheck($sources->matchingPlatformUserIds(new ContractSourceFilter('white_label')) === [4, 5, 6, 10], 'White label includes direct home-site users and positive non-home sites');
+sourceCheck($sources->matchingPlatformUserIds(new ContractSourceFilter('white_label', null, 100)) === [6], 'Home-site direct users resolve to the home-site white label');
 $options = $sources->options();
 sourceCheck($options['merchants'] === [['value'=>'12', 'label'=>'Merchant']], 'Merchant names use platform home site');
-sourceCheck($options['white_labels'] === [['value'=>'12', 'label'=>'White label']], 'White label options are distinct tenants, not sites');
+sourceCheck($options['white_labels'] === [['value'=>'12', 'label'=>'White label'], ['value'=>'100', 'label'=>'Home']], 'White label options include the home-site tenant and deduplicate sites');
 
 $rows = array_map(static fn (int $id): array => ['platform_user_id'=>$id, 'user_id'=>999, 'agent_id'=>999, 'user'=>[]], range(1, 10));
 $rows[] = ['user_id'=>1];
@@ -81,22 +83,24 @@ sourceCheck(count($db->getQueryLog()) === 3, 'Enrichment batches queries, never 
 sourceCheck($rows[0]['source_name'] === '平台用户' && $rows[0]['source_id'] === '0', 'Platform display');
 sourceCheck($rows[2]['source_type'] === 'merchant' && $rows[2]['source_name'] === 'Merchant', 'Merchant display ignores stale row profile fields');
 sourceCheck($rows[3]['source_type'] === 'white_label' && $rows[3]['source_name'] === 'White label', 'Tenant display uses the live user home site');
-sourceCheck($rows[5]['source_type'] === 'merchant' && $rows[5]['source_name'] === '-', 'Merchant without an agent is not guessed');
-sourceCheck($rows[6]['source_type'] === null && $rows[7]['source_type'] === null && $rows[8]['source_type'] === null, 'Invalid or deleted profiles remain unknown');
+sourceCheck($rows[5]['source_type'] === 'white_label' && $rows[5]['source_name'] === 'Home', 'Home-site user without an agent resolves to its white label');
+sourceCheck($rows[6]['source_type'] === 'platform' && $rows[6]['source_name'] === '异常用户', 'Missing site with positive agent is an anomalous platform user');
+sourceCheck($rows[7]['source_type'] === null, 'Deleted profiles remain unknown');
+sourceCheck($rows[8]['source_type'] === 'platform' && $rows[8]['source_name'] === '平台用户', 'Null agent and site resolve to platform user');
 sourceCheck($rows[9]['source_type'] === 'white_label' && $rows[9]['source_name'] === '-', 'Missing tenant name does not invent an agent name');
 sourceCheck($rows[10]['source_type'] === null, 'Never resolve a profile from a display UID');
 sourceCheck($rows[3]['user']['source_type'] === $rows[3]['source_type'], 'Nested drawer metadata matches the row');
 
 $query = $db->table('users as users')->whereNull('users.deleted_at');
 (new ContractSourceScope(new AllUsersScope(), $sources, new ContractSourceFilter('white_label')))->apply($query, 'users.agent_id');
-sourceCheck((clone $query)->count() === 3, 'Source predicate is part of the count');
+sourceCheck((clone $query)->count() === 4, 'Source predicate is part of the count');
 sourceCheck((clone $query)->orderBy('users.user_id')->offset(1)->limit(1)->pluck('users.user_id')->all() === [5], 'Source predicate runs before paging');
 $restricted = $db->table('users as users');
 (new ContractSourceScope(new AgentIdsScope([12]), $sources, new ContractSourceFilter('white_label')))->apply($restricted, 'users.agent_id');
 sourceCheck($restricted->count() === 0, 'Source filtering cannot widen the authenticated data scope');
 $missing = new ContractSourceService($db, 0);
 sourceCheck($missing->matchingPlatformUserIds(new ContractSourceFilter('merchant')) === [], 'Missing home site fails closed');
-sourceCheck($missing->matchingPlatformUserIds(new ContractSourceFilter('platform')) === [1, 2], 'Platform filtering does not need a configured home site');
+sourceCheck($missing->matchingPlatformUserIds(new ContractSourceFilter('platform')) === [1, 2, 7, 9], 'Platform filtering does not need a configured home site');
 foreach ([['invalid'], ['platform', 12], ['white_label', 12], ['merchant', null, 12], ['', 0], ['', null, 12], ['merchant', 12, 12]] as $args) {
     try { new ContractSourceFilter(...$args); throw new RuntimeException('Invalid source filter accepted'); }
     catch (InvalidArgumentException $expected) {}

@@ -82,17 +82,17 @@ $fundingFact = [
 ];
 $fundingRows = $fundingAggregator->build('2026-10-09', [
     $fundingFact, array_merge($fundingFact, ['funding_settlement_count' => 1, 'funding_settlement_position_amount' => '50', 'funding_fee_income' => '0', 'funding_fee_expense' => '0.4', 'funding_fee' => '-0.4']),
-    array_merge($fundingFact, ['user_type' => 1, 'funding_fee' => '1000']),
+    array_merge($fundingFact, ['user_type' => 1, 'funding_fee_income' => '1000', 'funding_fee_expense' => '0', 'funding_fee' => '1000']),
 ], $directory, true);
 $fundingMerchant = sourceTrade($fundingRows, 'merchant', '1');
-checkTrade($fundingMerchant['funding_settlement_user_count'] === 1 && $fundingMerchant['funding_settlement_count'] === 3,
-    'Funding users deduplicate within a day and only simulated users contribute');
-checkTrade($fundingMerchant['funding_fee_net_income'] === '0.6000000000000001', 'Funding decimals remain exact');
+checkTrade($fundingMerchant['funding_settlement_user_count'] === 1 && $fundingMerchant['funding_settlement_count'] === 5,
+    'Funding users deduplicate within a day while settlements include all user types');
+checkTrade($fundingMerchant['funding_fee_net_income'] === '1000.6000000000000001', 'Funding decimals remain exact across all user types');
 $fundingStore = new FundingFeeReportStore($connection);
 $fundingStore->replace('2026-10-09', $fundingRows);
 $fundingStore->replace('2026-10-10', $fundingAggregator->build('2026-10-10', [$fundingFact], $directory, false));
 $fundingMonthly = $fundingStore->search(['period' => 'month', 'start_date' => '2026-10-09', 'end_date' => '2026-10-10'], '1')['lists'][0];
-checkTrade($fundingMonthly['funding_settlement_user_count'] === 1 && $fundingMonthly['funding_settlement_count'] === 5
+checkTrade($fundingMonthly['funding_settlement_user_count'] === 1 && $fundingMonthly['funding_settlement_count'] === 7
     && $fundingMonthly['stat_status'] === 0, 'Funding month deduplicates users and preserves processing status');
 $fundingZero = $fundingStore->search(['start_date' => '2026-10-09', 'end_date' => '2026-10-09', 'symbol' => 'ETHUSDT'], '1')['lists'][0];
 checkTrade($fundingZero['funding_settlement_user_count'] === 0 && $fundingZero['funding_fee_net_income'] === '0', 'Missing contract retains zero-day skeleton');
@@ -132,9 +132,11 @@ checkTrade(sourceTrade($scopedRows, 'platform', '0')['order_count'] === 2, 'Excl
 checkTrade(sourceTrade($scopedRows, 'tenant', '1')['trading_user_count'] === 2, 'White-label direct users remain in shared tenant totals');
 checkTrade(sourceTrade($scopedRows, 'merchant', '1')['order_count'] === 1, 'Direct users must not enter a merchant total');
 $crossSite = $aggregator->build('2026-10-09', [array_merge($base, ['user_id' => '9'])], $scopedDirectory, true);
-checkTrade(sourceTrade($crossSite, 'merchant', '1')['order_count'] === 0, 'Merchant user must match the merchant site');
+checkTrade(sourceTrade($crossSite, 'merchant', '1')['order_count'] === 1 && sourceTrade($crossSite, 'tenant', '1')['status'] === 1,
+    'Merchant attribution uses users.agent_id independently of users.home_site_id');
 $crossMerchant = $aggregator->build('2026-10-09', [array_merge($base, ['user_id' => '4'])], $scopedDirectory, true);
-checkTrade(sourceTrade($crossMerchant, 'merchant', '1')['order_count'] === 0, 'Do not reassign a different public merchant into the historical merchant');
+checkTrade(sourceTrade($crossMerchant, 'merchant', '1')['order_count'] === 0
+    && sourceTrade($crossMerchant, 'merchant', '2')['order_count'] === 1, 'User ownership takes precedence over the historical fact merchant');
 $connection->table('agents')->insert(['id' => 3, 'pid' => 0, 'agent_code' => 'M3', 'agent_name' => 'Other', 'user_name' => 'other', 'home_site_id' => 100]);
 $connection->table('agents')->insert(['id' => 11, 'pid' => 1, 'agent_code' => 'sub', 'agent_name' => 'Sub', 'user_name' => 'sub', 'home_site_id' => 100]);
 $connection->table('agents')->insert(['id' => 12, 'pid' => 1, 'agent_code' => 'bad', 'agent_name' => 'Bad', 'user_name' => 'bad', 'home_site_id' => 101]);
@@ -242,7 +244,10 @@ try { $aggregator->build('2026-10-09', [array_merge($base, ['execution_details' 
 $sqls = [];
 $provider = new FuturesDailySourceProvider(function (string $sql) use (&$sqls): array { $sqls[] = $sql; return []; }, 'freedex_history');
 $provider->fillRows([0, 1], CarbonImmutable::parse('2026-10-09', 'UTC'), CarbonImmutable::parse('2026-10-10', 'UTC'));
-checkTrade(str_contains($sqls[0], 'execution_details') && str_contains($sqls[0], 'WHERE user_id IN') && str_contains($sqls[0], 'agent_id IN (0, 1)'), 'SQL retains FINAL, candidate users, execution amounts and platform users');
+checkTrade(str_contains($sqls[0], 'execution_details') && str_contains($sqls[0], 'history_order_query FINAL')
+    && str_contains($sqls[0], 'WHERE (user_id, order_id) IN'), 'SQL retains FINAL, exact trade-order keys and execution amounts');
+checkTrade(!preg_match('/\b(?:agent_id|user_type)\s*(?:IN\s*\(|=)/i', $sqls[0]),
+    'Raw facts must not be filtered by historical merchant or user type before resolving public user ownership');
 if ($pgPort !== null) {
     $connection->statement('SET LOCAL search_path TO control_plane');
     checkTrade(Agent::query()->count() === 5, 'Legacy models remain in public when search_path is control_plane');
@@ -254,7 +259,7 @@ if ($pgPort !== null) {
         $configured = new Illuminate\Database\PostgresConnection($connection->getPdo(), 'futures_report_test', '', array_merge($connection->getConfig(), ['schema' => $configuredSchemas]));
         TradeReportSchema::create($configured);
         $resolved = (new SourceDirectory($configured))->load(['4']);
-        checkTrade(count($resolved['agents']) === 3 && $resolved['agents']['1']['source_code'] === 'MER1', 'Configured schema list must not hide public merchant fields');
+        checkTrade(count($resolved['agents']) === 5 && $resolved['agents']['1']['source_code'] === 'MER1', 'Configured schema list must not hide parent or child merchant fields');
         checkTrade($configured->table('public.' . TradeReportSchema::TABLE)->count() > 0, 'Qualified reports support public-only and control_plane-only configuration');
     }
 }

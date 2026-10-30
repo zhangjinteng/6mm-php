@@ -58,20 +58,22 @@ $store = new PredictionUserPnlStore($db);
 $publisher = new PredictionUserPnlPublisher($db, null, $store);
 $publisher->publish('2026-10-13', $facts);
 $merchant = $store->search(['start_date' => '2026-10-13', 'end_date' => '2026-10-13'], '1')['lists'][0];
-predictionCheck($merchant['trading_user_count'] === 2 && $merchant['valid_trading_user_count'] === 2, 'Sub-agent must resolve to root merchant');
-predictionCheck($merchant['profitable_user_count'] === 1 && $merchant['losing_user_count'] === 1, 'Per-user net classification must precede aggregation');
-predictionCheck($merchant['stake_amount'] === '22' && $merchant['return_amount'] === '21', 'Merchant amounts must exclude direct, other merchant, and robot users');
-predictionCheck($merchant['user_net_pnl'] === '-1' && $merchant['platform_pnl'] === '1', 'Net and platform PnL must be opposites');
-predictionCheck($merchant['valid_stake_amount'] === '19' && $merchant['refund_order_count'] === 1, 'Refunds count but do not increase valid stake');
+predictionCheck($merchant['trading_user_count'] === 2 && $merchant['valid_trading_user_count'] === 2, 'Direct merchant includes user types 2 and 3, not child-merchant users');
+predictionCheck($merchant['profitable_user_count'] === 1 && $merchant['losing_user_count'] === 0 && $merchant['breakeven_user_count'] === 1, 'Per-user net classification includes the robot breakeven user');
+predictionCheck($merchant['stake_amount'] === '1017' && $merchant['return_amount'] === '1020', 'Merchant includes robot users but excludes direct and other merchant users');
+predictionCheck($merchant['user_net_pnl'] === '3' && $merchant['platform_pnl'] === '-3', 'Net and platform PnL must be opposites');
+predictionCheck($merchant['valid_stake_amount'] === '1014' && $merchant['refund_order_count'] === 1, 'Refunds count but do not increase valid stake');
+$child = $store->search(['source_type' => 'merchant', 'source_id' => '4', 'start_date' => '2026-10-13', 'end_date' => '2026-10-13'])['lists'][0];
+predictionCheck($child['trading_user_count'] === 1 && $child['stake_amount'] === '4' && $child['user_net_pnl'] === '-4', 'Child merchant is attributed directly, never rolled into its parent');
 $platform = $store->search(['source_type' => 'platform', 'start_date' => '2026-10-13', 'end_date' => '2026-10-13'])['lists'][0];
-predictionCheck($platform['trading_user_count'] === 4 && $platform['stake_amount'] === '31', 'Platform includes direct site users and excludes robots');
+predictionCheck($platform['trading_user_count'] === 5 && $platform['stake_amount'] === '1030', 'Platform includes direct site users and robots exactly once');
 $tenant = $store->search(['source_type' => 'tenant', 'source_id' => '7', 'start_date' => '2026-10-13', 'end_date' => '2026-10-13'])['lists'][0];
-predictionCheck($tenant['trading_user_count'] === 3 && $tenant['stake_amount'] === '29', 'Tenant follows home-site origin');
+predictionCheck($tenant['trading_user_count'] === 4 && $tenant['stake_amount'] === '1028', 'Tenant follows home-site origin across merchants and user types');
 $grid = $store->search(['play_type' => 'grid', 'symbol' => 'BTCUSDT', 'start_date' => '2026-10-13', 'end_date' => '2026-10-13'], '1')['lists'][0];
-predictionCheck($grid['trading_user_count'] === 1 && $grid['order_count'] === 3, 'Play and symbol dimensions stay independent');
+predictionCheck($grid['trading_user_count'] === 2 && $grid['order_count'] === 4, 'Play and symbol dimensions stay independent');
 predictionCheck($store->search(['source_type' => 'merchant', 'source_keyword' => 'Merchant Two', 'start_date' => '2026-10-13', 'end_date' => '2026-10-13'])['count'] === 1, 'Source search must filter platform results');
 predictionCheck($store->search(['source_type' => 'platform', 'start_date' => '2026-10-13', 'end_date' => '2026-10-13'], '1')['count'] === 1, 'Merchant-supplied source type must be ignored');
-predictionCheck($store->symbols('1') === ['BTCUSDT', 'ETHUSDT'], 'Merchant symbol options must not leak another source');
+predictionCheck($store->symbols('1') === ['BTCUSDT'], 'Merchant symbol options must not leak the child merchant symbol');
 predictionCheck($publisher->publish('2026-10-13', $facts) > 0 && $store->search(['start_date' => '2026-10-13', 'end_date' => '2026-10-13'], '1')['count'] === 1, 'Publishing must be idempotent');
 $db->table('users')->insert(['user_id' => 16, 'home_site_id' => 200, 'agent_id' => 1, 'user_type' => 2]);
 $publisher->publish('2026-10-12', [
@@ -79,8 +81,8 @@ $publisher->publish('2026-10-12', [
         'order_count' => 1, 'stake_amount' => '10', 'return_amount' => '20'],
 ]);
 $incomplete = $store->search(['source_type' => 'platform', 'start_date' => '2026-10-12', 'end_date' => '2026-10-12'])['lists'][0];
-predictionCheck($incomplete['trading_user_count'] === 1 && $incomplete['stat_status'] === 2,
-    'A cross-site merchant attribution must be visible only as an incomplete platform/tenant rollup');
-predictionCheck($store->search(['start_date' => '2026-10-12', 'end_date' => '2026-10-12'], '1')['lists'][0]['trading_user_count'] === 0,
-    'Cross-site users must never enter merchant-scoped totals');
+predictionCheck($incomplete['trading_user_count'] === 1 && $incomplete['stat_status'] === 1,
+    'Different merchant and user sites still produce complete platform totals');
+predictionCheck($store->search(['start_date' => '2026-10-12', 'end_date' => '2026-10-12'], '1')['lists'][0]['trading_user_count'] === 1,
+    'Cross-site users enter the merchant selected by users.agent_id');
 echo "prediction user pnl reports ok\n";

@@ -54,14 +54,15 @@ $agg = new FeeReportAggregator();
 $rows = $agg->build('2026-10-09', [$base, $other, $free, $direct, array_merge($base, ['user_type' => 1]),
     array_merge($base, ['settle_asset' => 'BTC']), array_merge($base, ['user_id' => '812']), array_merge($base, ['user_id' => '999'])], $directory, true);
 $merchant = feeSource($rows, 'merchant', '1');
-feeCheck($merchant['fee_user_count'] === 1 && $merchant['fee_count'] === 3, 'Fee users deduplicate across hours while debit records sum');
-feeCheck($merchant['maker_trade_amount'] === '9007199254741003.0000000000000001', 'Turnover preserves decimal precision');
-feeCheck($merchant['total_handling_fee'] === '0.4200000000000001', 'Total handling fee equals Maker plus Taker, not commissions/trading_fee');
+feeCheck($merchant['fee_user_count'] === 1 && $merchant['fee_count'] === 5, 'Fee users deduplicate across hours while debit records sum across all user types');
+feeCheck($merchant['maker_trade_amount'] === '18014398509481996.0000000000000002', 'Turnover preserves decimal precision');
+feeCheck($merchant['total_handling_fee'] === '0.7200000000000002', 'Total handling fee equals Maker plus Taker, not commissions/trading_fee');
 feeCheck(feeSource($rows, 'merchant', '2')['fee_user_count'] === 0 && feeSource($rows, 'merchant', '2')['maker_trade_amount'] === '50.0000000000000000', 'Zero-fee turnover remains without creating charged users');
 feeCheck(feeSource($rows, 'tenant', '900001')['fee_user_count'] === 2, 'White label includes direct users');
-feeCheck(feeSource($rows, 'platform', '0')['fee_user_count'] === 2, 'Only eligible simulated-USDT users count');
+feeCheck(feeSource($rows, 'platform', '0')['fee_user_count'] === 2, 'Eligible USDT users count independently of user type');
 $conflict = $agg->build('2026-10-09', [array_merge($base, ['user_id' => '813'])], $directory, true);
-feeCheck(feeSource($conflict, 'merchant', '1')['fee_count'] === 0 && feeSource($conflict, 'tenant', '900002')['status'] === 2, 'Merchant attribution mismatch fails closed and marks affected tenant incomplete');
+feeCheck(feeSource($conflict, 'merchant', '1')['fee_count'] === 2 && feeSource($conflict, 'tenant', '900002')['status'] === 1,
+    'A different merchant site does not prevent user-agent and user-site attribution');
 foreach ([['fee_count' => -1], ['fee_count' => '1.1'], ['maker_handling_fee' => 0.1], ['taker_handling_fee' => '-1']] as $invalid) {
     try { $agg->build('2026-10-09', [array_merge($base, $invalid)], $directory, true); throw new RuntimeException('Invalid metric accepted'); }
     catch (InvalidArgumentException $e) {}
@@ -70,8 +71,8 @@ $store = new FeeReportStore($db); $store->replace('2026-10-09', $rows);
 $store->replace('2026-10-10', $agg->build('2026-10-10', [$other], $directory, false));
 $params = ['start_date' => '2026-10-09', 'end_date' => '2026-10-10', 'source_type' => 'merchant', 'source_id' => '1'];
 $month = $store->search($params + ['period' => 'month'])['lists'][0];
-feeCheck($month['fee_user_count'] === 1 && $month['fee_count'] === 4, 'Month unions users rather than summing daily users');
-feeCheck($month['total_handling_fee'] === '0.5400000000000001', 'Monthly exact total fee formula');
+feeCheck($month['fee_user_count'] === 1 && $month['fee_count'] === 6, 'Month unions users rather than summing daily users');
+feeCheck($month['total_handling_fee'] === '0.8400000000000002', 'Monthly exact total fee formula');
 feeCheck(!isset($month['identities']) && is_string($month['source_id']) && $month['stat_status'] === 0, 'Safe ID/private set/status serialization');
 foreach (['day', 'month'] as $period) {
     $q = ['start_date' => '2026-10-09', 'end_date' => '2026-10-10', 'period' => $period];

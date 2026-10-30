@@ -25,6 +25,13 @@ final class SourceDirectory
             ];
         }
         $users = $this->users($userIds);
+        foreach ($users as $user) {
+            $id = $user['agent_id'];
+            if (ReportUserScope::positiveId($id) && !isset($agents[$id])) {
+                $agents[$id] = ['source_type' => 'merchant', 'source_id' => $id, 'source_code' => $id,
+                    'source_name' => $id, 'site_id' => '0'];
+            }
+        }
         return compact('agents', 'sites', 'tenants', 'users');
     }
 
@@ -41,8 +48,7 @@ final class SourceDirectory
                 ->where('table_name', 'agents')->pluck('column_name')->all()
             : $this->database->getSchemaBuilder()->getColumnListing('agents');
         $displayFields = array_values(array_intersect(['id', 'home_site_id', 'agent_code', 'agent_name', 'user_name'], $columns));
-        foreach ($this->database->table($public . 'agents')->where('pid', 0)->whereNull('deleted_at')
-            ->where('home_site_id', '>', 0)->get($displayFields) as $agent) {
+        foreach ($this->database->table($public . 'agents')->where('id', '>', 0)->get($displayFields) as $agent) {
             $agents[(string) $agent->id] = [
                 'source_type' => 'merchant', 'source_id' => (string) $agent->id,
                 'source_code' => (string) (($agent->agent_code ?? '') ?: $agent->id),
@@ -63,7 +69,7 @@ final class SourceDirectory
                 ->where('home_site_id', '>', 0)->get(['user_id', 'home_site_id', 'agent_id']) as $user) {
                 $users[(string) $user->user_id] = [
                     'site_id' => (string) $user->home_site_id,
-                    'agent_id' => (string) $user->agent_id,
+                    'agent_id' => (string) ($user->agent_id ?? 0),
                 ];
             }
         }

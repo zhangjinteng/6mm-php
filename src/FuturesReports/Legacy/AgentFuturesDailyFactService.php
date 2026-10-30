@@ -14,7 +14,7 @@ use SixMm\Shared\FuturesReports\ReportUserScope;
 
 class AgentFuturesDailyFactService
 {
-    private const CALCULATION_VERSION = 6;
+    private const CALCULATION_VERSION = 8;
 
     private const POSITION_AMOUNT_FIELDS = [
         'closing_position_amount',
@@ -102,7 +102,6 @@ class AgentFuturesDailyFactService
         foreach ($this->sourceProvider->commissionRows($agentIds, $start, $end) as $row) {
             $fact = &$this->fact($facts, $row);
             $fact['commission_count'] += max(0, (int) ($row['commission_count'] ?? 0));
-            $fact['fee_count'] += max(0, (int) ($row['fee_count'] ?? 0));
             $fact['maker_commission'] = $this->add(
                 $fact['maker_commission'],
                 $row['maker_commission'] ?? '0'
@@ -111,6 +110,12 @@ class AgentFuturesDailyFactService
                 $fact['taker_commission'],
                 $row['taker_commission'] ?? '0'
             );
+            unset($fact);
+        }
+
+        foreach ($this->sourceProvider->feeRows($agentIds, $start, $end) as $row) {
+            $fact = &$this->fact($facts, $row);
+            $fact['fee_count'] += max(0, (int) ($row['fee_count'] ?? 0));
             foreach ([
                 'maker_trade_amount',
                 'taker_trade_amount',
@@ -709,7 +714,6 @@ class AgentFuturesDailyFactService
 
         if (
             $agentId <= 0 ||
-            !in_array($userType, [User::USER_TYPE_NORMAL, User::USER_TYPE_SIMULATE], true) ||
             $userId <= 0
         ) {
             throw new InvalidArgumentException('合约日报源数据缺少有效的代理商、用户或用户类型');

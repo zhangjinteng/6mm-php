@@ -26,7 +26,7 @@ final class TradeReportAggregator
             $site = $user['site_id'];
             $tenantId = $directory['sites'][$site] ?? null;
             $tenant = $directory['tenants'][(string) $tenantId] ?? null;
-            $complete = $tenant !== null && ($agent !== null || ((string) $fact['agent_id'] === '0' && $user['agent_id'] === '0'));
+            $complete = $tenant !== null && ($agent !== null || !ReportUserScope::positiveId((string) $user['agent_id']));
             $sources = array_filter([$agent, $tenant, $platform]);
             foreach ($sources as $source) {
                 foreach (array_unique(['', (string) $fact['symbol']]) as $symbol) {

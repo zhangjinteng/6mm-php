@@ -72,8 +72,13 @@ platformPnlCheck(platformPnlRow($rows, 'merchant', '1')['contract_total_pnl'] ==
 platformPnlCheck(platformPnlRow($rows, 'tenant', '7')['contract_total_pnl'] === '9.7500000000000000', 'Tenant includes direct users');
 platformPnlCheck(platformPnlRow($rows, 'platform', '0')['contract_total_pnl'] === '7.2500000000000000', 'Platform includes both merchants and direct users');
 $unknown = $facts[0]; $unknown['user_id'] = 999;
-platformPnlCheck(platformPnlRow($aggregator->build('2026-10-12', [$unknown], $directory, true), 'platform', '0')['status'] === 2,
-    'Missing user origin must mark platform total incomplete');
+$excluded = platformPnlRow($aggregator->build('2026-10-12', [$unknown], $directory, true), 'platform', '0');
+platformPnlCheck($excluded['status'] === 1 && bccomp($excluded['contract_total_pnl'], '0', 16) === 0,
+    'Users without an eligible user profile are excluded rather than added as partial totals');
+$unmappedDirectory = $directory;
+$unmappedDirectory['users']['11']['site_id'] = '999';
+platformPnlCheck(platformPnlRow($aggregator->build('2026-10-12', [$facts[0]], $unmappedDirectory, true), 'platform', '0')['status'] === 2,
+    'An eligible positive site without a white-label mapping still marks totals incomplete');
 $store = new PlatformPnlReportStore($db);
 $store->replace('2026-10-12', $rows);
 $prediction = new PredictionUserPnlPublisher($db, null, new PredictionUserPnlStore($db));

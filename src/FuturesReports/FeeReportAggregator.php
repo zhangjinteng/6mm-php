@@ -12,7 +12,7 @@ final class FeeReportAggregator
     public const AMOUNTS = ['maker_trade_amount', 'taker_trade_amount', 'maker_handling_fee', 'taker_handling_fee', 'total_handling_fee'];
     private const FLOWS = ['maker_trade_amount', 'taker_trade_amount', 'maker_handling_fee', 'taker_handling_fee'];
 
-    /** Preserve the existing commission page's simulated-user USDT handling-fee population. */
+    /** USDT user fees across all user types; merchant commissions are not user fees. */
     public function build(string $date, iterable $facts, array $directory, bool $completed): array
     {
         $scope = new ReportUserScope($directory);
@@ -22,7 +22,7 @@ final class FeeReportAggregator
             $groups[$this->key($source, '')] = $this->emptyRow($date, $source, '', $completed);
         }
         foreach ($facts as $fact) {
-            if (!is_array($fact) || (int) ($fact['user_type'] ?? 0) !== 2 || strtoupper((string) ($fact['settle_asset'] ?? '')) !== 'USDT') continue;
+            if (!is_array($fact) || strtoupper((string) ($fact['settle_asset'] ?? '')) !== 'USDT') continue;
             $user = $scope->user($fact);
             if ($user === null) continue;
             $count = $this->count($fact['fee_count'] ?? 0);
@@ -32,7 +32,7 @@ final class FeeReportAggregator
             $merchant = $scope->merchant($fact);
             $tenantId = $directory['sites'][$user['site_id']] ?? null;
             $tenant = $directory['tenants'][(string) $tenantId] ?? null;
-            $complete = $tenant !== null && ($merchant !== null || ((string) ($fact['agent_id'] ?? '') === '0' && $user['agent_id'] === '0'));
+            $complete = $tenant !== null && ($merchant !== null || !ReportUserScope::positiveId((string) $user['agent_id']));
             $symbol = strtoupper((string) ($fact['symbol'] ?? ''));
             foreach (array_filter([$merchant, $tenant, $platform]) as $source) {
                 foreach (array_unique(['', $symbol]) as $contract) {

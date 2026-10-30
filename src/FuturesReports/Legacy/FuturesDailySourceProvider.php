@@ -61,8 +61,8 @@ SELECT
         )
     )) AS order_amount
 FROM {$database}.history_order_query AS o
-WHERE o.agent_id IN ({$agentIdList})
-  AND o.user_type IN (1, 2)
+WHERE 1 = 1
+
   AND o.user_id > 0
   AND notEmpty(o.symbol)
   AND o.created_at >= toDateTime64('{$startUtc}', 3, 'UTC')
@@ -89,8 +89,9 @@ SQL;
         $database = $this->historyDatabase();
         [$startUtc, $endUtc] = $this->clickHouseBounds($start, $end);
         $agentIdList = $this->integerList($agentIds);
+        $orderKeysSql = $this->tradedOrderKeysSql($database, $startUtc, $endUtc);
 
-        // 候选用户仅缩小 FINAL 的读取范围；最终代理商和用户类型仍在 FINAL 后判断。
+        // Restrict by immutable join keys, never by the order creation hour or mutable profile fields.
         $sql = <<<SQL
 SELECT
     toString(ord.agent_id) AS agent_id,
@@ -114,19 +115,13 @@ FROM {$database}.history_trade_fills AS o
 INNER JOIN (
     SELECT order_id, user_id, agent_id, user_type
     FROM {$database}.history_order_query FINAL
-    WHERE user_id IN (
-        SELECT DISTINCT user_id
-        FROM {$database}.history_order_query
-        PREWHERE user_type IN (1, 2)
-        WHERE agent_id IN ({$agentIdList})
-    )
-      AND agent_id IN ({$agentIdList})
-      AND user_type IN (1, 2)
+    WHERE (user_id, order_id) IN ({$orderKeysSql})
+
 ) AS ord
     ON ord.order_id = o.order_id
    AND ord.user_id = o.user_id
-WHERE ord.agent_id IN ({$agentIdList})
-  AND ord.user_type IN (1, 2)
+WHERE 1 = 1
+
   AND o.user_id > 0
   AND notEmpty(o.symbol)
   AND o.traded_at >= toDateTime64('{$startUtc}', 3, 'UTC')
@@ -136,6 +131,111 @@ FORMAT JSONEachRow
 SQL;
 
         return $this->select($sql);
+    }
+
+    /**
+     * User trading fees are independent of merchant commission settlement.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function feeRows(
+        array $agentIds,
+        CarbonImmutable $start,
+        CarbonImmutable $end
+    ): array {
+        $agentIdList = $this->integerList($agentIds);
+        if ($agentIdList === '') {
+            return [];
+        }
+        if ($end->lessThanOrEqualTo($start)) {
+            throw new RuntimeException('Invalid fee trade time range');
+        }
+
+        // Include retired contracts: their historical fees still belong in reports.
+        $symbols = DB::table('symbol_config')
+            ->whereRaw('UPPER(quote_asset) = ?', [self::SETTLE_ASSET])
+            ->pluck('symbol')->all();
+        if ($symbols === []) {
+            throw new RuntimeException('Missing USDT contract metadata for fee trades');
+        }
+        $symbolList = implode(',', array_map(
+            static fn ($symbol): string => "'" . str_replace(
+                ["\\", "'"], ["\\\\", "\\'"], (string) $symbol
+            ) . "'",
+            $symbols
+        ));
+        $database = $this->historyDatabase();
+        [$startUtc, $endUtc] = $this->clickHouseBounds($start, $end);
+
+        // Replayed events must count once per user/order/execution, not once per ingestion.
+        $sql = <<<SQL
+SELECT
+    toString(ord.agent_id) AS agent_id,
+    toInt32(ord.user_type) AS user_type,
+    toString(fills.user_id) AS user_id,
+    fills.symbol AS symbol,
+    'USDT' AS settle_asset,
+    countIf(abs(fills.fee) > 0) AS fee_count,
+    toString(ifNull(sumIf(abs(fills.notional), fills.role = 'MAKER'), 0)) AS maker_trade_amount,
+    toString(ifNull(sumIf(abs(fills.notional), fills.role = 'TAKER'), 0)) AS taker_trade_amount,
+    toString(ifNull(sumIf(abs(fills.fee), fills.role = 'MAKER'), 0)) AS maker_handling_fee,
+    toString(ifNull(sumIf(abs(fills.fee), fills.role = 'TAKER'), 0)) AS taker_handling_fee,
+    countIf(
+        isNull(fills.fee) OR isNull(fills.notional) OR fills.notional <= 0
+        OR fills.role NOT IN ('MAKER', 'TAKER') OR fills.valid_identity = 0
+    ) AS invalid_count
+FROM (
+    SELECT
+        latest.user_id AS user_id,
+        latest.order_id AS order_id,
+        tupleElement(latest.value, 1) AS symbol,
+        tupleElement(latest.value, 2) AS role,
+        tupleElement(latest.value, 3) AS notional,
+        tupleElement(latest.value, 4) AS fee,
+        tupleElement(latest.value, 5) AS valid_identity
+    FROM (
+        SELECT
+            f.user_id,
+            f.order_id,
+            argMax(tuple(
+                f.symbol, upperUTF8(f.role),
+                toDecimal256OrNull(f.notional, 16),
+                toDecimal256OrNull(f.fee, 16),
+                f.order_id > 0 AND (f.trade_id > 0 OR f.fill_id > 0)
+            ), tuple(f.ingested_at, f.wal_seq, f.partition_id, f.offset, f.row_index)) AS value
+        FROM {$database}.history_trade_fills AS f
+        WHERE f.user_id > 0
+          AND f.symbol IN ({$symbolList})
+          AND f.traded_at >= toDateTime64('{$startUtc}', 3, 'UTC')
+          AND f.traded_at < toDateTime64('{$endUtc}', 3, 'UTC')
+        GROUP BY f.user_id, f.order_id, if(f.trade_id > 0, f.trade_id, -f.fill_id)
+    ) AS latest
+) AS fills
+INNER JOIN (
+    SELECT order_id, user_id, agent_id, user_type
+    FROM {$database}.history_order_query FINAL
+    WHERE (user_id, order_id) IN (
+        SELECT user_id, order_id FROM {$database}.history_trade_fills
+        WHERE traded_at >= toDateTime64('{$startUtc}', 3, 'UTC')
+          AND traded_at < toDateTime64('{$endUtc}', 3, 'UTC')
+    )
+
+) AS ord
+    ON ord.order_id = fills.order_id
+   AND ord.user_id = fills.user_id
+WHERE 1 = 1
+
+GROUP BY ord.agent_id, ord.user_type, fills.user_id, fills.symbol
+FORMAT JSONEachRow
+SQL;
+
+        $rows = $this->select($sql);
+        foreach ($rows as $row) {
+            if ((int) ($row['invalid_count'] ?? 0) > 0) {
+                throw new RuntimeException('Invalid fee trade amount, role or identity; report not published');
+            }
+        }
+        return $rows;
     }
 
     /**
@@ -172,8 +272,8 @@ SELECT
         )
     )) AS cancel_amount
 FROM {$database}.history_order_query AS o
-WHERE o.agent_id IN ({$agentIdList})
-  AND o.user_type IN (1, 2)
+WHERE 1 = 1
+
   AND o.user_id > 0
   AND notEmpty(o.symbol)
   AND upperUTF8(o.final_status) IN (
@@ -212,7 +312,7 @@ SQL;
         [$startUtc, $endUtc] = $this->clickHouseBounds($start, $end);
         $agentIdList = $this->integerList($agentIds);
         $settleAsset = self::SETTLE_ASSET;
-        $simulateUserType = User::USER_TYPE_SIMULATE;
+        $orderKeysSql = $this->tradedOrderKeysSql($database, $startUtc, $endUtc);
 
         $sql = <<<SQL
 SELECT
@@ -229,13 +329,13 @@ FROM {$database}.history_trade_fills AS f
 INNER JOIN (
     SELECT order_id, user_id, agent_id, user_type, reduce_only, close_only
     FROM {$database}.history_order_query FINAL
-    WHERE agent_id IN ({$agentIdList})
-      AND user_type = {$simulateUserType}
+    WHERE (user_id, order_id) IN ({$orderKeysSql})
+
 ) AS ord
     ON ord.order_id = f.order_id
    AND ord.user_id = f.user_id
-WHERE ord.agent_id IN ({$agentIdList})
-  AND ord.user_type = {$simulateUserType}
+WHERE 1 = 1
+
   AND f.user_id > 0
   AND f.traded_at >= toDateTime64('{$startUtc}', 3, 'UTC')
   AND f.traded_at < toDateTime64('{$endUtc}', 3, 'UTC')
@@ -272,40 +372,9 @@ SQL;
         $database = $this->historyDatabase();
         [$startUtc, $endUtc] = $this->clickHouseBounds($start, $end);
         $agentIdList = $this->integerList($agentIds);
+        $orderKeysSql = $this->tradedOrderKeysSql($database, $startUtc, $endUtc);
 
         $sql = <<<SQL
-WITH filtered AS (
-    SELECT
-        toInt64(ord.agent_id) AS agent_id,
-        toInt32(ord.user_type) AS user_type,
-        o.symbol AS symbol,
-        if(
-            toInt64(o.trade_id) != 0,
-            toInt64(o.trade_id),
-            -toInt64(o.fill_id)
-        ) AS trade_id,
-        abs(toDecimal256OrZero(toString(o.notional), 16)) AS trade_amount
-    FROM {$database}.history_trade_fills AS o
-    INNER JOIN (
-        SELECT order_id, user_id, agent_id, user_type
-        FROM {$database}.history_order_query FINAL
-        WHERE user_id IN (
-            SELECT DISTINCT user_id FROM {$database}.history_order_query
-            PREWHERE user_type IN (1, 2)
-            WHERE agent_id IN ({$agentIdList})
-        )
-          AND agent_id IN ({$agentIdList})
-          AND user_type IN (1, 2)
-    ) AS ord
-        ON ord.order_id = o.order_id
-       AND ord.user_id = o.user_id
-    WHERE ord.agent_id IN ({$agentIdList})
-      AND ord.user_type IN (1, 2)
-      AND o.user_id > 0
-      AND notEmpty(o.symbol)
-      AND o.traded_at >= toDateTime64('{$startUtc}', 3, 'UTC')
-      AND o.traded_at < toDateTime64('{$endUtc}', 3, 'UTC')
-)
 SELECT
     toString(agent_id) AS agent_id,
     user_type,
@@ -316,34 +385,37 @@ SELECT
 FROM (
     SELECT
         agent_id,
-        user_type,
+        scope_user_type AS user_type,
         symbol,
         trade_id,
         max(trade_amount) AS trade_amount
-    FROM filtered
-    GROUP BY agent_id, user_type, symbol, trade_id
+    FROM (
+        SELECT
+            toInt64(ord.agent_id) AS agent_id,
+            toInt32(ord.user_type) AS source_user_type,
+            o.symbol AS symbol,
+            if(toInt64(o.trade_id) != 0, toInt64(o.trade_id), -toInt64(o.fill_id)) AS trade_id,
+            abs(toDecimal256OrZero(toString(o.notional), 16)) AS trade_amount
+        FROM {$database}.history_trade_fills AS o
+        INNER JOIN (
+            SELECT order_id, user_id, agent_id, user_type
+            FROM {$database}.history_order_query FINAL
+            WHERE (user_id, order_id) IN ({$orderKeysSql})
+
+        ) AS ord
+            ON ord.order_id = o.order_id
+           AND ord.user_id = o.user_id
+        WHERE 1 = 1
+
+          AND o.user_id > 0
+          AND notEmpty(o.symbol)
+          AND o.traded_at >= toDateTime64('{$startUtc}', 3, 'UTC')
+          AND o.traded_at < toDateTime64('{$endUtc}', 3, 'UTC')
+    ) AS filtered
+    ARRAY JOIN arrayDistinct([source_user_type, toInt32(0)]) AS scope_user_type
+    GROUP BY agent_id, scope_user_type, symbol, trade_id
 )
 GROUP BY agent_id, user_type, symbol
-
-UNION ALL
-
-SELECT
-    toString(agent_id) AS agent_id,
-    toInt32(0) AS user_type,
-    symbol,
-    count() AS fill_count,
-    groupUniqArray(toString(trade_id)) AS trade_ids,
-    toString(sum(trade_amount)) AS trade_amount
-FROM (
-    SELECT
-        agent_id,
-        symbol,
-        trade_id,
-        max(trade_amount) AS trade_amount
-    FROM filtered
-    GROUP BY agent_id, symbol, trade_id
-)
-GROUP BY agent_id, symbol
 FORMAT JSONEachRow
 SQL;
 
@@ -363,11 +435,6 @@ SQL;
         }
 
         return DB::table((DB::getDriverName() === 'pgsql' ? 'public.' : '') . 'agent_commission_details as commissions')
-            ->whereIn('commissions.agent_id', $agentIds)
-            ->whereIn('commissions.user_type', [
-                User::USER_TYPE_NORMAL,
-                User::USER_TYPE_SIMULATE,
-            ])
             ->where('commissions.trade_time', '>=', $start->toDateTimeString())
             ->where('commissions.trade_time', '<', $end->toDateTimeString())
             ->whereNull('commissions.deleted_at')
@@ -449,11 +516,6 @@ SQL;
             "')";
 
         return DB::table((DB::getDriverName() === 'pgsql' ? 'public.' : '') . 'user_account_change_log as logs')
-            ->whereIn('logs.agent_id', $agentIds)
-            ->whereIn('logs.user_type', [
-                User::USER_TYPE_NORMAL,
-                User::USER_TYPE_SIMULATE,
-            ])
             ->whereIn('logs.change_type', $types)
             ->where('logs.created_at', '>=', $start->toDateTimeString())
             ->where('logs.created_at', '<', $end->toDateTimeString())
@@ -535,8 +597,8 @@ SELECT
         abs(toDecimal256OrZero(toString(l.funding_price), 16))
     )) AS funding_settlement_position_amount
 FROM {$database}.history_account_ledgers AS l
-WHERE l.agent_id IN ({$agentIdList})
-  AND l.user_type IN (1, 2)
+WHERE 1 = 1
+
   AND l.user_id > 0
   AND notEmpty(l.symbol)
   AND lowerUTF8(l.biz_type) = 'funding_fee_settle'
@@ -569,6 +631,7 @@ SQL;
         $database = $this->historyDatabase();
         [$startUtc, $endUtc] = $this->clickHouseBounds($start, $end);
         $agentIdList = $this->integerList($agentIds);
+        $orderKeysSql = $this->tradedOrderKeysSql($database, $startUtc, $endUtc, true);
 
         $sql = <<<SQL
 SELECT
@@ -605,13 +668,13 @@ INNER JOIN (
         price,
         avg_filled_price
     FROM {$database}.history_order_query FINAL
-    WHERE agent_id IN ({$agentIdList})
-      AND user_type IN (1, 2)
+    WHERE (user_id, order_id) IN ({$orderKeysSql})
+
 ) AS ord
     ON ord.order_id = f.order_id
    AND ord.user_id = f.user_id
-WHERE ord.agent_id IN ({$agentIdList})
-  AND ord.user_type IN (1, 2)
+WHERE 1 = 1
+
   AND f.user_id > 0
   AND notEmpty(f.symbol)
   AND upperUTF8(f.place_type) = 'LIQUIDATION'
@@ -622,6 +685,20 @@ FORMAT JSONEachRow
 SQL;
 
         return $this->select($sql);
+    }
+
+    private function tradedOrderKeysSql(string $database, string $startUtc, string $endUtc, bool $liquidation = false): string
+    {
+        $placeType = $liquidation ? "AND upperUTF8(place_type) = 'LIQUIDATION'" : '';
+        return <<<SQL
+SELECT user_id, order_id
+FROM {$database}.history_trade_fills
+WHERE user_id > 0
+  AND notEmpty(symbol)
+  AND traded_at >= toDateTime64('{$startUtc}', 3, 'UTC')
+  AND traded_at < toDateTime64('{$endUtc}', 3, 'UTC')
+  {$placeType}
+SQL;
     }
 
     /**
@@ -661,8 +738,8 @@ SELECT
         toString(l.normal_fee_final_shortfall), 16
     )))) AS uncollected_trading_fee
 FROM {$database}.history_account_ledgers AS l
-WHERE l.agent_id IN ({$agentIdList})
-  AND l.user_type IN (1, 2)
+WHERE 1 = 1
+
   AND l.user_id > 0
   AND notEmpty(l.symbol)
   AND notEmpty(l.ledger_id)
@@ -718,8 +795,8 @@ SELECT
     ), upperUTF8(o.position_side) = 'SHORT')) AS short_entry_amount,
     toString(sum(abs(toDecimal256OrZero(toString(o.margin_price), 16)))) AS occupied_margin
 FROM {$database}.current_position_query AS o
-WHERE o.agent_id IN ({$agentIdList})
-  AND o.user_type IN (1, 2)
+WHERE 1 = 1
+
   AND o.user_id > 0
   AND notEmpty(o.symbol)
   AND o.status IN ({$holding}, {$liquidating})

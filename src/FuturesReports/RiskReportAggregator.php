@@ -14,7 +14,7 @@ final class RiskReportAggregator
     private const FLOWS = ['liquidation_trade_amount', 'liquidation_realized_pnl', 'liquidation_fee',
         'uncollected_liquidation_fee', 'uncollected_trading_fee'];
 
-    /** Same population as the existing agent risk report: simulated USDT users only. */
+    /** USDT liquidation facts across all user types with a positive user origin. */
     public function build(string $date, iterable $facts, array $directory, bool $completed): array
     {
         $scope = new ReportUserScope($directory);
@@ -24,7 +24,7 @@ final class RiskReportAggregator
             $groups[$this->key($source, '')] = $this->emptyRow($date, $source, '', $completed);
         }
         foreach ($facts as $fact) {
-            if (!is_array($fact) || (int) ($fact['user_type'] ?? 0) !== 2
+            if (!is_array($fact)
                 || strtoupper((string) ($fact['settle_asset'] ?? 'USDT')) !== 'USDT') continue;
             $user = $scope->user($fact);
             if ($user === null) continue;
@@ -59,7 +59,7 @@ final class RiskReportAggregator
             $merchant = $scope->merchant($fact);
             $tenantId = $directory['sites'][$user['site_id']] ?? null;
             $tenant = $directory['tenants'][(string) $tenantId] ?? null;
-            $complete = $tenant !== null && ($merchant !== null || ((string) ($fact['agent_id'] ?? '') === '0' && $user['agent_id'] === '0'));
+            $complete = $tenant !== null && ($merchant !== null || !ReportUserScope::positiveId((string) $user['agent_id']));
             foreach (array_filter([$merchant, $tenant, $platform]) as $source) {
                 foreach (array_unique(['', $symbol]) as $contract) {
                     $key = $this->key($source, $contract);

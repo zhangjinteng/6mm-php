@@ -8,7 +8,7 @@ use InvalidArgumentException;
 
 class AgentFuturesHourlyFactService
 {
-    public const CALCULATION_VERSION = 11;
+    public const CALCULATION_VERSION = 13;
 
     private const INTEGER_FIELDS = [
         'order_count',
@@ -70,6 +70,7 @@ class AgentFuturesHourlyFactService
             'fillRows',
             'cancelRows',
             'commissionRows',
+            'feeRows',
             'riskRows',
             'fundingSettlementPositionRows',
             'liquidationRows',
@@ -126,13 +127,13 @@ class AgentFuturesHourlyFactService
                         0,
                         (int) ($row['commission_count'] ?? 0)
                     );
+                    $this->addDecimalFields($fact, $row, ['maker_commission', 'taker_commission']);
+                } elseif ($source === 'feeRows') {
                     $fact['fee_count'] += max(
                         0,
                         (int) ($row['fee_count'] ?? 0)
                     );
                     $this->addDecimalFields($fact, $row, [
-                        'maker_commission',
-                        'taker_commission',
                         'maker_trade_amount',
                         'taker_trade_amount',
                         'maker_handling_fee',
@@ -281,7 +282,6 @@ class AgentFuturesHourlyFactService
             $symbol = strtoupper(trim((string) ($sourceRow['symbol'] ?? '')));
             if (
                 $agentId < 0 ||
-                !in_array($userType, [0, User::USER_TYPE_NORMAL, User::USER_TYPE_SIMULATE], true) ||
                 $symbol === ''
             ) {
                 throw new InvalidArgumentException('合约小时成交汇总缺少有效的代理商、用户类型或合约');
@@ -332,9 +332,6 @@ class AgentFuturesHourlyFactService
         $rows = [];
 
         foreach ($settlementRows as $sourceRow) {
-            if ((int) ($sourceRow['user_type'] ?? 0) === User::USER_TYPE_NORMAL) {
-                continue;
-            }
 
             $row = &$this->userPnlRow($rows, $sourceRow);
             $closeOrderIds = $this->mergeIds(
@@ -376,7 +373,6 @@ class AgentFuturesHourlyFactService
         )));
         if (
             $agentId < 0 ||
-            $userType !== User::USER_TYPE_SIMULATE ||
             $userId <= 0 ||
             $settleAsset === ''
         ) {
@@ -473,11 +469,6 @@ class AgentFuturesHourlyFactService
 
         if (
             $agentId < 0 ||
-            !in_array(
-                $userType,
-                [User::USER_TYPE_NORMAL, User::USER_TYPE_SIMULATE],
-                true
-            ) ||
             $userId <= 0
         ) {
             throw new InvalidArgumentException('合约小时事实源数据缺少有效的代理商、用户或用户类型');

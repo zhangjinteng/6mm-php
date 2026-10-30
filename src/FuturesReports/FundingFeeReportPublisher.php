@@ -24,7 +24,7 @@ final class FundingFeeReportPublisher
         $ids = [];
         for ($i = 0; $i < $hours; $i++) {
             foreach ($this->hour($day->addHours($i), $sourceIds) as $row) {
-                if ((int) ($row['user_type'] ?? 0) === 2) $ids[(string) $row['user_id']] = true;
+                $ids[(string) $row['user_id']] = true;
             }
         }
         $directory = $this->directory->load(array_keys($ids));

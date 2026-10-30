@@ -27,7 +27,7 @@ final class ContractSourceService
             ])->all();
         $whiteLabels = $this->database->table($control . 'wl_tenants as tenants')
             ->join($control . 'wl_sites as sites', 'sites.tenant_id', '=', 'tenants.tenant_id')
-            ->where('sites.site_id', '>', 0)->where('sites.site_id', '<>', $this->platformHomeSiteId)
+            ->where('sites.site_id', '>', 0)
             ->distinct()->orderBy('tenants.tenant_id')->get(['tenants.tenant_id', 'tenants.tenant_name'])
             ->map(static fn (object $tenant): array => [
                 'value' => (string) $tenant->tenant_id,
@@ -39,7 +39,7 @@ final class ContractSourceService
     public function applyFilters(Builder $query, ContractSourceFilter $filter): void
     {
         if ($filter->sourceType === 'platform') {
-            $query->where('users.agent_id', 0)->where(static function (Builder $query): void {
+            $query->where(static function (Builder $query): void {
                 $query->where('users.home_site_id', 0)->orWhereNull('users.home_site_id');
             });
         } elseif ($filter->isActive()) {
@@ -48,10 +48,15 @@ final class ContractSourceService
                 return;
             }
             if ($filter->sourceType === 'merchant' || $filter->agentId !== null) {
-                $query->where('users.home_site_id', $this->platformHomeSiteId);
+                $query->where('users.home_site_id', $this->platformHomeSiteId)->where('users.agent_id', '>', 0);
             } else {
                 $query->where('users.home_site_id', '>', 0)
-                    ->where('users.home_site_id', '<>', $this->platformHomeSiteId);
+                    ->where(function (Builder $query): void {
+                        $query->where('users.home_site_id', '<>', $this->platformHomeSiteId)
+                            ->orWhere(static function (Builder $query): void {
+                                $query->where('users.agent_id', 0)->orWhereNull('users.agent_id');
+                            });
+                    });
             }
         }
         if ($filter->agentId !== null) $query->where('users.agent_id', $filter->agentId);
@@ -101,7 +106,8 @@ final class ContractSourceService
         $agents = $this->database->table($this->publicPrefix() . 'agents')
             ->whereIn('id', $ids)->whereNull('deleted_at')
             ->get(['id', 'home_site_id', 'agent_name', 'user_name'])->keyBy('id');
-        $sites = $this->sites($agents->pluck('home_site_id')->map(static fn ($id): int => (int) $id)->all());
+        $sites = $this->sites($agents->pluck('home_site_id')->map(static fn ($id): int => (int) $id)
+            ->reject(fn (int $id): bool => $id === $this->platformHomeSiteId)->all());
         foreach ($rows as &$row) {
             $id = $row['agent_id'] ?? null;
             $agent = $id === null ? null : $agents->get((string) $id);
@@ -129,8 +135,8 @@ final class ContractSourceService
         foreach ($users as $user) {
             $siteId = (int) $user->home_site_id;
             if ($this->platformHomeSiteId <= 0 || $siteId <= 0) continue;
-            if ($siteId === $this->platformHomeSiteId) {
-                if ((int) $user->agent_id > 0) $agentIds[] = (int) $user->agent_id;
+            if ($siteId === $this->platformHomeSiteId && (int) $user->agent_id > 0) {
+                $agentIds[] = (int) $user->agent_id;
             } else {
                 $siteIds[] = $siteId;
             }
@@ -142,7 +148,7 @@ final class ContractSourceService
 
         foreach ($rows as &$row) {
             $user = $users->get((string) ($row['platform_user_id'] ?? ''));
-            $this->appendMetadata($row, $this->metadata($user, $agents, $sites));
+            $this->appendMetadata($row, $this->metadata($user, $agents, $sites, userIdentity: true));
         }
         unset($row);
     }
@@ -150,7 +156,7 @@ final class ContractSourceService
     private function sites(array $siteIds): Collection
     {
         $siteIds = array_values(array_unique(array_filter($siteIds,
-            fn (int $id): bool => $this->platformHomeSiteId > 0 && $id > 0 && $id !== $this->platformHomeSiteId)));
+            fn (int $id): bool => $this->platformHomeSiteId > 0 && $id > 0)));
         if ($siteIds === []) return collect();
         $control = $this->controlPrefix();
         return $this->database->table($control . 'wl_sites as sites')
@@ -159,18 +165,19 @@ final class ContractSourceService
             ->get(['sites.site_id', 'tenants.tenant_id', 'tenants.tenant_name'])->keyBy('site_id');
     }
 
-    private function metadata(?object $identity, Collection $agents, Collection $sites): array
+    private function metadata(?object $identity, Collection $agents, Collection $sites, bool $userIdentity = false): array
     {
         $siteId = $identity?->home_site_id === null ? null : (int) $identity->home_site_id;
         $metadata = ['home_site_id' => $siteId, 'source_type' => null, 'source_id' => null, 'source_name' => '-'];
         if ($identity === null) return $metadata;
         $agentId = $identity->agent_id === null ? null : (int) $identity->agent_id;
-        if ($agentId === 0 && ($siteId === 0 || $siteId === null)) {
+        // User source rules must not reclassify hedging subjects, which have no user identity.
+        if (($userIdentity || $agentId === 0) && ($siteId === 0 || $siteId === null)) {
             $metadata['source_type'] = 'platform';
             $metadata['source_id'] = '0';
-            $metadata['source_name'] = '平台用户';
+            $metadata['source_name'] = $userIdentity && $agentId > 0 ? '异常用户' : '平台用户';
         } elseif ($this->platformHomeSiteId > 0 && $siteId > 0) {
-            if ($siteId === $this->platformHomeSiteId) {
+            if ($siteId === $this->platformHomeSiteId && (!$userIdentity || $agentId > 0)) {
                 $metadata['source_type'] = 'merchant';
                 $metadata['source_id'] = $agentId > 0 ? (string) $agentId : null;
                 $agent = $agents->get($agentId);

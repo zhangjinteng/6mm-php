@@ -12,6 +12,7 @@ use SixMm\Shared\FuturesReports\PositionReportStore;
 use SixMm\Shared\FuturesReports\PositionReportLegacyBackfill;
 use SixMm\Shared\FuturesReports\SourceDirectory;
 use SixMm\Shared\FuturesReports\Legacy\AgentFuturesFactRedisRepository;
+use SixMm\Shared\FuturesReports\Legacy\AgentFuturesHourlyFactService;
 
 require dirname(__DIR__) . '/vendor/autoload.php';
 if (!function_exists('config')) {
@@ -73,7 +74,7 @@ $snapshot = static function (string $at, string $amount): array {
     $base = ['agent_id' => 1, 'user_type' => 2, 'user_id' => '11', 'symbol' => 'BTCUSDT',
         'long_position_amount' => $amount, 'short_position_amount' => '0', 'closing_position_amount' => $amount,
         'occupied_margin' => '10', 'unrealized_pnl' => '-1'];
-    return ['status' => 'completed', 'snapshot_at' => $at, 'rows' => [
+    return ['status' => 'completed', 'calculation_version' => AgentFuturesHourlyFactService::CALCULATION_VERSION, 'snapshot_at' => $at, 'rows' => [
         $base, array_merge($base, ['symbol' => 'ETHUSDT', 'long_position_amount' => '0', 'short_position_amount' => '40', 'closing_position_amount' => '40', 'occupied_margin' => '20', 'unrealized_pnl' => '2']),
         array_merge($base, ['agent_id' => 2, 'user_id' => '12', 'symbol' => 'BTCUSDT', 'long_position_amount' => '25', 'closing_position_amount' => '25', 'occupied_margin' => '5']),
         array_merge($base, ['agent_id' => 0, 'user_id' => '13', 'symbol' => 'BTCUSDT', 'long_position_amount' => '5', 'closing_position_amount' => '5', 'occupied_margin' => '1']),
@@ -84,23 +85,33 @@ $store = new PositionReportStore($db);
 $publisher = new PositionReportPublisher($directory, $store);
 $publisher->publish('2026-10-09', $snapshot('2026-10-10 00:00:01', '100'), true);
 $merchant = $store->search(['start_date' => '2026-10-09', 'end_date' => '2026-10-09'], '1')['lists'][0];
-checkPosition((int) $merchant['position_user_count'] === 1 && (int) $merchant['long_position_user_count'] === 1
+checkPosition((int) $merchant['position_user_count'] === 2 && (int) $merchant['long_position_user_count'] === 2
     && (int) $merchant['short_position_user_count'] === 1, 'One user may hold both sides and multiple symbols');
-checkPosition($merchant['closing_position_amount'] === '140', 'Merchant must not include another-site user');
-checkPosition($merchant['average_leverage'] === '4.66666666', 'Leverage uses total notional / occupied margin');
+checkPosition($merchant['closing_position_amount'] === '1139', 'Merchant includes all users with its agent ID regardless of site');
+checkPosition(bccomp($merchant['average_leverage'], '28.47500000', 8) === 0, 'Leverage uses total notional / occupied margin (1139 / 40)');
 $tenant = $store->search(['start_date' => '2026-10-09', 'end_date' => '2026-10-09', 'source_type' => 'tenant'])['lists'][0];
 checkPosition((int) $tenant['position_user_count'] === 4 && $tenant['closing_position_amount'] === '1169',
-    'Tenant follows user site origin even when merchant attribution conflicts');
-checkPosition((int) $tenant['stat_status'] === 2, 'Conflicting merchant attribution marks the tenant partial');
+    'Tenant follows user site origin independently of merchant site');
+checkPosition((int) $tenant['stat_status'] === 1, 'Cross-site merchant attribution does not mark a complete snapshot partial');
 $btc = $store->search(['start_date' => '2026-10-09', 'end_date' => '2026-10-09', 'symbol' => 'BTC', 'source_type' => 'platform'])['lists'][0];
 checkPosition((int) $btc['position_user_count'] === 4 && $btc['closing_position_amount'] === '1129', 'Symbol filter uses its own snapshot counts');
 $store->replace('2026-10-10', (new PositionReportAggregator())->build('2026-10-10',
     $snapshot('2026-10-10 12:00:00', '50'), $directory->load(['11', '12', '13', '14']), false));
 $month = $store->search(['period' => 'month', 'start_date' => '2026-10-09', 'end_date' => '2026-10-10'], '1')['lists'][0];
-checkPosition($month['stat_date'] === '2026-10' && $month['closing_position_amount'] === '90'
+checkPosition($month['stat_date'] === '2026-10' && $month['closing_position_amount'] === '1089'
     && (int) $month['stat_status'] === 0, 'Monthly report uses the latest snapshot, not a sum');
 try { $publisher->publish('2026-10-08', $snapshot('2026-10-10 12:00:00', '50'), true); throw new RuntimeException('Accepted a live snapshot as historical'); }
 catch (InvalidArgumentException $e) {}
+$beforeLegacyAttempt = $store->search(['start_date' => '2026-10-09', 'end_date' => '2026-10-09'], '1');
+foreach ([null, AgentFuturesHourlyFactService::CALCULATION_VERSION - 1] as $version) {
+    $legacySnapshot = $snapshot('2026-10-10 00:00:01', '9999');
+    if ($version === null) unset($legacySnapshot['calculation_version']);
+    else $legacySnapshot['calculation_version'] = $version;
+    try { $publisher->publish('2026-10-09', $legacySnapshot, true); throw new RuntimeException('Accepted a legacy partial-user snapshot'); }
+    catch (InvalidArgumentException $e) { checkPosition(str_contains($e->getMessage(), '旧统计口径'), 'Legacy snapshots must fail the version guard'); }
+    checkPosition($store->search(['start_date' => '2026-10-09', 'end_date' => '2026-10-09'], '1') === $beforeLegacyAttempt,
+        'Rejected legacy snapshots preserve the last published report');
+}
 checkPosition($store->search(['start_date' => '2026-10-09', 'end_date' => '2026-10-10', 'source_type' => 'merchant', 'source_keyword' => 'Merchant 2'])['count'] === 2,
     'Platform source search filters the published scope');
 $db->table('admin_agent_futures_user_symbol_daily')->insert([

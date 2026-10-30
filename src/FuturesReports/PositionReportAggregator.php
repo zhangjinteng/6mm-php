@@ -27,14 +27,11 @@ final class PositionReportAggregator
         $incompleteOrigin = false;
         foreach ($snapshot['rows'] as $fact) {
             $user = $scope->user($fact);
-            if ($user === null) {
-                $incompleteOrigin = true;
-                continue;
-            }
+            if ($user === null) continue; // Excluded origins do not make the eligible cohort incomplete.
             $agent = $scope->merchant($fact);
             $tenantId = $directory['sites'][$user['site_id']] ?? null;
             $tenant = $directory['tenants'][(string) $tenantId] ?? null;
-            $complete = $tenant !== null && ($agent !== null || ((string) ($fact['agent_id'] ?? '') === '0' && $user['agent_id'] === '0'));
+            $complete = $tenant !== null && ($agent !== null || !ReportUserScope::positiveId((string) $user['agent_id']));
             if (!$complete) $incompleteOrigin = true;
             foreach (array_filter([$agent, $tenant, $platform]) as $source) {
                 foreach (array_unique(['', (string) ($fact['symbol'] ?? '')]) as $symbol) {

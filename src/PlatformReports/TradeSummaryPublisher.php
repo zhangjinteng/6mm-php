@@ -25,23 +25,8 @@ final class TradeSummaryPublisher
             static fn (string $id): bool => preg_match('/^[1-9]\d*$/D', $id) === 1)));
         $directory = (new SourceDirectory($this->db))->load($ids);
         $public = $this->db->getDriverName() === 'pgsql' ? 'public.' : '';
-        foreach (array_chunk($ids, 1000) as $chunk) {
-            foreach ($this->db->table($public . 'users')->whereIn('user_id', $chunk)->get(['user_id', 'user_type']) as $user) {
-                if (isset($directory['users'][(string) $user->user_id])) $directory['users'][(string) $user->user_id]['user_type'] = (int) $user->user_type;
-            }
-        }
-        $agents = $this->db->table($public . 'agents')->whereNull('deleted_at')->pluck('pid', 'id')->all();
-        $directory['roots'] = [];
-        foreach ($agents as $id => $_) {
-            $root = (string) $id; $seen = [];
-            while (isset($agents[$root]) && (string) $agents[$root] !== '0') {
-                if (isset($seen[$root])) { $root = ''; break; }
-                $seen[$root] = true; $root = (string) $agents[$root];
-            }
-            if (isset($directory['agents'][$root])) $directory['roots'][(string) $id] = $root;
-        }
         $query = $this->db->table($public . TradeReportSchema::TABLE)->where('stat_date', $date)->where('symbol', '')
-            ->select(['source_type', 'source_id', 'trading_user_count', 'fill_count', 'status'])
+            ->select(['source_type', 'source_id', 'source_code', 'source_name', 'trading_user_count', 'fill_count', 'status'])
             ->selectRaw('CAST(trade_amount AS TEXT) AS trade_amount');
         // Project only user identities, never decode the very large execution/order JSON maps.
         $query->selectRaw($this->db->getDriverName() === 'pgsql'

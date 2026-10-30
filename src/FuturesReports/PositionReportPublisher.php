@@ -13,6 +13,9 @@ final class PositionReportPublisher
 
     public function publish(string $date, array $snapshot, bool $completed): int
     {
+        if ((int) ($snapshot['calculation_version'] ?? 0) < Legacy\AgentFuturesHourlyFactService::CALCULATION_VERSION) {
+            throw new InvalidArgumentException('持仓快照使用旧统计口径，不能作为全用户类型的持仓报表发布');
+        }
         $day = CarbonImmutable::createFromFormat('!Y-m-d', $date, 'UTC');
         if (!$day || $day->toDateString() !== $date) throw new InvalidArgumentException('统计日期格式错误');
         if (!$completed && $date !== CarbonImmutable::now('UTC')->toDateString()) {

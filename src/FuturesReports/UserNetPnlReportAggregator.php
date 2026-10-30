@@ -27,7 +27,7 @@ final class UserNetPnlReportAggregator
                 throw new InvalidArgumentException('用户净盈亏小时事实格式无效');
             }
             $fact = $item['row'];
-            if ((int) ($fact['user_type'] ?? 0) !== 2 || strtoupper((string) ($fact['settle_asset'] ?? '')) !== 'USDT') continue;
+            if (strtoupper((string) ($fact['settle_asset'] ?? '')) !== 'USDT') continue;
             $userId = (string) ($fact['user_id'] ?? '');
             if (!ReportUserScope::positiveId($userId)) throw new InvalidArgumentException('用户净盈亏事实缺少有效用户ID');
             $user = $scope->user($fact);
@@ -35,8 +35,9 @@ final class UserNetPnlReportAggregator
             $merchant = $scope->merchant($fact);
             $tenantId = $directory['sites'][(string) $user['site_id']] ?? null;
             $tenant = $directory['tenants'][(string) $tenantId] ?? null;
-            $complete = $tenant !== null && ($merchant !== null || ((string) ($fact['agent_id'] ?? '') === '0' && (string) $user['agent_id'] === '0'));
+            $complete = $tenant !== null && ($merchant !== null || !ReportUserScope::positiveId((string) $user['agent_id']));
             foreach (array_filter([$merchant, $tenant, $platform]) as $source) {
+                $groups[$this->key($source)] ??= $this->emptyRow($date, $source, $completed);
                 $group = &$groups[$this->key($source)];
                 $group['users'][$userId] ??= $this->emptyUser();
                 $metric = &$group['users'][$userId];
