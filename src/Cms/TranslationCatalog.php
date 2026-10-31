@@ -6,7 +6,7 @@ namespace SixMm\Shared\Cms;
 
 use Illuminate\Validation\ValidationException;
 
-final class TranslationCatalog
+class TranslationCatalog
 {
     public const LOCALES = [
         'zh-CN' => ['简体中文', '简体中文', '🇨🇳'],

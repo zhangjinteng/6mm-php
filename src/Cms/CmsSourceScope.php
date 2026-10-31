@@ -10,7 +10,7 @@ use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\ValidationException;
 
 /** Content ownership is a space dimension, never a submitting user's source. */
-final class CmsSourceScope
+class CmsSourceScope
 {
     private array $spaces;
     private array $filters;
@@ -18,7 +18,7 @@ final class CmsSourceScope
     public bool $browse;
     public ?object $selected = null;
 
-    public function __construct(Connection $db, array $input, string $action, string $module)
+    public function __construct(Connection $db, array $input, string $action, string $module, ?array $allowedSpaceIds = null)
     {
         $this->filters = Validator::make($input, [
             'cms_source_type' => 'nullable|in:platform,white_label',
@@ -32,15 +32,17 @@ final class CmsSourceScope
                 $q->where(function (Builder $q): void { $q->where('s.space_type', 'template')->where('s.template_key', 'default'); })
                     ->orWhere('s.space_type', 'site');
             })->select(['s.*', 'wt.tenant_id as cms_tenant_id', 'wt.tenant_name as cms_tenant_name'])
+            ->when($allowedSpaceIds !== null, fn (Builder $q) => $q->whereIn('s.id', $allowedSpaceIds)->where('s.space_type', 'site'))
             ->get()->keyBy('id')->all();
         // Resolve names in one batch; never use updated_by_name (the last editor)
         // or the space creator as a substitute for the record's original creator.
-        foreach ($db->table('public.admin')->get(['id', 'name', 'account']) as $admin) {
+        foreach (($allowedSpaceIds === null ? $db->table('public.admin')->get(['id', 'name', 'account']) : []) as $admin) {
             $this->creatorNames[(string) $admin->id] = trim((string) $admin->name)
                 ?: (trim((string) $admin->account) ?: '—');
         }
         $this->browse = in_array($action, ['categories', 'articles', 'courses', 'metadata', 'listing'], true);
         $id = $this->filters['space_id'] ?? null;
+        if ($allowedSpaceIds !== null && ($id === null || !in_array((int) $id, $allowedSpaceIds, true))) $this->fail();
         if (!$this->browse && !empty($input['id'])) {
             $identity = Validator::make($input, ['id' => 'required|integer|min:1'])->validate();
             $table = $module === 'feedback' ? 'feedback' : (stripos($action, 'categor') !== false ? 'categories' : 'contents');

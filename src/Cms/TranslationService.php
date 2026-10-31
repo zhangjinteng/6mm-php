@@ -9,13 +9,15 @@ use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
-final class TranslationService
+class TranslationService
 {
     private Connection $db;
+    private ?array $allowedSpaceIds;
 
-    public function __construct(?Connection $db = null)
+    public function __construct(?Connection $db = null, ?array $allowedSpaceIds = null)
     {
         $this->db = $db ?? DB::connection('pgsql');
+        $this->allowedSpaceIds = $allowedSpaceIds;
     }
 
     public function connection(): Connection
@@ -29,7 +31,8 @@ final class TranslationService
             $q->where('s.space_type', 'site')->orWhere(function (Builder $q): void {
                 $q->where('s.space_type', 'template')->where('s.template_key', 'default');
             });
-        })->orderByRaw("CASE WHEN s.space_type='template' THEN 0 ELSE 1 END")->orderBy('s.id')->get([
+        })->when($this->allowedSpaceIds !== null, fn (Builder $q) => $q->whereIn('s.id', $this->allowedSpaceIds)->where('s.space_type', 'site'))
+            ->orderByRaw("CASE WHEN s.space_type='template' THEN 0 ELSE 1 END")->orderBy('s.id')->get([
             's.id',
             's.space_type',
             's.name',
@@ -290,11 +293,12 @@ final class TranslationService
 
     public function space(int $id, bool $lock = false): object
     {
+        if ($this->allowedSpaceIds !== null && !in_array($id, $this->allowedSpaceIds, true)) $this->fail('内容空间不存在');
         $q = $this->db->table('cms.spaces')->where('id', $id)->where(function (Builder $q): void {
             $q->where('space_type', 'site')->orWhere(function (Builder $q): void {
                 $q->where('space_type', 'template')->where('template_key', 'default');
             });
-        })->selectRaw('*, array_to_json(enabled_locales)::text as locales_json');
+        })->when($this->allowedSpaceIds !== null, fn (Builder $q) => $q->where('space_type', 'site'))->selectRaw('*, array_to_json(enabled_locales)::text as locales_json');
         $s = ($lock ? $q->lockForUpdate() : $q)->first();
         if (!$s) {
             $this->fail('内容空间不存在');

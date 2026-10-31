@@ -12,7 +12,7 @@ use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
-final class HelpService
+class HelpService
 {
     use HasCmsSourceScope;
 
@@ -58,6 +58,7 @@ final class HelpService
 
     private function space(): ?object
     {
+        if ($this->cmsPublishingSpace !== null) return $this->cmsPublishingSpace;
         if ($this->cmsSourceScope?->selected !== null) return $this->cmsSourceScope->selected;
         return $this->db()->table('cms.spaces')->where('space_type', 'template')
             ->where('template_key', 'default')->first();
@@ -434,6 +435,19 @@ final class HelpService
 
     public function publishDue(): array
     {
+        if ($this->cmsSourceScope === null && $this->cmsPublishingSpace === null) {
+            $totals = ['published' => 0, 'skipped' => 0];
+            $spaces = $this->db()->table('cms.spaces')->where('is_enabled', true)->where(function (Builder $q): void {
+                $q->where('space_type', 'site')->orWhere(function (Builder $q): void { $q->where('space_type', 'template')->where('template_key', 'default'); });
+            })->get();
+            foreach ($spaces as $publishingSpace) {
+                $publisher = new self();
+                $publisher->cmsPublishingSpace = $publishingSpace;
+                $counts = $publisher->publishDue();
+                foreach ($totals as $key => $value) $totals[$key] += $counts[$key];
+            }
+            return $totals;
+        }
         $space = $this->space();
         $counts = ['published' => 0, 'skipped' => 0];
         if (!$space || !$space->is_enabled) {

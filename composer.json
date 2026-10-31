@@ -4,6 +4,8 @@
     "type": "library",
     "license": "proprietary",
     "require": {
+        "ezyang/htmlpurifier": "^4.18",
+        "ext-dom": "*",
         "brick/math": "^0.9.3 || ^0.10 || ^0.11 || ^0.12 || ^0.13 || ^0.14",
         "illuminate/validation": "^8.75",
         "php": "^8.2",

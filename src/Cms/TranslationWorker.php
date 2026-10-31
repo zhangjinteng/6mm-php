@@ -9,7 +9,7 @@ use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Str;
 use Throwable;
 
-final class TranslationWorker
+class TranslationWorker
 {
     private TranslationService $s;
     private GoogleTranslationClient $google;

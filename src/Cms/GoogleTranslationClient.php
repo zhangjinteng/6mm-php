@@ -8,7 +8,7 @@ use Illuminate\Support\Facades\Http;
 use RuntimeException;
 use Throwable;
 
-final class GoogleTranslationClient
+class GoogleTranslationClient
 {
 
     public function configured(): bool

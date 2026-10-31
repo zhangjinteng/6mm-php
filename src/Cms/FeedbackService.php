@@ -11,13 +11,13 @@ use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\ValidationException;
 
-final class FeedbackService
+class FeedbackService
 {
     use HasCmsSourceScope;
 
     private function db(): \Illuminate\Database\Connection { return DB::connection('pgsql'); }
 
-    /** Platform-admin only. Reuse this exact scope for list, details and attachments. */
+    /** Reuse the same content-space restriction for list, details and attachments. */
     private function query(): Builder
     {
         $query = DB::connection('pgsql')->table('cms.feedback as f')

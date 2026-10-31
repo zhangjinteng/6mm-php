@@ -6,7 +6,7 @@ namespace SixMm\Shared\Cms;
 
 use Illuminate\Database\Query\Builder;
 
-final class TranslationJobs
+class TranslationJobs
 {
     private TranslationService $service;
 

@@ -12,7 +12,7 @@ use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
-final class AcademyService
+class AcademyService
 {
     use HasCmsSourceScope;
 
@@ -20,6 +20,7 @@ final class AcademyService
 
     private function space(): ?object
     {
+        if ($this->cmsPublishingSpace !== null) return $this->cmsPublishingSpace;
         if ($this->cmsSourceScope?->selected !== null) return $this->cmsSourceScope->selected;
         return $this->db()->table('cms.spaces')->where('space_type', 'template')->where('template_key', 'default')->first();
     }
@@ -315,6 +316,19 @@ final class AcademyService
 
     public function publishDue(): array
     {
+        if ($this->cmsSourceScope === null && $this->cmsPublishingSpace === null) {
+            $totals = ['published' => 0, 'skipped' => 0];
+            $spaces = $this->db()->table('cms.spaces')->where('is_enabled', true)->where(function (Builder $q): void {
+                $q->where('space_type', 'site')->orWhere(function (Builder $q): void { $q->where('space_type', 'template')->where('template_key', 'default'); });
+            })->get();
+            foreach ($spaces as $publishingSpace) {
+                $publisher = new self();
+                $publisher->cmsPublishingSpace = $publishingSpace;
+                $counts = $publisher->publishDue();
+                foreach ($totals as $key => $value) $totals[$key] += $counts[$key];
+            }
+            return $totals;
+        }
         $space = $this->space();
         if (!$space || !$space->is_enabled) return ['published' => 0, 'skipped' => 0];
         // Page by ID so invalid scheduled entries cannot starve later valid courses.
