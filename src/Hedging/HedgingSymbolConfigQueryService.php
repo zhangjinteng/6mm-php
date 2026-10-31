@@ -10,8 +10,11 @@ use SixMm\Shared\Contracts\UserDataScope;
 
 final class HedgingSymbolConfigQueryService
 {
+    private bool $ownerAware;
+
     public function __construct(private ConnectionInterface $connection)
     {
+        $this->ownerAware = $connection->getSchemaBuilder()->hasColumn('hedge_configs', 'owner_type');
     }
 
     /**
@@ -26,6 +29,9 @@ final class HedgingSymbolConfigQueryService
             ->leftJoin('exchange_accounts as account', function ($join): void {
                 $join->on('account.id', '=', 'config.exchange_account_id')
                     ->whereNull('account.deleted_at');
+                if ($this->ownerAware) {
+                    $join->on('account.owner_type', '=', 'config.owner_type')->on('account.owner_id', '=', 'config.owner_id');
+                }
             })
             ->whereNull('config.deleted_at')
             ->where('config.source', 'platform');
@@ -55,6 +61,7 @@ final class HedgingSymbolConfigQueryService
         $total = (clone $query)->count();
         $rows = $query
             ->select([
+                ...($this->ownerAware ? ['config.owner_type', 'config.owner_id'] : []),
                 'config.id', 'config.agent_id', 'config.exchange_account_id',
                 'config.symbol', 'config.target_symbol', 'config.target_hedge_ratio',
                 'config.hedge_unit', 'config.first_trigger_usdt', 'config.rebalance_usdt',
@@ -77,11 +84,15 @@ final class HedgingSymbolConfigQueryService
             ->join('exchange_accounts as account', function ($join): void {
                 $join->on('account.id', '=', 'config.exchange_account_id')
                     ->whereNull('account.deleted_at');
+                if ($this->ownerAware) {
+                    $join->on('account.owner_type', '=', 'config.owner_type')->on('account.owner_id', '=', 'config.owner_id');
+                }
             })
             ->whereNull('config.deleted_at')
             ->where('config.source', 'platform');
         $scope->apply($optionQuery, 'config.agent_id');
         $options = $optionQuery->select([
+            ...($this->ownerAware ? ['account.owner_type', 'account.owner_id'] : []),
             'account.id', 'account.name', 'account.exchange', 'account.sandbox',
             'account.is_primary',
         ])->distinct()->orderBy('account.exchange')->orderBy('account.name')->get();
@@ -92,6 +103,7 @@ final class HedgingSymbolConfigQueryService
             'options' => [
                 'accounts' => $options->map(static fn (object $account): array => [
                     'id' => (int) $account->id,
+                    ...((isset($account->owner_type)) ? ['owner_type' => (string) $account->owner_type, 'owner_id' => (int) $account->owner_id] : []),
                     'name' => (string) $account->name,
                     'exchange' => (string) $account->exchange,
                     'sandbox' => (bool) $account->sandbox,
@@ -107,6 +119,8 @@ final class HedgingSymbolConfigQueryService
     {
         return [
             'agent_id' => (int) $row->agent_id,
+            'owner_type' => (string) ($row->owner_type ?? 'merchant'),
+            'owner_id' => (int) ($row->owner_id ?? $row->agent_id),
             'config_id' => (int) $row->id,
             'configured' => true,
             'symbol' => (string) $row->symbol,

@@ -36,8 +36,11 @@ final class HedgingExecutionQueryService
         'net exposure is below exit threshold' => 'exit_hedge',
     ];
 
+    private bool $ownerAware;
+
     public function __construct(private ConnectionInterface $connection)
     {
+        $this->ownerAware = $connection->getSchemaBuilder()->hasColumn('order_plans', 'owner_type');
     }
 
     /** @return array<string, mixed> */
@@ -71,6 +74,7 @@ final class HedgingExecutionQueryService
         $total = (clone $query)->count();
         $rows = $query
             ->select([
+                ...($this->ownerAware ? ['plan.owner_type', 'plan.owner_id'] : []),
                 'plan.id',
                 'plan.agent_id',
                 'plan.idempotency_key',
@@ -123,7 +127,12 @@ final class HedgingExecutionQueryService
     {
         return $this->connection->table('order_plans as plan')
             ->join('order_executions as execution', 'execution.order_plan_id', '=', 'plan.id')
-            ->leftJoin('hedge_configs as config', 'config.id', '=', 'plan.config_id');
+            ->leftJoin('hedge_configs as config', function ($join): void {
+                $join->on('config.id', '=', 'plan.config_id');
+                if ($this->ownerAware) {
+                    $join->on('config.owner_type', '=', 'plan.owner_type')->on('config.owner_id', '=', 'plan.owner_id');
+                }
+            });
     }
 
     /** @return array<string, mixed> */
@@ -135,6 +144,8 @@ final class HedgingExecutionQueryService
         return [
             'id' => (int) $row->id,
             'agent_id' => (int) $row->agent_id,
+            'owner_type' => (string) ($row->owner_type ?? 'merchant'),
+            'owner_id' => (int) ($row->owner_id ?? $row->agent_id),
             'task_no' => (string) $row->idempotency_key,
             'symbol' => $this->displaySymbol((string) ($row->config_symbol ?: $row->target_symbol)),
             'target_symbol' => (string) $row->target_symbol,
@@ -208,6 +219,7 @@ final class HedgingExecutionQueryService
     {
         return $query
             ->select([
+                ...($this->ownerAware ? ['plan.owner_type', 'plan.owner_id'] : []),
                 'plan.agent_id',
                 'plan.exchange_account_id as value',
                 'plan.exchange',
@@ -220,6 +232,8 @@ final class HedgingExecutionQueryService
             ->get()
             ->map(static fn (object $row): array => [
                 'agent_id' => (int) $row->agent_id,
+                'owner_type' => (string) ($row->owner_type ?? 'merchant'),
+                'owner_id' => (int) ($row->owner_id ?? $row->agent_id),
                 'label' => implode(' · ', array_filter([
                     (string) $row->exchange,
                     (string) $row->account_name,

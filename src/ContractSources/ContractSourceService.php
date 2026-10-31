@@ -108,9 +108,29 @@ final class ContractSourceService
             ->get(['id', 'home_site_id', 'agent_name', 'user_name'])->keyBy('id');
         $sites = $this->sites($agents->pluck('home_site_id')->map(static fn ($id): int => (int) $id)
             ->reject(fn (int $id): bool => $id === $this->platformHomeSiteId)->all());
+        $tenantIds = array_values(array_unique(array_map(
+            static fn (array $row): int => (int) $row['owner_id'],
+            array_filter($rows, static fn (array $row): bool => ($row['owner_type'] ?? '') === 'tenant' && ($row['owner_id'] ?? 0) > 0)
+        )));
+        $tenants = $tenantIds === [] ? collect() : $this->database->table($this->controlPrefix() . 'wl_tenants')
+            ->whereIn('tenant_id', $tenantIds)->get(['tenant_id', 'tenant_name'])->keyBy('tenant_id');
         foreach ($rows as &$row) {
             $id = $row['agent_id'] ?? null;
             $agent = $id === null ? null : $agents->get((string) $id);
+            if (isset($row['owner_type'], $row['owner_id'])) {
+                $ownerId = (int) $row['owner_id'];
+                $tenant = $row['owner_type'] === 'tenant';
+                $name = $tenant ? trim((string) ($tenants->get($ownerId)?->tenant_name ?? ''))
+                    : ($ownerId === 0 ? '平台用户' : (trim((string) ($agent?->agent_name ?? '')) ?: trim((string) ($agent?->user_name ?? ''))));
+                $this->appendMetadata($row, [
+                    'home_site_id' => $tenant ? null : ($agent?->home_site_id ?? 0),
+                    'source_type' => $tenant ? 'white_label' : ($ownerId === 0 ? 'platform' : 'merchant'),
+                    'source_id' => (string) $ownerId,
+                    'source_name' => $name ?: '-',
+                ]);
+                $row['agent_name'] = $name ?: '-';
+                continue;
+            }
             $identity = $id !== null && (string) $id === '0'
                 ? (object) ['agent_id' => 0, 'home_site_id' => 0]
                 : ($agent === null ? null : (object) ['agent_id' => $agent->id, 'home_site_id' => $agent->home_site_id]);

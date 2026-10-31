@@ -17,8 +17,11 @@ final class HedgingSubjectConfigQueryService
         'account_abnormal' => '账户异常',
     ];
 
+    private bool $ownerAware;
+
     public function __construct(private ConnectionInterface $connection)
     {
+        $this->ownerAware = $connection->getSchemaBuilder()->hasColumn('hedging_settings', 'owner_type');
     }
 
     /** @return array<string, mixed> */
@@ -30,17 +33,18 @@ final class HedgingSubjectConfigQueryService
             $query->where('setting.enabled', $criteria->enabled() === '1');
         }
 
-        $settings = $query->select(['setting.agent_id', 'setting.enabled', 'setting.updated_at'])
+        $settings = $query->select(array_merge(['setting.agent_id', 'setting.enabled', 'setting.updated_at'],
+            $this->ownerAware ? ['setting.owner_type', 'setting.owner_id'] : []))
             ->orderBy('setting.agent_id')
             ->get();
         $agentIds = $settings->pluck('agent_id')->map(static fn ($id): int => (int) $id)->all();
-        $accounts = $this->accounts($agentIds)->groupBy('agent_id');
-        $configs = $this->configs($agentIds)->groupBy('agent_id');
+        $accounts = $this->accounts($agentIds)->groupBy(fn (object $row): string => $this->ownerKey($row));
+        $configs = $this->configs($agentIds)->groupBy(fn (object $row): string => $this->ownerKey($row));
 
         $rows = $settings->map(fn (object $setting): array => $this->mapRow(
             $setting,
-            $accounts->get($setting->agent_id, collect()),
-            $configs->get($setting->agent_id, collect())
+            $accounts->get($this->ownerKey($setting), collect()),
+            $configs->get($this->ownerKey($setting), collect())
         ));
         if ($criteria->status() !== '') {
             $rows = $rows->where('status', $criteria->status());
@@ -59,7 +63,8 @@ final class HedgingSubjectConfigQueryService
         return $this->connection->table('exchange_accounts')
             ->whereIn('agent_id', $agentIds)
             ->whereNull('deleted_at')
-            ->get(['id', 'agent_id', 'exchange', 'name', 'status', 'metadata', 'updated_at']);
+            ->get(array_merge(['id', 'agent_id', 'exchange', 'name', 'status', 'metadata', 'updated_at'],
+                $this->ownerAware ? ['owner_type', 'owner_id'] : []));
     }
 
     private function configs(array $agentIds): Collection
@@ -71,7 +76,13 @@ final class HedgingSubjectConfigQueryService
             ->where('source', 'platform')
             ->where('enabled', true)
             ->whereNull('deleted_at')
-            ->get(['agent_id', 'exchange_account_id', 'symbol', 'updated_at']);
+            ->get(array_merge(['agent_id', 'exchange_account_id', 'symbol', 'updated_at'],
+                $this->ownerAware ? ['owner_type', 'owner_id'] : []));
+    }
+
+    private function ownerKey(object $row): string
+    {
+        return ($row->owner_type ?? 'merchant') . ':' . ($row->owner_id ?? $row->agent_id);
     }
 
     /** @return array<string, mixed> */
@@ -101,6 +112,8 @@ final class HedgingSubjectConfigQueryService
 
         return [
             'agent_id' => (int) $setting->agent_id,
+            'owner_type' => (string) ($setting->owner_type ?? 'merchant'),
+            'owner_id' => (int) ($setting->owner_id ?? $setting->agent_id),
             'global_enabled' => $enabled,
             'exchanges' => $executionAccounts->pluck('exchange')->filter()->unique()->values()->all(),
             'accounts' => $executionAccounts->map(static fn (object $account): array => [
