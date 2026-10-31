@@ -25,8 +25,11 @@ final class HedgingMonitorQueryService
         'execution_failed' => '执行失败',
     ];
 
-    public function __construct(private ConnectionInterface $connection)
+    private bool $ownerAware;
+
+    public function __construct(private ConnectionInterface $connection, ?bool $ownerAware = null)
     {
+        $this->ownerAware = $ownerAware ?? $connection->getSchemaBuilder()->hasColumn('hedge_monitor_snapshots', 'owner_type');
     }
 
     /** @return array<string, mixed> */
@@ -41,10 +44,10 @@ final class HedgingMonitorQueryService
         $scopedRows = $this->connection->query()
             ->fromSub($configured->unionAll($unconfigured), 'monitor_rows');
 
-        $summary = $this->summary((clone $scopedRows)->get([
+        $summary = $this->summary((clone $scopedRows)->get(array_merge($this->ownerAware ? ['owner_type', 'owner_id'] : [], [
             'agent_id', 'source', 'symbol', 'net_notional_usdt',
             'target_hedge_usdt', 'actual_hedge_usdt', 'calculated_at',
-        ]));
+        ])));
 
         $query = clone $scopedRows;
         if ($criteria->keyword() !== '') {
@@ -94,7 +97,10 @@ final class HedgingMonitorQueryService
     {
         return $this->connection->table('hedge_monitor_snapshots as monitor')
             ->leftJoin('hedge_configs as config', 'config.id', '=', 'monitor.config_id')
-            ->leftJoin('hedging_settings as setting', 'setting.agent_id', '=', 'monitor.agent_id')
+            ->leftJoin('hedging_settings as setting', function ($join): void {
+                if ($this->ownerAware) $join->on('setting.owner_type', '=', 'monitor.owner_type')->on('setting.owner_id', '=', 'monitor.owner_id');
+                else $join->on('setting.agent_id', '=', 'monitor.agent_id');
+            })
             ->select(array_map(
                 static fn (string $column): string => 'monitor.' . $column,
                 array_merge(['agent_id'], $this->resultColumns())
@@ -106,16 +112,20 @@ final class HedgingMonitorQueryService
     private function unconfiguredRows(): Builder
     {
         return $this->connection->table('exposure_snapshots as exposure')
-            ->leftJoin('hedging_settings as setting', 'setting.agent_id', '=', 'exposure.agent_id')
+            ->leftJoin('hedging_settings as setting', function ($join): void {
+                if ($this->ownerAware) $join->on('setting.owner_type', '=', 'exposure.owner_type')->on('setting.owner_id', '=', 'exposure.owner_id');
+                else $join->on('setting.agent_id', '=', 'exposure.agent_id');
+            })
             ->where('exposure.net_quantity', '<>', 0)
-            ->whereNotExists(static function (Builder $query): void {
+            ->whereNotExists(function (Builder $query): void {
                 $query->selectRaw('1')
                     ->from('hedge_monitor_snapshots as configured')
                     ->whereColumn('configured.agent_id', 'exposure.agent_id')
                     ->whereRaw('LOWER(TRIM(configured.source)) = LOWER(TRIM(exposure.source))')
                     ->whereRaw('UPPER(TRIM(configured.symbol)) = UPPER(TRIM(exposure.symbol))');
+                if ($this->ownerAware) $query->whereColumn('configured.owner_type', 'exposure.owner_type')->whereColumn('configured.owner_id', 'exposure.owner_id');
             })
-            ->selectRaw("exposure.agent_id,
+            ->selectRaw("exposure.agent_id," . ($this->ownerAware ? ' exposure.owner_type, exposure.owner_id,' : '') . "
                 -exposure.id AS id,
                 0 AS config_id,
                 0 AS exchange_account_id,
@@ -148,7 +158,7 @@ final class HedgingMonitorQueryService
     /** @return string[] */
     private function resultColumns(): array
     {
-        return [
+        return array_merge($this->ownerAware ? ['owner_type', 'owner_id'] : [], [
             'id', 'config_id', 'exchange_account_id', 'source', 'symbol',
             'target_symbol', 'exchange', 'account_name', 'net_quantity',
             'long_quantity', 'short_quantity', 'net_notional_usdt',
@@ -156,7 +166,7 @@ final class HedgingMonitorQueryService
             'actual_hedge_quantity', 'switch_status', 'health_status',
             'action_status', 'status', 'status_reason', 'exposure_observed_at',
             'position_observed_at', 'calculated_at', 'updated_at',
-        ];
+        ]);
     }
 
     /** @return array<string, mixed> */
@@ -164,6 +174,8 @@ final class HedgingMonitorQueryService
     {
         $status = (string) $row->status;
         return [
+            'owner_type' => (string) ($row->owner_type ?? 'merchant'),
+            'owner_id' => (int) ($row->owner_id ?? $row->agent_id),
             'agent_id' => (int) $row->agent_id,
             'id' => (int) $row->id,
             'config_id' => (int) $row->config_id,
@@ -201,7 +213,7 @@ final class HedgingMonitorQueryService
         $seen = [];
         $calculatedAt = null;
         foreach ($rows as $row) {
-            $key = (int) $row->agent_id . '|' . strtolower(trim((string) $row->source))
+            $key = ($row->owner_type ?? 'merchant') . ':' . (int) ($row->owner_id ?? $row->agent_id) . '|' . strtolower(trim((string) $row->source))
                 . '|' . strtoupper(trim((string) $row->symbol));
             if (!isset($seen[$key])) {
                 $net += abs((float) $row->net_notional_usdt);
