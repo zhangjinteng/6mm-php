@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace SixMm\Shared\Hedging;
 
 use Illuminate\Database\ConnectionInterface;
+use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Collection;
 use SixMm\Shared\Contracts\UserDataScope;
 
@@ -33,13 +34,13 @@ final class HedgingSubjectConfigQueryService
             $query->where('setting.enabled', $criteria->enabled() === '1');
         }
 
-        $settings = $query->select(array_merge(['setting.agent_id', 'setting.enabled', 'setting.updated_at'],
-            $this->ownerAware ? ['setting.owner_type', 'setting.owner_id'] : []))
-            ->orderBy('setting.agent_id')
-            ->get();
-        $agentIds = $settings->pluck('agent_id')->map(static fn ($id): int => (int) $id)->all();
-        $accounts = $this->accounts($agentIds)->groupBy(fn (object $row): string => $this->ownerKey($row));
-        $configs = $this->configs($agentIds)->groupBy(fn (object $row): string => $this->ownerKey($row));
+        $query->select(array_merge(['setting.agent_id', 'setting.enabled', 'setting.updated_at'],
+            $this->ownerAware ? ['setting.owner_type', 'setting.owner_id'] : []));
+        if ($this->ownerAware) $query->orderBy('setting.owner_type')->orderBy('setting.owner_id');
+        else $query->orderBy('setting.agent_id');
+        $settings = $query->get();
+        $accounts = $this->accounts($settings)->groupBy(fn (object $row): string => $this->ownerKey($row));
+        $configs = $this->configs($settings)->groupBy(fn (object $row): string => $this->ownerKey($row));
 
         $rows = $settings->map(fn (object $setting): array => $this->mapRow(
             $setting,
@@ -56,28 +57,40 @@ final class HedgingSubjectConfigQueryService
         return ['count' => $total, 'lists' => $rows];
     }
 
-    private function accounts(array $agentIds): Collection
+    private function accounts(Collection $settings): Collection
     {
-        if ($agentIds === []) return collect();
+        if ($settings->isEmpty()) return collect();
 
-        return $this->connection->table('exchange_accounts')
-            ->whereIn('agent_id', $agentIds)
+        return $this->forOwners($this->connection->table('exchange_accounts'), $settings)
             ->whereNull('deleted_at')
             ->get(array_merge(['id', 'agent_id', 'exchange', 'name', 'status', 'metadata', 'updated_at'],
                 $this->ownerAware ? ['owner_type', 'owner_id'] : []));
     }
 
-    private function configs(array $agentIds): Collection
+    private function configs(Collection $settings): Collection
     {
-        if ($agentIds === []) return collect();
+        if ($settings->isEmpty()) return collect();
 
-        return $this->connection->table('hedge_configs')
-            ->whereIn('agent_id', $agentIds)
+        return $this->forOwners($this->connection->table('hedge_configs'), $settings)
             ->where('source', 'platform')
             ->where('enabled', true)
             ->whereNull('deleted_at')
             ->get(array_merge(['agent_id', 'exchange_account_id', 'symbol', 'updated_at'],
                 $this->ownerAware ? ['owner_type', 'owner_id'] : []));
+    }
+
+    private function forOwners(Builder $query, Collection $settings): Builder
+    {
+        if (!$this->ownerAware) return $query->whereIn('agent_id', $settings->pluck('agent_id')->all());
+
+        // Group IDs by type: matching the two columns independently would mix owners.
+        return $query->where(static function (Builder $query) use ($settings): void {
+            foreach ($settings->groupBy('owner_type') as $type => $owners) {
+                $query->orWhere(static function (Builder $query) use ($type, $owners): void {
+                    $query->where('owner_type', $type)->whereIn('owner_id', $owners->pluck('owner_id')->unique()->all());
+                });
+            }
+        });
     }
 
     private function ownerKey(object $row): string

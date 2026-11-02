@@ -69,9 +69,10 @@ final class HedgingMonitorQueryService
         }
 
         $total = (clone $query)->count();
+        if ($this->ownerAware) $query->orderBy('owner_type')->orderBy('owner_id');
+        else $query->orderBy('agent_id');
         $rows = $query
             ->select(array_merge(['agent_id'], $this->resultColumns()))
-            ->orderBy('agent_id')
             ->orderBy('symbol')
             ->orderBy('config_id')
             ->forPage($criteria->page(), $criteria->pageSize())
@@ -96,7 +97,10 @@ final class HedgingMonitorQueryService
     private function configuredRows(): Builder
     {
         return $this->connection->table('hedge_monitor_snapshots as monitor')
-            ->leftJoin('hedge_configs as config', 'config.id', '=', 'monitor.config_id')
+            ->leftJoin('hedge_configs as config', function ($join): void {
+                $join->on('config.id', '=', 'monitor.config_id');
+                if ($this->ownerAware) $join->on('config.owner_type', '=', 'monitor.owner_type')->on('config.owner_id', '=', 'monitor.owner_id');
+            })
             ->leftJoin('hedging_settings as setting', function ($join): void {
                 if ($this->ownerAware) $join->on('setting.owner_type', '=', 'monitor.owner_type')->on('setting.owner_id', '=', 'monitor.owner_id');
                 else $join->on('setting.agent_id', '=', 'monitor.agent_id');
@@ -120,10 +124,10 @@ final class HedgingMonitorQueryService
             ->whereNotExists(function (Builder $query): void {
                 $query->selectRaw('1')
                     ->from('hedge_monitor_snapshots as configured')
-                    ->whereColumn('configured.agent_id', 'exposure.agent_id')
                     ->whereRaw('LOWER(TRIM(configured.source)) = LOWER(TRIM(exposure.source))')
                     ->whereRaw('UPPER(TRIM(configured.symbol)) = UPPER(TRIM(exposure.symbol))');
                 if ($this->ownerAware) $query->whereColumn('configured.owner_type', 'exposure.owner_type')->whereColumn('configured.owner_id', 'exposure.owner_id');
+                else $query->whereColumn('configured.agent_id', 'exposure.agent_id');
             })
             ->selectRaw("exposure.agent_id," . ($this->ownerAware ? ' exposure.owner_type, exposure.owner_id,' : '') . "
                 -exposure.id AS id,

@@ -74,6 +74,11 @@ sourceCheck($sources->matchingPlatformUserIds(new ContractSourceFilter('white_la
 $options = $sources->options();
 sourceCheck($options['merchants'] === [['value'=>'12', 'label'=>'Merchant']], 'Merchant names use platform home site');
 sourceCheck($options['white_labels'] === [['value'=>'12', 'label'=>'White label'], ['value'=>'100', 'label'=>'Home']], 'White label options include the home-site tenant and deduplicate sites');
+$ownerOptions = $sources->options(hedgingOwners: true);
+sourceCheck(array_column($ownerOptions['merchants'], 'value') === ['11', '12'], 'Hedging merchant owners do not inherit user home-site restrictions');
+$db->table('wl_tenants')->insert(['tenant_id' => 13, 'tenant_name' => 'Owner without site']);
+sourceCheck(in_array('13', array_column($sources->options(hedgingOwners: true)['white_labels'], 'value'), true), 'Hedging tenant owners are selectable without a site join');
+sourceCheck(!in_array('13', array_column($sources->options()['white_labels'], 'value'), true), 'Ordinary user options retain their site requirement');
 
 $rows = array_map(static fn (int $id): array => ['platform_user_id'=>$id, 'user_id'=>999, 'agent_id'=>999, 'user'=>[]], range(1, 10));
 $rows[] = ['user_id'=>1];

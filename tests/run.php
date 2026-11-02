@@ -1977,4 +1977,6 @@ assertSameValue(8, $subjectRows[2]['agent_id'], 'Tenant display never rewrites e
 assertSameValue('Tenant agent 8', $subjectRows[2]['agent_name'], 'Detail navigation retains the actual subject name.');
 assertSameValue('platform', $subjectRows[2]['source'], 'The bot business source field must not be repurposed.');
 
+require __DIR__ . '/hedging_owner_scope.php';
+
 fwrite(STDOUT, "Shared user-list, user-asset, account-change, margin-change, current-position, history-position, current-order, history-order, liquidation, trade-fill, condition-order, online-user, user-detail, user-action, handling-fee, and hedging contract tests passed.\n");

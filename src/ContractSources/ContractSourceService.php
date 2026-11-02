@@ -12,23 +12,23 @@ final class ContractSourceService
 {
     public function __construct(private ConnectionInterface $database, private int $platformHomeSiteId) {}
 
-    public function options(): array
+    public function options(bool $hedgingOwners = false): array
     {
-        if ($this->platformHomeSiteId <= 0) return ['merchants' => [], 'white_labels' => []];
+        if (!$hedgingOwners && $this->platformHomeSiteId <= 0) return ['merchants' => [], 'white_labels' => []];
         $public = $this->publicPrefix();
         $control = $this->controlPrefix();
-        $merchants = $this->database->table($public . 'agents')
-            ->where('home_site_id', $this->platformHomeSiteId)->whereNull('deleted_at')
-            ->orderBy('id')->get(['id', 'agent_name', 'user_name'])
+        $merchantQuery = $this->database->table($public . 'agents')->whereNull('deleted_at');
+        if ($hedgingOwners) $merchantQuery->where('id', '>', 0);
+        else $merchantQuery->where('home_site_id', $this->platformHomeSiteId);
+        $merchants = $merchantQuery->orderBy('id')->get(['id', 'agent_name', 'user_name'])
             ->map(static fn (object $agent): array => [
                 'value' => (string) $agent->id,
                 'label' => trim((string) $agent->agent_name)
                     ?: (trim((string) $agent->user_name) ?: (string) $agent->id),
             ])->all();
-        $whiteLabels = $this->database->table($control . 'wl_tenants as tenants')
-            ->join($control . 'wl_sites as sites', 'sites.tenant_id', '=', 'tenants.tenant_id')
-            ->where('sites.site_id', '>', 0)
-            ->distinct()->orderBy('tenants.tenant_id')->get(['tenants.tenant_id', 'tenants.tenant_name'])
+        $tenantQuery = $this->database->table($control . 'wl_tenants as tenants');
+        if (!$hedgingOwners) $tenantQuery->join($control . 'wl_sites as sites', 'sites.tenant_id', '=', 'tenants.tenant_id')->where('sites.site_id', '>', 0);
+        $whiteLabels = $tenantQuery->distinct()->orderBy('tenants.tenant_id')->get(['tenants.tenant_id', 'tenants.tenant_name'])
             ->map(static fn (object $tenant): array => [
                 'value' => (string) $tenant->tenant_id,
                 'label' => trim((string) $tenant->tenant_name) ?: (string) $tenant->tenant_id,
@@ -101,7 +101,9 @@ final class ContractSourceService
     {
         if ($rows === []) return;
         $ids = array_values(array_unique(array_filter(array_map(
-            static fn (array $row): int => (int) ($row['agent_id'] ?? 0), $rows
+            static fn (array $row): int => isset($row['owner_type'], $row['owner_id'])
+                ? ($row['owner_type'] === 'merchant' ? (int) $row['owner_id'] : 0)
+                : (int) ($row['agent_id'] ?? 0), $rows
         ), static fn (int $id): bool => $id > 0)));
         $agents = $this->database->table($this->publicPrefix() . 'agents')
             ->whereIn('id', $ids)->whereNull('deleted_at')
@@ -115,7 +117,9 @@ final class ContractSourceService
         $tenants = $tenantIds === [] ? collect() : $this->database->table($this->controlPrefix() . 'wl_tenants')
             ->whereIn('tenant_id', $tenantIds)->get(['tenant_id', 'tenant_name'])->keyBy('tenant_id');
         foreach ($rows as &$row) {
-            $id = $row['agent_id'] ?? null;
+            $id = isset($row['owner_type'], $row['owner_id'])
+                ? ($row['owner_type'] === 'merchant' ? $row['owner_id'] : null)
+                : ($row['agent_id'] ?? null);
             $agent = $id === null ? null : $agents->get((string) $id);
             if (isset($row['owner_type'], $row['owner_id'])) {
                 $ownerId = (int) $row['owner_id'];
