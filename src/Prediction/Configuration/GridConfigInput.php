@@ -219,7 +219,29 @@ final class GridConfigInput
         if ($actor['source_service'] !== 'platform_admin') {
             throw new GridConfigException('FORBIDDEN', 'Only platform can manage global parameters');
         }
-        self::exactKeys($command, ['based_on_global_version', 'changes', 'client_request_id', 'reason', 'symbol']);
+        $keys = ['based_on_global_version', 'changes', 'client_request_id', 'reason', 'symbol'];
+        if (array_key_exists('layout', $command) || array_key_exists('based_on_layout_version', $command)) {
+            $keys[] = 'based_on_layout_version';
+            $keys[] = 'layout';
+            sort($keys, SORT_STRING);
+            self::exactKeys($command, $keys);
+            $layoutVersion = $command['based_on_layout_version'];
+            if (!is_string($layoutVersion) || ($layoutVersion !== '0' && !self::isPositiveInt64($layoutVersion)) ||
+                !is_array($command['layout']) || $command['layout'] === []) {
+                throw GridConfigException::invalidInput();
+            }
+            foreach ($command['layout'] as $field => $value) {
+                if (!in_array($field, self::LAYOUT_KEYS, true)) { throw GridConfigException::invalidInput(); }
+                $command['layout'][$field] = $field === 'column_duration_seconds'
+                    ? GridLayoutInput::newDuration($value) : GridLayoutInput::field($field, $value, 8);
+            }
+            ksort($command['layout'], SORT_STRING);
+            if ($layoutVersion === '0' && count($command['layout']) !== count(self::LAYOUT_KEYS)) {
+                throw GridConfigException::invalidInput();
+            }
+        } else {
+            self::exactKeys($command, $keys);
+        }
         self::symbol($command['symbol']);
         $version = $command['based_on_global_version'];
         if (!is_string($version) || ($version !== '0' && !self::isPositiveInt64($version)) ||
