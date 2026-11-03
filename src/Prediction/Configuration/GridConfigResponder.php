@@ -33,7 +33,7 @@ final class GridConfigResponder
     public static function success(string $routeName, array $data): JsonResponse
     {
         unset($data['operation_status']);
-        if (in_array($routeName, ['grid.config.save', 'grid.config.receipt'], true)) {
+        if (in_array($routeName, ['grid.config.save', 'grid.config.receipt', 'grid.config.global.save', 'grid.config.global.receipt'], true)) {
             $data['operation_status'] = 'SUCCEEDED';
         }
         return new JsonResponse(['code' => 1, 'show' => 0, 'msg' => '', 'data' => $data]);
@@ -46,9 +46,9 @@ final class GridConfigResponder
         }
         $status = $code === 'FORBIDDEN' && $forbiddenStatus === 401 ? 401 : self::STATUS[$code];
         $data = ['error_code' => $code, 'trace_id' => (string) Str::uuid()];
-        if ($routeName === 'grid.config.receipt') {
+        if (in_array($routeName, ['grid.config.receipt', 'grid.config.global.receipt'], true)) {
             $data['operation_status'] = 'UNKNOWN';
-        } elseif ($routeName === 'grid.config.save') {
+        } elseif (in_array($routeName, ['grid.config.save', 'grid.config.global.save'], true)) {
             $data['operation_status'] = in_array($code, ['COMMIT_UNKNOWN', 'RECEIPT_UNCONFIRMED', 'DATABASE_ERROR', 'DEPENDENCY_UNAVAILABLE', 'DATA_INTEGRITY'], true)
                 ? 'UNKNOWN' : 'FAILED';
         }

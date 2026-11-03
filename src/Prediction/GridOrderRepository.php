@@ -112,7 +112,10 @@ class GridOrderRepository
             $sites=$scope->homeSiteIds();$where[]='home_site_id IN ('.implode(',',array_fill(0,count($sites),'?')).')';array_push($bindings,...$sites);
         }
         $agents=$scope->orderAgentIds();
-        if ($agents!==null) {
+        if ($scope instanceof GridDirectCustomerScope && $scope->directCustomersOnly()) {
+            if ($scope->isGlobal() || count($sites ?? [])!==1 || $agents!==['0']) { GridResponder::reject('SCOPE_UNAVAILABLE',503); }
+            $where[]='(agent_id = 0 OR agent_id IS NULL)';
+        } elseif ($agents!==null) {
             $where[]=$agents===[]?'FALSE':'agent_id IN ('.implode(',',array_fill(0,count($agents),'?')).')';
             array_push($bindings,...$agents);
         }

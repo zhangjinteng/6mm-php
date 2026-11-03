@@ -12,18 +12,19 @@ final class GridConfigInput
     private const COMMAND_KEYS = ['based_on_layout_version', 'based_on_site_version', 'changes', 'client_request_id', 'reason', 'site_id', 'symbol'];
     public const IDENTITY_KEYS = ['based_on_config_id', 'based_on_default_resolution_epoch', 'based_on_default_version'];
     public const LAYOUT_KEYS = ['price_band_width', 'column_duration_seconds', 'price_decimals'];
+    public const PARAMETER_KEYS = ['target_rtp', 'min_multiplier', 'max_multiplier', 'min_order_amount', 'max_order_amount'];
     private const CHANGE_KEYS = ['enabled', 'max_multiplier', 'max_order_amount', 'min_multiplier', 'min_order_amount', 'target_rtp'];
 
     public static function actor(array $actor): array
     {
         self::exactKeys($actor, self::ACTOR_KEYS);
-        if (!is_string($actor['source_service']) || !in_array($actor['source_service'], ['platform_admin', 'agent_admin'], true)) {
+        if (!is_string($actor['source_service']) || !in_array($actor['source_service'], ['platform_admin', 'agent_admin', 'white_label_admin'], true)) {
             throw GridConfigException::invalidInput();
         }
         if (!is_string($actor['operator_id']) || !self::isPositiveInt64($actor['operator_id'])) {
             throw GridConfigException::invalidInput();
         }
-        if ($actor['source_service'] === 'platform_admin') {
+        if ($actor['source_service'] !== 'agent_admin') {
             if ($actor['root_agent_id'] !== null) {
                 throw GridConfigException::invalidInput();
             }
@@ -47,6 +48,14 @@ final class GridConfigInput
                     throw GridConfigException::invalidInput();
                 }
             }
+        }
+        if (array_key_exists('based_on_global_version', $command)) {
+            $version = $command['based_on_global_version'];
+            if (!is_string($version) || ($version !== '0' && !self::isPositiveInt64($version))) {
+                throw GridConfigException::invalidInput();
+            }
+            $keys[] = 'based_on_global_version';
+            sort($keys, SORT_STRING);
         }
         self::exactKeys($command, $keys);
         self::site($command['site_id'] ?? null);
@@ -76,7 +85,15 @@ final class GridConfigInput
             (array_key_exists('min_multiplier', $command['changes']) || array_key_exists('max_multiplier', $command['changes']) || array_intersect_key($command['changes'], array_flip(self::LAYOUT_KEYS)) !== [])) {
             throw new GridConfigException('FIELD_FORBIDDEN', 'Grid configuration field is not editable');
         }
+        if ($actor['source_service'] === 'white_label_admin' && array_intersect_key($command['changes'], array_flip(self::LAYOUT_KEYS)) !== []) {
+            throw new GridConfigException('FIELD_FORBIDDEN', 'Public Grid layout is not editable');
+        }
         $normalized = $command;
+        $parameters = array_intersect_key($command['changes'], array_flip(self::PARAMETER_KEYS));
+        $nulls = count(array_filter($parameters, static fn($value) => $value === null));
+        if ($nulls !== 0 && ($actor['source_service'] !== 'platform_admin' || $nulls !== count(self::PARAMETER_KEYS))) {
+            throw GridConfigException::invalidInput();
+        }
         foreach ($command['changes'] as $field => $value) {
             if (in_array($field, self::LAYOUT_KEYS, true)) {
                 $normalized['changes'][$field] = GridLayoutInput::field($field, $value);
@@ -89,6 +106,7 @@ final class GridConfigInput
                 $normalized['changes'][$field] = $value;
                 continue;
             }
+            if ($value === null) { $normalized['changes'][$field] = null; continue; }
             $scale = str_contains($field, 'order_amount') ? 8 : (str_contains($field, 'multiplier') ? 2 : null);
             $normalized['changes'][$field] = self::decimal($value, $scale);
         }
@@ -188,7 +206,46 @@ final class GridConfigInput
         foreach (self::IDENTITY_KEYS as $field) {
             if (array_key_exists($field, $command)) { $payload[$field] = $command[$field]; }
         }
+        if (array_key_exists('based_on_global_version', $command)) {
+            $payload['based_on_global_version'] = $command['based_on_global_version'];
+        }
         return hash('sha256', json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR));
+    }
+
+    /** GLOBAL has no site or switch; submit one complete parameter group. */
+    public static function globalCommand(array $actor, array $command): array
+    {
+        $actor = self::actor($actor);
+        if ($actor['source_service'] !== 'platform_admin') {
+            throw new GridConfigException('FORBIDDEN', 'Only platform can manage global parameters');
+        }
+        self::exactKeys($command, ['based_on_global_version', 'changes', 'client_request_id', 'reason', 'symbol']);
+        self::symbol($command['symbol']);
+        $version = $command['based_on_global_version'];
+        if (!is_string($version) || ($version !== '0' && !self::isPositiveInt64($version)) ||
+            !is_string($command['client_request_id']) || preg_match('/^[A-Za-z0-9_-]{8,64}$/D', $command['client_request_id']) !== 1 ||
+            !is_string($command['reason']) || strlen($command['reason']) < 1 || strlen($command['reason']) > 500 ||
+            strpos($command['reason'], "\0") !== false || preg_match('//u', $command['reason']) !== 1 || !is_array($command['changes'])) {
+            throw GridConfigException::invalidInput();
+        }
+        $keys = self::PARAMETER_KEYS;
+        sort($keys, SORT_STRING);
+        self::exactKeys($command['changes'], $keys);
+        $parameters = self::mergeAndValidate(['enabled' => false] + $command['changes'], []);
+        unset($parameters['enabled']);
+        ksort($parameters, SORT_STRING);
+        $command['changes'] = $parameters;
+        return $command;
+    }
+
+    public static function globalRequestHash(array $actor, array $command): string
+    {
+        $actor = self::actor($actor);
+        ksort($actor, SORT_STRING);
+        $command = self::globalCommand($actor, $command);
+        ksort($command, SORT_STRING);
+        return hash('sha256', json_encode(['scope' => 'GLOBAL', 'actor' => $actor, 'command' => $command],
+            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR));
     }
 
     private static function exactKeys(array $value, array $expected): void
