@@ -38,6 +38,7 @@
     },
     "scripts": {
         "test": [
+            "@php tests/tenant_channels.php",
             "@php tests/liquidation_warnings.php",
             "@php tests/contract_sources.php",
             "@php tests/run.php",
