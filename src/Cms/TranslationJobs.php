@@ -28,7 +28,7 @@ class TranslationJobs
             }
             $setting = $space->translation_setting_id ? $db->table('cms.translation_settings')->where('id', $space->translation_setting_id)->first() : null;
             // These jobs are explicitly requested by an operator, independently of automatic translation.
-            if (!$setting || $setting->provider !== 'google' || $setting->api_version !== 'v2' || $setting->credential_ref !== config('cms_translation.credential_ref') || !(new GoogleTranslationClient())->configured()) {
+            if (!$setting || $setting->provider !== 'google' || $setting->api_version !== 'v2' || !(new TranslationCredential())->status($setting)['credential_configured']) {
                 $s->fail('请先配置 Google Translate 服务及服务端密钥');
             }
             if ($db->table('cms.translation_jobs')->where('space_id', $space->id)->whereIn('status', ['queued', 'running'])->exists()) {

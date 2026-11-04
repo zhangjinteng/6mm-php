@@ -32,7 +32,10 @@ class TranslationWorker
             $error = null;
             $text = null;
             try {
-                $text = $this->google->translate($item->source_text_snapshot, $item->source_locale, $item->target_locale, $item->field_name === 'body_html', (int) $item->request_timeout_seconds);
+                $setting = $this->s->connection()->table('cms.translation_settings')->where('id', $item->setting_id)->first();
+                if (!$setting) throw new \RuntimeException('GOOGLE_CREDENTIAL_MISSING');
+                $text = $this->google->withApiKey((new TranslationCredential())->resolve($setting))
+                    ->translate($item->source_text_snapshot, $item->source_locale, $item->target_locale, $item->field_name === 'body_html', (int) $item->request_timeout_seconds);
             } catch (Throwable $e) {
                 $error = preg_match('/^(GOOGLE_[A-Z0-9_]+|SOURCE_TOO_LONG)$/D', $e->getMessage()) ? $e->getMessage() : 'TRANSLATION_FAILED';
             }
@@ -54,11 +57,11 @@ class TranslationWorker
         })->orderBy('i.id')->limit(50)->get(['i.id', 'i.space_id', 'i.job_id']);
         foreach ($candidates as $candidate) {
             $claimed = $db->transaction(function () use ($db, $candidate): ?object {
-                $space = $this->s->space((int) $candidate->space_id, true);
-                $job = $db->table('cms.translation_jobs')->where('space_id', $space->id)->where('id', $candidate->job_id)->first();
+                $job = $db->table('cms.translation_jobs')->where('space_id', $candidate->space_id)->where('id', $candidate->job_id)->first();
                 if (!$job || !in_array($job->status, ['queued', 'running'], true)) {
                     return null;
                 }
+                $space = $this->s->jobSpace($job, true);
                 $item = $db->table('cms.translation_job_items')->where('id', $candidate->id)->lock('FOR UPDATE SKIP LOCKED')->first();
                 if (!$item || in_array($item->status, ['succeeded', 'skipped', 'cancelled'], true)) {
                     return null;
@@ -71,7 +74,7 @@ class TranslationWorker
                 }
                 $setting = $db->table('cms.translation_settings')->where('id', $job->setting_id)->first();
                 // Operator-requested jobs remain valid when automatic translation is disabled.
-                if (!$space->is_enabled || !$setting || $space->source_locale !== $job->source_locale || !in_array($item->target_locale, $this->s->targets($space), true) || $setting->provider !== 'google' || $setting->api_version !== 'v2' || $setting->credential_ref !== config('cms_translation.credential_ref')) {
+                if (!$space->is_enabled || !$setting || (string) $space->translation_setting_id !== (string) $job->setting_id || $space->source_locale !== $job->source_locale || !in_array($item->target_locale, $this->s->targets($space), true) || $setting->provider !== 'google' || $setting->api_version !== 'v2') {
                     $db->table('cms.translation_job_items')->where('id', $item->id)->update([
                         'status' => 'skipped',
                         'error_code' => 'CONFIGURATION_CHANGED',
@@ -135,6 +138,7 @@ class TranslationWorker
                 ]);
                 $db->table('cms.translation_jobs')->where('id', $job->id)->update(['status' => 'running', 'started_at' => $job->started_at ?: now(), 'updated_at' => now()]);
                 $item->worker_token = $token;
+                $item->setting_id = $job->setting_id;
                 $item->attempt_count++;
                 $item->source_locale = $job->source_locale;
                 $item->request_timeout_seconds = $setting->request_timeout_seconds;
@@ -152,7 +156,9 @@ class TranslationWorker
     {
         $db = $this->s->connection();
         $db->transaction(function () use ($db, $item, $text, $error): void {
-            $space = $this->s->space((int) $item->space_id, true);
+            $job = $db->table('cms.translation_jobs')->where('id', $item->job_id)->where('space_id', $item->space_id)->first();
+            if (!$job) return;
+            $space = $this->s->jobSpace($job, true);
             $locked = $db->table('cms.translation_job_items')->where('id', $item->id)->lockForUpdate()->first();
             if (!$locked || $locked->status !== 'running' || $locked->worker_token !== $item->worker_token || CarbonImmutable::parse($locked->lease_until)->isPast()) {
                 return;

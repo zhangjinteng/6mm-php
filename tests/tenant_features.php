@@ -1,0 +1,69 @@
+<?php
+
+declare(strict_types=1);
+
+require dirname(__DIR__) . '/vendor/autoload.php';
+
+use Carbon\CarbonImmutable;
+use Illuminate\Database\Capsule\Manager as Capsule;
+use SixMm\Shared\TenantFeatures\{FeatureConfigStore, FeatureConfigException};
+
+$capsule = new Capsule();
+$capsule->addConnection(['driver' => 'sqlite', 'database' => ':memory:']);
+$db = $capsule->getConnection();
+$db->statement('CREATE TABLE wl_tenants (tenant_id integer PRIMARY KEY, tenant_name text)');
+$db->statement('CREATE TABLE wl_sites (site_id integer PRIMARY KEY, tenant_id integer, site_name text, status text, entitlement_version integer DEFAULT 3)');
+$db->statement("CREATE TABLE wl_site_modules (site_id integer, module_code text, module_type text DEFAULT 'business', enabled boolean, created_at text, updated_at text, PRIMARY KEY(site_id,module_code))");
+$db->statement('CREATE TABLE wl_config_snapshots (id integer PRIMARY KEY, payload text)');
+$db->table('wl_tenants')->insert([['tenant_id' => 1, 'tenant_name' => 'Alpha_%'], ['tenant_id' => 2, 'tenant_name' => 'Beta']]);
+$db->table('wl_sites')->insert([
+    ['site_id' => 10, 'tenant_id' => 1, 'site_name' => 'Main', 'status' => 'enabled'],
+    ['site_id' => 11, 'tenant_id' => 1, 'site_name' => 'Second', 'status' => 'enabled'],
+    ['site_id' => 12, 'tenant_id' => 1, 'site_name' => 'Disabled', 'status' => 'disabled'],
+    ['site_id' => 20, 'tenant_id' => 2, 'site_name' => 'Other', 'status' => 'enabled'],
+]);
+$db->table('wl_site_modules')->insert([
+    ['site_id' => 10, 'module_code' => 'contract', 'module_type' => 'business', 'enabled' => true],
+    ['site_id' => 10, 'module_code' => 'future_feature', 'module_type' => 'feature', 'enabled' => true],
+]);
+$db->table('wl_config_snapshots')->insert(['id' => 1, 'payload' => '{"preserve":true}']);
+$store = new FeatureConfigStore($db, true, true);
+$platform = new FeatureConfigStore($db);
+$checks = 0;
+$check = static function (bool $value) use (&$checks): void { ++$checks; if (!$value) throw new RuntimeException('Feature check failed #' . $checks); };
+$detail = $store->detail(['tenant_id' => '1']);
+$check($detail['features'] === ['trade_ranking' => true] && $detail['expected_updated_at'] === null);
+$check(array_column($detail['sites'], 'site_id') === ['10', '11']);
+$check($db->table('wl_site_modules')->count() === 2);
+$check($store->detail(['tenant_id' => 1, 'site_id' => 11])['site_id'] === '11');
+$check($platform->detail(['tenant_id' => 1, 'site_id' => 11])['site_id'] === '10');
+$audits = [];
+$audit = static function (array $change) use (&$audits): void { $audits[] = $change; };
+$input = ['tenant_id' => '1', 'site_id' => '10', 'expected_updated_at' => null, 'features' => ['trade_ranking' => false]];
+CarbonImmutable::setTestNow(CarbonImmutable::parse('2026-11-03T10:00:00Z'));
+$saved = $store->save($input, $audit);
+$token = $saved['detail']['expected_updated_at'];
+$check($saved['changed'] && $saved['detail']['features'] === ['trade_ranking' => false]);
+$check($audits[0]['site_id'] === '10' && $audits[0]['updated_at'] === $token);
+$check(!$store->save(array_replace($input, ['expected_updated_at' => $token]), $audit)['changed']);
+$check(count($audits) === 1);
+try { $store->save($input, $audit); throw new RuntimeException('Stale accepted'); }
+catch (FeatureConfigException $e) { $check(true); }
+$next = $store->save(array_replace($input, ['expected_updated_at' => $token, 'features' => ['trade_ranking' => true]]), $audit);
+$check(CarbonImmutable::parse($next['detail']['expected_updated_at'])->greaterThan(CarbonImmutable::parse($token)));
+CarbonImmutable::setTestNow();
+foreach ([['site_id' => 20], ['site_id' => 12], ['features' => ['contract' => false]], ['features' => ['trade_ranking' => 'false']], ['features' => []], ['features' => ['trade_ranking' => true, 'feedback' => true]]] as $invalid) {
+    try { $store->save(array_replace($input, $invalid), $audit); throw new RuntimeException('Invalid save accepted'); }
+    catch (FeatureConfigException $e) { $check(true); }
+}
+try { $platform->save(array_replace($input, ['site_id' => 11]), $audit); throw new RuntimeException('Non-default Platform site accepted'); }
+catch (FeatureConfigException $e) { $check(true); }
+try { $store->save(array_replace($input, ['site_id' => 11]), static function (): void { throw new RuntimeException('Audit failed'); }); }
+catch (RuntimeException $e) { $check($e->getMessage() === 'Audit failed'); }
+$check(!$db->table('wl_site_modules')->where('site_id', 11)->exists());
+$check((bool) $db->table('wl_site_modules')->where('module_code', 'contract')->value('enabled'));
+$check((bool) $db->table('wl_site_modules')->where('module_code', 'future_feature')->value('enabled'));
+$check($db->table('wl_sites')->where('site_id', 10)->value('entitlement_version') === 3);
+$check($db->table('wl_config_snapshots')->value('payload') === '{"preserve":true}');
+$check($platform->listing(['keyword' => '_%'])['count'] === 1);
+echo "Tenant features: {$checks} checks passed\n";

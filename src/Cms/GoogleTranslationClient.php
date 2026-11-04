@@ -10,10 +10,24 @@ use Throwable;
 
 class GoogleTranslationClient
 {
+    private ?string $apiKey = null;
+
+    /** Clone per request/job; never mutate process-global config in a long-lived worker. */
+    public function withApiKey(#[\SensitiveParameter] string $key): static
+    {
+        $client = clone $this;
+        $client->apiKey = $key;
+        return $client;
+    }
+
+    private function key(): string
+    {
+        return $this->apiKey ?? (string) config('cms_translation.google_api_key');
+    }
 
     public function configured(): bool
     {
-        return trim((string) config('cms_translation.google_api_key')) !== '';
+        return trim($this->key()) !== '';
     }
 
     public function translate(string $source, string $from, string $to, bool $html, int $timeout = 30): string
@@ -26,7 +40,7 @@ class GoogleTranslationClient
             throw new RuntimeException('SOURCE_TOO_LONG');
         }
         try {
-            $response = Http::timeout($timeout)->withOptions(['allow_redirects' => false, 'connect_timeout' => 5])->withHeaders(['X-Goog-Api-Key' => (string) config('cms_translation.google_api_key')])->post('https://translation.googleapis.com/language/translate/v2', [
+            $response = Http::timeout($timeout)->withOptions(['allow_redirects' => false, 'connect_timeout' => 5])->withHeaders(['X-Goog-Api-Key' => $this->key()])->post('https://translation.googleapis.com/language/translate/v2', [
                 'q' => [$source],
                 'source' => TranslationCatalog::googleLocale($from),
                 'target' => TranslationCatalog::googleLocale($to),

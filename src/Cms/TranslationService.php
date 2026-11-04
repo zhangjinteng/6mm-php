@@ -231,17 +231,43 @@ class TranslationService
             'target_locales' => $this->targets($space),
             'provider' => 'google',
             'api_version' => 'v2',
-            'credential_ref' => config('cms_translation.credential_ref'),
-            'credential_configured' => (new GoogleTranslationClient())->configured(),
+            'credential_ref' => ($setting->api_key_ciphertext ?? null) !== null ? 'database' : config('cms_translation.credential_ref'),
             'supported' => !$setting || $setting->provider === 'google' && $setting->api_version === 'v2',
             'is_enabled' => (bool) ($setting->is_enabled ?? false) && $setting->provider === 'google' && $setting->api_version === 'v2',
             'concurrency_limit' => (int) ($setting->concurrency_limit ?? 3),
             'request_timeout_seconds' => (int) ($setting->request_timeout_seconds ?? 30),
             'max_attempts' => (int) ($setting->max_attempts ?? 3),
-        ];
+        ] + (new TranslationCredential())->status($setting);
     }
 
-    public function saveSettings(array $p, array $actor, GoogleTranslationClient $google): array
+    public function testConnection(#[\SensitiveParameter] array $p, GoogleTranslationClient $google): array
+    {
+        // settings() also applies the host's configuration scope (platform default vs own site).
+        $settings = $this->settings((int) $p['space_id']);
+        $space = $this->space((int) $settings['space_id']);
+        $this->writable($space);
+        if (isset($p['space_revision']) && (string) $space->revision !== (string) $p['space_revision']) {
+            $this->fail('空间配置已变化，请重新加载配置');
+        }
+        $setting = $this->settingForSpace($space);
+        $key = trim((string) ($p['api_key'] ?? ''));
+        $google->withApiKey($key !== '' ? $key : (new TranslationCredential())->resolve($setting))
+            ->translate('连接测试', 'zh-CN', 'en', false, 10);
+        return ['connected' => true];
+    }
+
+    private function settingForSpace(object $space): ?object
+    {
+        return $space->translation_setting_id ? $this->db->table('cms.translation_settings')->where('id', $space->translation_setting_id)->first() : null;
+    }
+
+    /** Worker scope is resolved from the job, not from the operator's current UI selection. */
+    public function jobSpace(object $job, bool $lock = false): object
+    {
+        return $this->space((int) $job->space_id, $lock);
+    }
+
+    public function saveSettings(#[\SensitiveParameter] array $p, array $actor, GoogleTranslationClient $google): array
     {
         $before = $this->space((int) $p['space_id']);
         $this->writable($before);
@@ -251,10 +277,17 @@ class TranslationService
         if (in_array($before->source_locale, $p['target_locales'], true)) {
             $this->fail('目标语言不能包含源语言');
         }
-        if ($p['is_enabled']) {
-            $google->translate('连接测试', 'zh-CN', 'en', false, (int) $p['request_timeout_seconds']);
+        $credential = new TranslationCredential();
+        $existingSetting = $this->settingForSpace($before);
+        $candidate = trim((string) ($p['api_key'] ?? ''));
+        // Encrypt first to fail before a provider request if the dedicated master key is missing.
+        $ciphertext = $candidate !== '' ? $credential->encrypt($candidate) : ($existingSetting->api_key_ciphertext ?? null);
+        if ($candidate !== '' || $p['is_enabled']) {
+            $google->withApiKey($candidate !== '' ? $candidate : $credential->resolve($existingSetting))
+                ->translate('连接测试', 'zh-CN', 'en', false, (int) $p['request_timeout_seconds']);
         }
-        return $this->db->transaction(function () use ($p, $actor): array {
+        unset($p['api_key'], $candidate);
+        return $this->db->transaction(function () use ($p, $actor, $ciphertext): array {
             $space = $this->space((int) $p['space_id'], true);
             $this->writable($space);
             if ((string) $space->revision !== (string) $p['space_revision']) {
@@ -269,7 +302,8 @@ class TranslationService
             $data = [
                 'provider' => 'google',
                 'api_version' => 'v2',
-                'credential_ref' => config('cms_translation.credential_ref'),
+                'credential_ref' => $ciphertext !== null ? 'database' : config('cms_translation.credential_ref'),
+                'api_key_ciphertext' => $ciphertext,
                 'project_id' => null,
                 'is_enabled' => $p['is_enabled'],
                 'concurrency_limit' => $p['concurrency_limit'],
