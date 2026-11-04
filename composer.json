@@ -39,6 +39,7 @@
     },
     "scripts": {
         "test": [
+            "@php tests/tenant_compliance.php",
             "@php tests/tenant_seo.php",
             "@php tests/tenant_features.php",
             "@php tests/tenant_brand.php",
