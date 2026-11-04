@@ -16,6 +16,7 @@
         "illuminate/encryption": "^8.75",
         "zhangjinteng/6mm-addr": "^1.0.1",
         "illuminate/http": "^8.75",
+        "guzzlehttp/guzzle": "^7.0.1",
         "ext-mbstring": "*",
         "ramsey/uuid": "^4.7"
     },
@@ -39,6 +40,7 @@
     },
     "scripts": {
         "test": [
+            "@php tests/tenant_customer_service.php",
             "@php tests/tenant_compliance.php",
             "@php tests/tenant_seo.php",
             "@php tests/tenant_features.php",
