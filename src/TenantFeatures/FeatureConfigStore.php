@@ -11,10 +11,42 @@ use Carbon\CarbonImmutable;
 final class FeatureConfigStore
 {
     public const CODE = 'trade_ranking';
+    public const CONTENT_CODES = ['news', 'academy', 'help_center', 'feedback', 'announcement'];
 
-    public function __construct(private ConnectionInterface $db, private bool $enabledSitesOnly = false, private bool $allowSiteSelection = false, private ?string $schema = null)
+    public function __construct(private ConnectionInterface $db, private bool $enabledSitesOnly = false, private bool $allowSiteSelection = false, private ?string $schema = null, private bool $contentFeatures = false)
     {
         if ($schema !== null && !preg_match('/^[a-z_][a-z0-9_]*$/D', $schema)) throw new \InvalidArgumentException('Invalid feature schema');
+    }
+
+    private function codes(): array
+    {
+        return $this->contentFeatures ? [self::CODE, ...self::CONTENT_CODES] : [self::CODE];
+    }
+
+    private function values(array $rows): array
+    {
+        $values = [];
+        foreach ($this->codes() as $code) $values[$code] = isset($rows[$code]) ? (bool) $rows[$code]->enabled : true;
+        return $values;
+    }
+
+    private function latestUpdatedAt(array $rows): ?string
+    {
+        $latest = null;
+        foreach ($rows as $row) {
+            if ($row->updated_at !== null && ($latest === null || CarbonImmutable::parse($row->updated_at)->greaterThan(CarbonImmutable::parse($latest)))) $latest = $row->updated_at;
+        }
+        return $latest;
+    }
+
+    private function revision(string $siteId, array $rows): string
+    {
+        $state = [];
+        foreach ($this->codes() as $code) {
+            $row = $rows[$code] ?? null;
+            $state[$code] = $row ? [(bool) $row->enabled, $row->created_at, $row->updated_at] : null;
+        }
+        return hash('sha256', json_encode([$siteId, $state], JSON_THROW_ON_ERROR));
     }
 
     private function table(string $name): Builder
@@ -66,18 +98,19 @@ final class FeatureConfigStore
             ->when($this->enabledSitesOnly, fn ($q) => $q->where('status', 'enabled'))
             ->when($this->allowSiteSelection && $siteId !== null, fn ($q) => $q->where('site_id', $siteId))->orderBy('site_id')->first();
         if (!$tenant || !$site) $this->reject('白标不存在或尚未配置站点');
-        $row = $this->table('wl_site_modules')->where('site_id', $site->site_id)->where('module_code', self::CODE)->first();
-        if ($row && $row->module_type !== 'feature') $this->reject('交易排行配置分类异常，请联系管理员');
-        return [$tenant, $site, $row];
+        $rows = $this->table('wl_site_modules')->where('site_id', $site->site_id)->whereIn('module_code', $this->codes())->get()->keyBy('module_code')->all();
+        foreach ($rows as $row) if ($row->module_type !== 'feature') $this->reject('功能开关配置分类异常，请联系管理员');
+        return [$tenant, $site, $rows];
     }
 
     public function detail(array $input): array
     {
-        [$tenant, $site, $row] = $this->context((string) $input['tenant_id'], isset($input['site_id']) ? (string) $input['site_id'] : null);
+        [$tenant, $site, $rows] = $this->context((string) $input['tenant_id'], isset($input['site_id']) ? (string) $input['site_id'] : null);
         $detail = ['tenant_id' => (string) $tenant->tenant_id, 'tenant_name' => $tenant->tenant_name,
             'site_id' => (string) $site->site_id, 'site_name' => $site->site_name,
-            'features' => [self::CODE => $row ? (bool) $row->enabled : true],
-            'expected_updated_at' => $row?->updated_at];
+            'features' => $this->values($rows),
+            'expected_updated_at' => $this->latestUpdatedAt($rows)];
+        if ($this->contentFeatures) $detail['expected_revision'] = $this->revision((string) $site->site_id, $rows);
         if ($this->allowSiteSelection) $detail['sites'] = $this->table('wl_sites')->where('tenant_id', $tenant->tenant_id)
             ->when($this->enabledSitesOnly, fn ($q) => $q->where('status', 'enabled'))->orderBy('site_id')->get(['site_id', 'site_name'])
             ->map(fn ($site) => ['site_id' => (string) $site->site_id, 'site_name' => $site->site_name])->all();
@@ -88,7 +121,11 @@ final class FeatureConfigStore
     {
         if (!isset($input['tenant_id'], $input['site_id']) || !is_scalar($input['tenant_id']) || !is_scalar($input['site_id'])) $this->reject('白标或站点参数不正确');
         $features = $input['features'] ?? null;
-        if (!is_array($features) || array_keys($features) !== [self::CODE] || !is_bool($features[self::CODE])) $this->reject('仅支持交易排行，开关必须为布尔值');
+        if (!is_array($features) || !$features || array_diff(array_keys($features), $this->codes())) $this->reject('不支持的功能开关字段');
+        foreach ($features as $value) if (!is_bool($value)) $this->reject('功能开关必须为布尔值');
+        $hasRevision = array_key_exists('expected_revision', $input);
+        if ($hasRevision && (!$this->contentFeatures || !is_string($input['expected_revision']) || !preg_match('/^[a-f0-9]{64}$/D', $input['expected_revision']))) $this->reject('配置版本参数不正确');
+        if (array_intersect(array_keys($features), self::CONTENT_CODES) && !$hasRevision) $this->reject('内容开关需要配置版本，请刷新后重试');
         if (!array_key_exists('expected_updated_at', $input) || ($input['expected_updated_at'] !== null
             && (!is_string($input['expected_updated_at']) || strlen($input['expected_updated_at']) > 64))) $this->reject('配置版本参数不正确');
         return $this->db->transaction(function () use ($input, $audit): array {
@@ -98,25 +135,31 @@ final class FeatureConfigStore
                 // Match the business publisher's table-lock order before reading site rows.
                 $this->db->statement('LOCK TABLE control_plane.wl_tenants, control_plane.wl_sites, control_plane.wl_site_modules IN SHARE ROW EXCLUSIVE MODE');
             }
-            [$tenant, $site, $row] = $this->context((string) $input['tenant_id'], isset($input['site_id']) ? (string) $input['site_id'] : null);
+            [$tenant, $site, $rows] = $this->context((string) $input['tenant_id'], isset($input['site_id']) ? (string) $input['site_id'] : null);
             if ((string) $site->site_id !== (string) $input['site_id']) $this->reject('默认站点已变化，请重新打开配置');
-            if (($row?->updated_at) !== $input['expected_updated_at']) $this->reject('配置已被其他操作员修改，请重新打开配置');
-            $before = $row ? (bool) $row->enabled : true;
-            $enabled = $input['features'][self::CODE];
-            if ($before === $enabled) return ['changed' => false, 'detail' => $this->detail($input)];
+            if (array_key_exists('expected_revision', $input)) {
+                if (!hash_equals($this->revision((string) $site->site_id, $rows), $input['expected_revision'])) $this->reject('配置已被其他操作员修改，请重新打开配置');
+            } elseif ($this->latestUpdatedAt($rows) !== $input['expected_updated_at']) $this->reject('配置已被其他操作员修改，请重新打开配置');
+            $before = $this->values($rows);
+            $changes = [];
+            foreach ($input['features'] as $code => $enabled) if ($before[$code] !== $enabled) $changes[$code] = $enabled;
+            if (!$changes) return ['changed' => false, 'detail' => $this->detail($input)];
             $clock = CarbonImmutable::now();
-            if ($row?->updated_at && $clock->lessThanOrEqualTo(CarbonImmutable::parse($row->updated_at))) $clock = CarbonImmutable::parse($row->updated_at)->addMicrosecond();
+            $latest = $this->latestUpdatedAt($rows);
+            if ($latest && $clock->lessThanOrEqualTo(CarbonImmutable::parse($latest))) $clock = CarbonImmutable::parse($latest)->addMicrosecond();
             $now = $clock->format('Y-m-d H:i:s.uP');
-            $data = ['enabled' => $enabled, 'updated_at' => $now];
-            if ($row) {
-                $this->table('wl_site_modules')->where('site_id', $site->site_id)
-                    ->where('module_type', 'feature')->where('module_code', self::CODE)->update($data);
-            } else {
-                $this->table('wl_site_modules')->insert($data + ['site_id' => $site->site_id,
-                    'module_code' => self::CODE, 'module_type' => 'feature', 'created_at' => $now]);
+            foreach ($changes as $code => $enabled) {
+                $data = ['enabled' => $enabled, 'updated_at' => $now];
+                if (isset($rows[$code])) {
+                    $this->table('wl_site_modules')->where('site_id', $site->site_id)
+                        ->where('module_type', 'feature')->where('module_code', $code)->update($data);
+                } else {
+                    $this->table('wl_site_modules')->insert($data + ['site_id' => $site->site_id,
+                        'module_code' => $code, 'module_type' => 'feature', 'created_at' => $now]);
+                }
             }
             $audit(['tenant_id' => (string) $tenant->tenant_id, 'site_id' => (string) $site->site_id,
-                'before' => [self::CODE => $before], 'features' => [self::CODE => $enabled], 'updated_at' => $now], $now);
+                'before' => array_intersect_key($before, $changes), 'features' => $changes, 'updated_at' => $now], $now);
             return ['changed' => true, 'detail' => $this->detail($input)];
         }, 3);
     }
