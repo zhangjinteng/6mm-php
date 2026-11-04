@@ -27,7 +27,10 @@ final class TradeReportAggregator
             $tenantId = $directory['sites'][$site] ?? null;
             $tenant = $directory['tenants'][(string) $tenantId] ?? null;
             $complete = $tenant !== null && ($agent !== null || !ReportUserScope::positiveId((string) $user['agent_id']));
-            $sources = array_filter([$agent, $tenant, $platform]);
+            // White-label trade totals contain direct users only. SourceDirectory
+            // normalizes NULL agent_id to '0'; negative/invalid IDs are not direct users.
+            $directUser = (string) ($user['agent_id'] ?? '0') === '0';
+            $sources = array_filter([$agent, $directUser ? $tenant : null, $platform]);
             foreach ($sources as $source) {
                 foreach (array_unique(['', (string) $fact['symbol']]) as $symbol) {
                     $key = $this->key($source, $symbol);

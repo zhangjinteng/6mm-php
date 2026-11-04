@@ -149,6 +149,8 @@ foreach ([0, 1, 2, 3, 99] as $userType) {
         foreach ($query->get() as $row) $rows[$row->source_type . ':' . $row->source_id] = (array) $row;
         scopeCheck(count($rows) === count($expectedUsers), "type {$userType}, {$table}: exactly six sources, no historical merchant 999");
         foreach ($expectedUsers as $source => $users) {
+            $tradeUsers = str_starts_with($source, 'tenant:') ? 1 : $users;
+            if (in_array($table, [Futures\TradeReportSchema::TABLE, Futures\PnlReportSchema::TABLE], true)) $users = $tradeUsers;
             $label = "type {$userType}, {$table}, {$source}";
             scopeCheck(isset($rows[$source]), "{$label}: source is published");
             scopeCheck(bccomp((string) $rows[$source][$amount], (string) ($sign * 100 * $users), 16) === 0,
@@ -157,8 +159,8 @@ foreach ([0, 1, 2, 3, 99] as $userType) {
             scopeCheck((int) $rows[$source]['status'] === 1, "{$label}: excluded origins/cross-site merchants do not make valid data incomplete");
             if ($source === 'platform:0') scopeCheck($rows[$source]['source_name'] === '6MM', "{$label}: platform is named 6MM");
             if ($table === TradeSummarySchema::TABLE) {
-                scopeCheck(bccomp((string) $rows[$source]['contract_trade_amount'], (string) (100 * $users), 16) === 0,
-                    "{$label}: contract and prediction cohorts agree without double-counting users");
+                scopeCheck(bccomp((string) $rows[$source]['contract_trade_amount'], (string) (100 * $tradeUsers), 16) === 0,
+                    "{$label}: summary reuses direct-only tenant contract trade totals");
             }
         }
     }

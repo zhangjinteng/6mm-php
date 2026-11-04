@@ -40,7 +40,9 @@ final class PnlReportAggregator
             $userId = (string) $fact['user_id'];
             $pnl = (string) ($fact['realized_pnl'] ?? '0');
             if (!is_numeric($pnl)) throw new InvalidArgumentException('合约盈亏事实金额无效');
-            foreach (array_filter([$agent, $tenant, $platform]) as $source) {
+            // Match the direct-user cohort of the shared white-label trade notional.
+            $directUser = (string) ($user['agent_id'] ?? '0') === '0';
+            foreach (array_filter([$agent, $directUser ? $tenant : null, $platform]) as $source) {
                 foreach (array_unique(['', (string) ($fact['symbol'] ?? '')]) as $symbol) {
                     $key = $this->key($source + ['symbol' => $symbol]);
                     if (!isset($groups[$key])) throw new InvalidArgumentException('盈亏事实缺少对应交易日报来源');

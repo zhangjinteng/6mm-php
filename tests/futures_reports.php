@@ -56,7 +56,7 @@ $schema->create('agents', function (Blueprint $t): void {
     $t->bigInteger('id'); $t->bigInteger('pid'); $t->string('agent_code'); $t->string('agent_name');
     $t->string('user_name'); $t->bigInteger('home_site_id')->nullable(); $t->timestamp('deleted_at')->nullable();
 });
-$schema->create('users', function (Blueprint $t): void { $t->bigInteger('user_id'); $t->bigInteger('home_site_id')->nullable(); $t->bigInteger('agent_id')->default(0); });
+$schema->create('users', function (Blueprint $t): void { $t->bigInteger('user_id'); $t->bigInteger('home_site_id')->nullable(); $t->bigInteger('agent_id')->nullable()->default(0); });
 $schema->create($control . 'wl_sites', function (Blueprint $t): void { $t->bigInteger('site_id'); $t->bigInteger('tenant_id'); });
 $schema->create($control . 'wl_tenants', function (Blueprint $t): void { $t->bigInteger('tenant_id'); $t->string('tenant_name'); });
 foreach ([1 => 100, 2 => 101] as $id => $site) $connection->table('agents')->insert(['id' => $id, 'pid' => 0, 'agent_code' => 'MER' . $id, 'agent_name' => 'Merchant' . $id, 'user_name' => 'merchant', 'home_site_id' => $site]);
@@ -71,6 +71,8 @@ $connection->table('users')->insert([
     ['user_id' => 8, 'home_site_id' => -1, 'agent_id' => 1],
     ['user_id' => 9, 'home_site_id' => 101, 'agent_id' => 1],
     ['user_id' => 10, 'home_site_id' => 999, 'agent_id' => 0],
+    ['user_id' => 11, 'home_site_id' => 101, 'agent_id' => null],
+    ['user_id' => 12, 'home_site_id' => 100, 'agent_id' => -1],
 ]);
 $directory = (new SourceDirectory($connection))->load(['9007199254740993', '4']);
 $fundingAggregator = new FundingFeeReportAggregator();
@@ -129,7 +131,7 @@ $scopedRows = $aggregator->build('2026-10-09', [$base,
     array_merge($base, ['user_id' => '8']), array_merge($base, ['user_id' => '777']),
 ], $scopedDirectory, true);
 checkTrade(sourceTrade($scopedRows, 'platform', '0')['order_count'] === 2, 'Exclude zero, null, negative and missing public user origins');
-checkTrade(sourceTrade($scopedRows, 'tenant', '1')['trading_user_count'] === 2, 'White-label direct users remain in shared tenant totals');
+checkTrade(sourceTrade($scopedRows, 'tenant', '1')['trading_user_count'] === 1, 'White-label totals include direct users but exclude merchant users');
 checkTrade(sourceTrade($scopedRows, 'merchant', '1')['order_count'] === 1, 'Direct users must not enter a merchant total');
 $crossSite = $aggregator->build('2026-10-09', [array_merge($base, ['user_id' => '9'])], $scopedDirectory, true);
 checkTrade(sourceTrade($crossSite, 'merchant', '1')['order_count'] === 1 && sourceTrade($crossSite, 'tenant', '1')['status'] === 1,
@@ -164,13 +166,26 @@ checkTrade($compact->settlementRows()[0]['close_order_count'] === 2 && $compact-
 checkTrade($compact->feeRows()[0]['trading_fee'] === '2.2469135780246912' && !isset($compact->feeRows()[0]['execution_details']), 'Streaming fees retain exact decimals, not full hourly facts');
 $rows = $aggregator->build('2026-10-09', [$base, $other], $directory, true);
 $tenant = sourceTrade($rows, 'tenant', '1');
-checkTrade($tenant['trading_user_count'] === 2 && $tenant['fill_count'] === 1 && $tenant['filled_order_count'] === 2, 'Tenant must deduplicate both sides across multiple sites');
-checkTrade($tenant['trade_amount'] === '10.1234567890123456', 'Exact decimal notional is counted once');
+checkTrade($tenant['trading_user_count'] === 0 && $tenant['fill_count'] === 0 && $tenant['trade_amount'] === '0', 'Merchant-only activity retains an empty white-label skeleton');
 checkTrade(sourceTrade($rows, 'merchant', '1')['trading_user_count'] === 1, 'Merchant and tenant ID collision must not merge');
 checkTrade(sourceTrade($rows, 'platform', '0')['fill_count'] === 1, 'Platform scope deduplication');
+$directDirectory = (new SourceDirectory($connection))->load(['9007199254740993', '4', '5', '11', '12']);
+$directZero = array_merge($base, ['user_id' => '5']);
+$directNull = array_merge($other, ['user_id' => '11']);
+$rows = $aggregator->build('2026-10-09', [$base, $other, $directZero, $directNull,
+    array_merge($base, ['user_id' => '12'])], $directDirectory, true);
+$tenant = sourceTrade($rows, 'tenant', '1');
+checkTrade($tenant['trading_user_count'] === 2 && $tenant['order_count'] === 2
+    && $tenant['fill_count'] === 1 && $tenant['filled_order_count'] === 2,
+    'Zero/NULL direct users deduplicate across tenant sites; positive and negative agent IDs are excluded');
+checkTrade($tenant['trade_amount'] === '10.1234567890123456', 'Direct-user decimal notional is counted once');
+checkTrade(sourceTrade($rows, 'merchant', '1')['order_count'] === 1
+    && sourceTrade($rows, 'merchant', '2')['order_count'] === 1
+    && sourceTrade($rows, 'platform', '0')['order_count'] === 5,
+    'Direct-only white-label scope does not change merchant or platform totals');
 $store = new TradeReportStore($connection);
 $store->replace('2026-10-09', $rows);
-$next = $aggregator->build('2026-10-10', [$base], $directory, false);
+$next = $aggregator->build('2026-10-10', [$base, $directZero], $directDirectory, false);
 $store->replace('2026-10-10', $next);
 foreach (['day', 'month'] as $searchPeriod) {
     $searchParams = ['start_date' => '2026-10-09', 'end_date' => '2026-10-10', 'period' => $searchPeriod];
@@ -277,10 +292,13 @@ try { $store->search(['source_keyword' => str_repeat('字', 129)]); throw new Ru
 catch (InvalidArgumentException $e) {}
 $pnlAggregator = new PnlReportAggregator();
 $pnlStore = new PnlReportStore($connection);
-$pnlDayOneFacts = [array_merge($base, ['realized_pnl' => '2.0000000000000000']),
-    array_merge($other, ['realized_pnl' => '-1.0000000000000000'])];
-$pnlDayTwoFacts = [array_merge($base, ['realized_pnl' => '-3.0000000000000000']),
-    array_merge($other, ['realized_pnl' => '2.0000000000000000'])];
+$pnlDayOneFacts = [array_merge($directZero, ['realized_pnl' => '2.0000000000000000']),
+    array_merge($directNull, ['realized_pnl' => '-1.0000000000000000']),
+    array_merge($base, ['realized_pnl' => '1000'])];
+$pnlDayTwoFacts = [array_merge($directZero, ['realized_pnl' => '-3.0000000000000000']),
+    array_merge($directNull, ['realized_pnl' => '2.0000000000000000']),
+    array_merge($base, ['realized_pnl' => '1000'])];
+$directory = $directDirectory;
 $pnlDayOne = $pnlAggregator->build('2026-10-09', $pnlDayOneFacts, $directory,
     $aggregator->build('2026-10-09', $pnlDayOneFacts, $directory, true));
 $pnlDayTwo = $pnlAggregator->build('2026-10-10', $pnlDayTwoFacts, $directory,
@@ -301,7 +319,8 @@ checkTrade(!isset($pnlMonthly['user_metrics']) && $pnlMonthly['stat_status'] ===
 $pnlMerchant = $pnlStore->search(['period' => 'month', 'start_date' => '2026-10-09', 'end_date' => '2026-10-10',
     'source_type' => 'platform', 'source_id' => '2'], '1')['lists'][0];
 checkTrade($pnlMerchant['source_type'] === 'merchant' && $pnlMerchant['source_id'] === '1'
-    && $pnlMerchant['profitable_user_count'] === 0, 'Authenticated merchant scope cannot be replaced by request scope');
+    && $pnlMerchant['profitable_user_count'] === 1 && bccomp($pnlMerchant['net_pnl'], '2000', 16) === 0,
+    'Authenticated merchant scope cannot be replaced by request scope or reduced by the direct-user tenant rule');
 $pnlZero = $pnlStore->search(['period' => 'day', 'start_date' => '2026-10-09', 'end_date' => '2026-10-10',
     'source_type' => 'tenant', 'source_id' => '1', 'symbol' => 'ETHUSDT']);
 checkTrade($pnlZero['count'] === 2 && bccomp($pnlZero['lists'][0]['net_pnl'], '0', 16) === 0,
@@ -321,6 +340,7 @@ catch (InvalidArgumentException $e) {}
 $buckets->bucket = ['status' => 'completed', 'calculation_version' => AgentFuturesHourlyFactService::CALCULATION_VERSION,
     'agent_ids' => [0, 1, 2], 'window_start' => '2026-10-09 00:00:00', 'window_end' => '2026-10-09 01:00:00',
     'rows' => $pnlDayOneFacts];
+$publisher->publish('2026-10-09', 1, true, [0, 1, 2]);
 $pnlPublisher = new PnlReportPublisher($buckets, new SourceDirectory($connection), $connection, $pnlStore);
 checkTrade($pnlPublisher->publish('2026-10-09', 1, [0, 1, 2]) > 0,
     'PnL publisher consumes validated shared hour facts and the trade-report notional');
