@@ -71,6 +71,18 @@ assetCheck($tenant['count'] === 2, 'Tenant search works');
 $merchant = $store->search(array_merge($params, ['source_type'=>'platform']), '1');
 assetCheck($merchant['count'] === 2 && $merchant['lists'][0]['source_type'] === 'merchant'
     && $merchant['lists'][0]['source_id'] === '1', 'Authenticated merchant cannot read other scope');
+$scopedTenant = $store->search($params + ['source_keyword'=>'another'], null, '7');
+assetCheck($scopedTenant['lists'] === $tenant['lists'], 'Trusted tenant scope matches platform tenant totals');
+assetCheck($store->search($params, null, '99')['count'] === 0, 'Unknown tenant cannot fall back to platform');
+assetCheck($store->search($params, null, '99')['currencies'] === [], 'Unknown tenant cannot read global currencies');
+foreach ([['1', '7'], [null, '0'], [null, 'bad']] as [$merchantId, $tenantId]) {
+    try {
+        $store->search($params, $merchantId, $tenantId);
+        throw new RuntimeException('Invalid or conflicting scope accepted');
+    } catch (InvalidArgumentException $e) {
+        assetCheck($e->getMessage() === '无效的资产报表身份范围', 'Invalid identity is rejected');
+    }
+}
 $db->table(AssetBalanceReportSchema::DIRECT_TABLE)->where('stat_date', '2026-10-12')->delete();
 $incomplete = $store->search($params);
 assetCheck(assetRow($incomplete['lists'], 'platform', '2026-10-12')['stat_status'] === 2,

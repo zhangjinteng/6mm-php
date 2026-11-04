@@ -8,6 +8,7 @@ use Carbon\CarbonImmutable;
 use Illuminate\Database\ConnectionInterface;
 use InvalidArgumentException;
 use SixMm\Shared\FuturesReports\MerchantReportScope;
+use SixMm\Shared\FuturesReports\ReportUserScope;
 use SixMm\Shared\FuturesReports\SourceDirectory;
 
 /** A snapshot report: month balances are first/last snapshots, never sums across days. */
@@ -17,8 +18,16 @@ final class AssetBalanceReportStore
 
     public function __construct(private ConnectionInterface $db) {}
 
-    public function search(array $params, ?string $merchantAccountId = null): array
+    /** Tenant/merchant scope must come from authenticated identity, never request parameters. */
+    public function search(array $params, ?string $merchantAccountId = null, ?string $tenantId = null): array
     {
+        if ($tenantId !== null) {
+            if ($merchantAccountId !== null || !ReportUserScope::positiveId($tenantId)) {
+                throw new InvalidArgumentException('无效的资产报表身份范围');
+            }
+            $params['source_type'] = 'tenant';
+            unset($params['source_id'], $params['source_keyword']);
+        }
         $period = (string) ($params['period'] ?? 'day');
         if (!in_array($period, ['day', 'month'], true)) throw new InvalidArgumentException('无效的统计周期');
         $today = CarbonImmutable::now('UTC')->startOfDay();
@@ -30,13 +39,22 @@ final class AssetBalanceReportStore
         $type = (string) ($params['source_type'] ?? 'platform');
         if (!in_array($type, ['platform', 'tenant', 'merchant'], true)) throw new InvalidArgumentException('无效的来源类型');
         $scope = $merchantAccountId === null ? null : MerchantReportScope::forAccount($this->db, $merchantAccountId);
+        $directory = (new SourceDirectory($this->db))->load();
+        if ($tenantId !== null) {
+            $directory['agents'] = array_filter($directory['agents'], static fn (array $agent): bool =>
+                (string) ($directory['sites'][$agent['site_id']] ?? '') === $tenantId);
+            $directory['tenants'] = array_filter($directory['tenants'], static fn (array $tenant): bool =>
+                (string) $tenant['source_id'] === $tenantId);
+        }
         $prefix = $this->db->getDriverName() === 'pgsql' ? 'public.' : '';
         $currencyQuery = $this->db->table($prefix . 'admin_agent_margin_daily_statistics');
         if ($scope !== null) $currencyQuery->where('agent_id', $scope->merchantId);
+        if ($tenantId !== null) $currencyQuery->whereIn('agent_id', array_keys($directory['agents']));
         $currencies = $currencyQuery->whereNotNull('currency')->where('currency', '<>', '')
             ->distinct()->pluck('currency')->map(static fn ($value): string => (string) $value)->all();
         if ($scope === null) {
             $currencies = array_merge($currencies, $this->db->table($prefix . AssetBalanceReportSchema::DIRECT_TABLE)
+                ->when($tenantId !== null, static fn ($query) => $query->where('tenant_id', $tenantId))
                 ->whereNotNull('currency')->where('currency', '<>', '')->distinct()->pluck('currency')
                 ->map(static fn ($value): string => (string) $value)->all());
         }
@@ -45,9 +63,9 @@ final class AssetBalanceReportStore
         $query = $this->db->table($prefix . 'admin_agent_margin_daily_statistics')
             ->whereBetween('stat_date', [$start->toDateString(), $end->toDateString()]);
         if ($scope !== null) $query->where('agent_id', $scope->merchantId);
+        if ($tenantId !== null) $query->whereIn('agent_id', array_keys($directory['agents']));
         if ($currency !== '') $query->where('currency', $currency);
         $merchantRows = $query->get();
-        $directory = (new SourceDirectory($this->db))->load();
         $groups = [];
         $merchantSeen = [];
         foreach ($merchantRows as $record) {
@@ -56,8 +74,8 @@ final class AssetBalanceReportStore
             if ($record->currency === 'USDT') {
                 $merchantSeen[$record->stat_date . ':' . $record->agent_id . ':' . $record->account_type] = true;
             }
-            $tenantId = (string) ($directory['sites'][$merchant['site_id']] ?? '');
-            $tenant = $directory['tenants'][$tenantId] ?? null;
+            $merchantTenantId = (string) ($directory['sites'][$merchant['site_id']] ?? '');
+            $tenant = $directory['tenants'][$merchantTenantId] ?? null;
             $sources = [$merchant];
             if ($scope === null) {
                 if ($tenant !== null) $sources[] = $tenant;
@@ -69,6 +87,7 @@ final class AssetBalanceReportStore
         if ($scope === null) {
             $direct = $this->db->table($prefix . AssetBalanceReportSchema::DIRECT_TABLE)
                 ->whereBetween('stat_date', [$start->toDateString(), $end->toDateString()]);
+            if ($tenantId !== null) $direct->where('tenant_id', $tenantId);
             if ($currency !== '') $direct->where('currency', $currency);
             foreach ($direct->get() as $record) {
                 $tenant = $directory['tenants'][(string) $record->tenant_id] ?? null;
