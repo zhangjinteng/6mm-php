@@ -1,0 +1,11 @@
+# Shared per-site SEO configuration
+
+`SeoConfigStore` owns reads, validation, default values, effective-indexing conditions, current-primary-domain verification-token binding, integer optimistic versions and transactional audit callbacks. It reuses `control_plane.wl_site_seo_configs`, `wl_sites`, `wl_tenants` and `wl_site_domains`. The existing Platform migration must already be deployed; this extraction introduces no schema or scheduled task.
+
+Platform uses its existing all-sites policy and `platform_admin` actor namespace. Agent passes `enabledSitesOnly=true` and derives `tenant_id` from `WlTenantAccount`, never browser input. Its `sites()` result contains only owned enabled sites; `detail()` and `save()` recheck scope. Save rechecks the tenant and site under row locks (tenant then site), bounds PostgreSQL lock/statement timeouts, rejects stale `expected_version`, avoids no-op writes, and invokes a mandatory audit callback inside the transaction. A failing audit rolls everything back. Agent writes actors as `tenant_admin`, matching the existing table constraint, not as Platform admins.
+
+Audit metadata contains IDs, versions, language codes, flags and actor type only, never SEO copy, Search Console tokens or translation API keys. No runtime snapshots, business entitlements or historical data are changed.
+
+`SeoTranslationService` first verifies SEO tenant/site scope. A host-owned settings callback chooses Platform's default CMS settings or Agent's exact site-space settings. Only title/description plain-text previews are returned; the SEO save endpoint remains the sole writer. Encrypted Google credentials are resolved server-side with no environment fallback on decryption failure. Hosts keep separate permissions and translation rate limits; Agent never exposes platform credential-management callbacks.
+
+Tests: `php tests/tenant_seo.php`, Platform `TenantSeoConfigTest`, Agent `WhiteLabelSeoTest`. All use isolated fixtures; no live database/configuration or Google calls are required.
