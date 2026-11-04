@@ -57,6 +57,13 @@ final class GridConfigInput
             $keys[] = 'based_on_global_version';
             sort($keys, SORT_STRING);
         }
+        if (array_key_exists('based_on_availability_version', $command)) {
+            $version = $command['based_on_availability_version'];
+            if ($actor['source_service'] === 'agent_admin' || ($command['changes']['enabled'] ?? null) !== true ||
+                !is_string($version) || !self::isPositiveInt64($version)) { throw GridConfigException::invalidInput(); }
+            $keys[] = 'based_on_availability_version';
+            sort($keys, SORT_STRING);
+        }
         self::exactKeys($command, $keys);
         self::site($command['site_id'] ?? null);
         self::symbol($command['symbol'] ?? null);
@@ -209,15 +216,35 @@ final class GridConfigInput
         if (array_key_exists('based_on_global_version', $command)) {
             $payload['based_on_global_version'] = $command['based_on_global_version'];
         }
+        if (isset($command['based_on_availability_version'])) {
+            $payload['based_on_availability_version'] = $command['based_on_availability_version'];
+        }
         return hash('sha256', json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR));
     }
 
-    /** GLOBAL has no site or switch; submit one complete parameter group. */
+    /** Template saves and platform availability have disjoint command shapes. */
     public static function globalCommand(array $actor, array $command): array
     {
         $actor = self::actor($actor);
         if ($actor['source_service'] !== 'platform_admin') {
             throw new GridConfigException('FORBIDDEN', 'Only platform can manage global parameters');
+        }
+        if (($command['action'] ?? null) === 'save_parameters') {
+            unset($command['action']); // Keep legacy template receipts recoverable.
+        }
+        self::symbol($command['symbol'] ?? null);
+        if (!is_string($command['client_request_id'] ?? null) || preg_match('/^[A-Za-z0-9_-]{8,64}$/D', $command['client_request_id']) !== 1 ||
+            !is_string($command['reason'] ?? null) || strlen($command['reason']) < 1 || strlen($command['reason']) > 500 ||
+            strpos($command['reason'], "\0") !== false || preg_match('//u', $command['reason']) !== 1) {
+            throw GridConfigException::invalidInput();
+        }
+        if (($command['action'] ?? null) === 'set_enabled') {
+            self::exactKeys($command, ['action', 'based_on_availability_version', 'client_request_id', 'enabled', 'reason', 'symbol']);
+            $version = $command['based_on_availability_version'];
+            if (!is_bool($command['enabled']) || !is_string($version) || ($version !== '0' && !self::isPositiveInt64($version))) {
+                throw GridConfigException::invalidInput();
+            }
+            return $command;
         }
         $keys = ['based_on_global_version', 'changes', 'client_request_id', 'reason', 'symbol'];
         if (array_key_exists('layout', $command) || array_key_exists('based_on_layout_version', $command)) {
@@ -242,12 +269,8 @@ final class GridConfigInput
         } else {
             self::exactKeys($command, $keys);
         }
-        self::symbol($command['symbol']);
         $version = $command['based_on_global_version'];
-        if (!is_string($version) || ($version !== '0' && !self::isPositiveInt64($version)) ||
-            !is_string($command['client_request_id']) || preg_match('/^[A-Za-z0-9_-]{8,64}$/D', $command['client_request_id']) !== 1 ||
-            !is_string($command['reason']) || strlen($command['reason']) < 1 || strlen($command['reason']) > 500 ||
-            strpos($command['reason'], "\0") !== false || preg_match('//u', $command['reason']) !== 1 || !is_array($command['changes'])) {
+        if (!is_string($version) || ($version !== '0' && !self::isPositiveInt64($version)) || !is_array($command['changes'])) {
             throw GridConfigException::invalidInput();
         }
         $keys = self::PARAMETER_KEYS;

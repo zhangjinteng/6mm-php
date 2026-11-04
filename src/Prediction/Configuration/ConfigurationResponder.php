@@ -32,8 +32,13 @@ final class ConfigurationResponder
         } catch (ConfigurationFailure $error) {
             $data = ['error_code' => $error->errorCode];
             // Only the protocol control flag is public. Never leak transport internals.
-            if (isset($error->detail['control']) && is_array($error->detail['control'])) {
-                $data['control'] = $error->detail['control'];
+            $control = $error->detail['control'] ?? null;
+            if (is_array($control)) {
+                $receiptId = $error->detail['client_request_id'] ?? null;
+                if (($control['submission_outcome'] ?? null) !== 'REJECTED'
+                    || ($save && is_string($receiptId) && $receiptId !== '' && $receiptId === ($input['client_request_id'] ?? null))) {
+                    $data['control'] = $control;
+                }
             }
         } catch (\Throwable $error) {
             // A timeout or invalid success receipt cannot prove that a write did not commit.
@@ -58,7 +63,14 @@ final class ConfigurationResponder
             ], true);
             $data = ['error_code' => $error->errorCode, 'grpc_status_code' => $error->grpcStatus,
                 'detail' => $public ? $error->detail : [], 'request_id' => $traceId];
-            if ($public && isset($error->detail['control'])) $data['control'] = $error->detail['control'];
+            if ($public && isset($error->detail['control'])) {
+                $data['control'] = $error->detail['control'];
+                $receiptId = $error->detail['client_request_id'] ?? null;
+                if ($save && is_array($data['control']) && ($data['control']['submission_outcome'] ?? null) === 'REJECTED'
+                    && is_string($receiptId) && $receiptId !== '') {
+                    $data['client_request_id'] = $receiptId;
+                }
+            }
             return self::response(false, $data, $public ? $error->getMessage() : 'Prediction gRPC 调用失败');
         } catch (\Throwable $error) {
             return self::response(false, ['error_code' => $save ? 'ERROR_CODE_OUTCOME_UNKNOWN' : 'ERROR_CODE_UNAVAILABLE',
