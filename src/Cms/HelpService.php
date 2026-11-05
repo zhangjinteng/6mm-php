@@ -12,6 +12,8 @@ use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
+use SixMm\Shared\Media\MediaRegistry;
+
 class HelpService
 {
     use HasCmsSourceScope;
@@ -29,6 +31,7 @@ class HelpService
     {
         return self::identityRules($edit) + [
             'name' => 'required|string|max:120', 'parent_id' => 'nullable|integer|min:1',
+            'image_media_id' => 'sometimes|nullable|integer|min:1',
             'icon_key' => ['nullable', 'string', 'max:128', 'regex:/^[a-zA-Z0-9][a-zA-Z0-9_:-]*$/D'],
             'sort_order' => 'required|integer|between:0,2147483647', 'is_enabled' => 'required|boolean',
         ];
@@ -248,6 +251,18 @@ class HelpService
             $this->fail('记录不存在或不在当前文章模板范围内');
         }
         $result = $this->row($row);
+        if ($kind === 'categories') {
+            $owner = (int) ($result['cms_tenant_id'] ?? 0);
+            $image = $this->db()->table('cms.media_references as r')
+                ->join('cms.media_files as f', 'f.id', '=', 'r.media_id')
+                ->where(['r.app_key' => 'platform_admin', 'r.module_key' => 'cms.help',
+                    'r.entity_type' => 'category', 'r.entity_id' => (string) $id, 'r.field_key' => 'image',
+                    'r.usage_state' => 'published', 'r.owner_type' => $owner ? 'white_label' : 'platform',
+                    'r.owner_id' => $owner, 'f.storage_status' => 'available'])
+                ->whereNull('r.released_at')->first(['r.media_id', 'f.public_url']);
+            $result['image_media_id'] = $image ? (string) $image->media_id : null;
+            $result['image_url'] = $image->public_url ?? null;
+        }
         if ($kind === 'articles') {
             $result['related_articles'] = $this->db()->table('cms.content_links as l')
                 ->join('cms.contents as c', 'c.id', '=', 'l.related_content_id')
@@ -258,6 +273,14 @@ class HelpService
             $result['related_content_ids'] = array_column($result['related_articles'], 'id');
         }
         return $result;
+    }
+
+    private function syncCategoryImage(object $space, int $id, array $ids): void
+    {
+        $source = $this->cmsSourceRow(['space_id' => $space->id]);
+        $owner = (int) ($source['cms_tenant_id'] ?? 0);
+        (new MediaRegistry())->checkMediaReferences('platform_admin', $owner ? 'white_label' : 'platform',
+            $owner, 'cms.help', 'category', (string) $id, 'image', 'published', $ids);
     }
 
     private function editRow(string $table, object $space, array $p): ?object
@@ -294,7 +317,7 @@ class HelpService
                 }
             }
             $data = ['name' => trim($p['name']), 'parent_id' => $parentId,
-                'icon_key' => $p['icon_key'] ?? null,
+                'icon_key' => array_key_exists('icon_key', $p) ? $p['icon_key'] : ($old->icon_key ?? null),
                 'sort_order' => $p['sort_order'], 'is_enabled' => (bool) $p['is_enabled']];
             if ($old) {
                 $this->scoped('categories', $space)->where('id', $old->id)
@@ -308,6 +331,9 @@ class HelpService
                 $id = $this->db()->table('cms.categories')->insertGetId($data + [
                     'space_id' => $space->id, 'module' => 'help', 'code' => 'CAT'.strtoupper(Str::random(20)),
                 ] + $this->audit($actor, true));
+            }
+            if (array_key_exists('image_media_id', $p)) {
+                $this->syncCategoryImage($space, (int) $id, $p['image_media_id'] === null ? [] : [$p['image_media_id']]);
             }
             return $this->detail('categories', (int) $id);
         });
@@ -425,6 +451,7 @@ class HelpService
                     || $this->scoped('contents', $space)->where('category_id', $old->id)->exists()) {
                     $this->fail('分类下仍有子分类或文章，请先调整或删除关联记录');
                 }
+                $this->syncCategoryImage($space, (int) $old->id, []);
             } else {
                 $this->checkPublishPermission($canPublish, $old->publish_status, $old);
                 ContentMediaReferences::sync(['body_html' => '', 'cover_url' => null] + $this->cmsSourceRow((array) $old), 'help');
