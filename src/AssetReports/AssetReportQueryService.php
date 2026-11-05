@@ -41,6 +41,18 @@ final class AssetReportQueryService
             + ['schema_ready' => $data['schema_ready'], 'currency' => 'USDT', 'user_types' => 'all'];
     }
 
+    /** Partner-only entry point: the authenticated owner is mandatory, even when the request omits all filters. */
+    public function searchPartnerChanges(array $params, string $ownerType, string $ownerId): array
+    {
+        if (!in_array($ownerType, ['tenant', 'merchant'], true) || !ReportUserScope::positiveId($ownerId)) {
+            throw new InvalidArgumentException('资产变动报表需要有效的白标或商户身份');
+        }
+        unset($params['source_keyword']);
+        $params['source_type'] = $ownerType;
+        $params['source_id'] = $ownerId;
+        return $this->search($params, 'changes');
+    }
+
     /** Balance and distribution share the same cohort, snapshot and historical-boundary validation. */
     public function searchBalance(array $params, ?string $merchantAccountId = null, ?string $tenantId = null): array
     {
