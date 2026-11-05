@@ -14,7 +14,7 @@ use Illuminate\Validation\ValidationException;
 
 class AnnouncementService
 {
-    use HasCmsSourceScope;
+    use HasCmsSourceScope, HasCategoryImage;
 
     public static function identityRules(bool $edit): array
     {
@@ -28,6 +28,7 @@ class AnnouncementService
     public static function categoryRules(bool $edit): array
     {
         return self::identityRules($edit) + [
+            'image_media_id' => 'sometimes|nullable|integer|min:1',
             'name' => 'required|string|max:120', 'parent_id' => 'nullable|integer|min:1',
             'sort_order' => 'required|integer|between:0,2147483647', 'is_enabled' => 'required|boolean',
         ];
@@ -244,6 +245,9 @@ class AnnouncementService
             $this->fail('记录不存在或不在当前公告模板范围内');
         }
         $result = $this->row($row);
+        if ($kind === 'categories') {
+            return $this->categoryImage($result, $id, 'cms.announcement');
+        }
         if ($kind === 'articles') {
             $result['related_articles'] = $this->db()->table('cms.content_links as l')
                 ->join('cms.contents as c', 'c.id', '=', 'l.related_content_id')
@@ -303,6 +307,9 @@ class AnnouncementService
                 $id = $this->db()->table('cms.categories')->insertGetId($data + [
                     'space_id' => $space->id, 'module' => 'announcement', 'code' => 'CAT'.strtoupper(Str::random(20)),
                 ] + $this->audit($actor, true));
+            }
+            if (array_key_exists('image_media_id', $p)) {
+                $this->syncCategoryImage($space, (int) $id, $p['image_media_id'] === null ? [] : [$p['image_media_id']], 'cms.announcement');
             }
             return $this->detail('categories', (int) $id);
         });
@@ -419,6 +426,7 @@ class AnnouncementService
                     || $this->scoped('contents', $space)->where('category_id', $old->id)->exists()) {
                     $this->fail('分类下仍有子分类或公告，请先调整或删除关联记录');
                 }
+                $this->syncCategoryImage($space, (int) $old->id, [], 'cms.announcement');
             } else {
                 $this->checkPublishPermission($canPublish, $old->publish_status, $old);
                 ContentMediaReferences::sync(['body_html' => '', 'cover_url' => null] + $this->cmsSourceRow((array) $old), 'announcement');
