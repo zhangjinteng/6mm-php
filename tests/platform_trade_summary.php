@@ -98,7 +98,7 @@ $current = $store->search(['start_date' => '2026-10-14', 'end_date' => '2026-10-
 summaryCheck($current['stat_status'] === 2, 'Missing futures source is incomplete, not fake completed zero');
 $publisher->publish('2026-10-13', [array_merge($fact, ['user_id' => '814'])]);
 $conflict = $store->search($params + ['source_type' => 'tenant', 'source_id' => '900002'])['lists'][0];
-summaryCheck($conflict['stat_status'] === 2 && $conflict['prediction_trading_user_count'] === 1, 'Tenant follows the user site; missing tenant contract facts still mark the summary incomplete');
+summaryCheck($conflict['stat_status'] === 2 && $conflict['prediction_trading_user_count'] === 0, 'Tenant excludes merchant users; missing tenant contract facts still mark the summary incomplete');
 $crossMerchant = $store->search(['start_date' => '2026-10-13', 'end_date' => '2026-10-13'], '1')['lists'][0];
 summaryCheck($crossMerchant['stat_status'] === 1 && $crossMerchant['prediction_trading_user_count'] === 1,
     'A different user site does not prevent attribution to users.agent_id');

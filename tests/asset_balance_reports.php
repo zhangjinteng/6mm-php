@@ -26,7 +26,7 @@ $schema->create('agents', static function (Blueprint $t): void {
     $t->string('agent_code'); $t->string('agent_name'); $t->string('user_name'); $t->timestamp('deleted_at')->nullable();
 });
 $schema->create('users', static function (Blueprint $t): void {
-    $t->bigInteger('user_id'); $t->bigInteger('home_site_id')->nullable(); $t->bigInteger('agent_id'); $t->timestamp('deleted_at')->nullable();
+    $t->bigInteger('user_id'); $t->bigInteger('home_site_id')->nullable(); $t->bigInteger('agent_id')->nullable(); $t->timestamp('deleted_at')->nullable();
 });
 $schema->create('wl_sites', static function (Blueprint $t): void { $t->bigInteger('site_id'); $t->bigInteger('tenant_id'); });
 $schema->create('wl_tenants', static function (Blueprint $t): void { $t->bigInteger('tenant_id'); $t->string('tenant_name'); });
@@ -68,6 +68,12 @@ assetCheck($monthly['count'] === 1 && $monthly['lists'][0]['opening_total'] === 
     && $monthly['lists'][0]['period_net_change'] === '60.0000000000000000', 'Month selects first opening and last closing');
 $tenant = $store->search(array_merge($params, ['source_type'=>'tenant','source_keyword'=>'White label']));
 assetCheck($tenant['count'] === 2, 'Tenant search works');
+assetCheck(assetRow($tenant['lists'], 'tenant', '2026-10-13')['closing_total'] === '40.0000000000000000'
+    && assetRow($tenant['lists'], 'tenant', '2026-10-13')['funded_user_count'] === 1,
+    'Tenant balances and funded users include direct snapshots only');
+$tenantMonth = $store->search(array_merge($params, ['source_type'=>'tenant','period'=>'month']))['lists'][0];
+assetCheck($tenantMonth['opening_total'] === '20.0000000000000000'
+    && $tenantMonth['closing_total'] === '40.0000000000000000', 'Tenant month never adds merchant snapshots');
 $merchant = $store->search(array_merge($params, ['source_type'=>'platform']), '1');
 assetCheck($merchant['count'] === 2 && $merchant['lists'][0]['source_type'] === 'merchant'
     && $merchant['lists'][0]['source_id'] === '1', 'Authenticated merchant cannot read other scope');
@@ -90,6 +96,8 @@ assetCheck(assetRow($incomplete['lists'], 'platform', '2026-10-12')['stat_status
 $db->table('admin_agent_margin_daily_statistics')->where('agent_id', 2)->where('stat_date', '2026-10-13')->delete();
 assetCheck(assetRow($store->search($params)['lists'], 'platform', '2026-10-13')['stat_status'] === 2,
     'A missing merchant USDT snapshot must not make a platform total look complete');
+assetCheck(assetRow($store->search($params, null, '7')['lists'], 'tenant', '2026-10-13')['stat_status'] === 1,
+    'Tenant completeness does not depend on merchant snapshots');
 $capsule->addConnection(['driver'=>'sqlite','database'=>':memory:'], 'asset');
 $asset = $capsule->getConnection('asset');
 $assetSchema = $asset->getSchemaBuilder();
@@ -98,7 +106,7 @@ $schema->create('user_assets', static function (Blueprint $t): void {
     $t->decimal('frozen_balance', 38, 16); $t->timestamp('deleted_at')->nullable();
 });
 $assetSchema->create('funding_accounts', static function (Blueprint $t): void {
-    $t->bigInteger('account_id'); $t->bigInteger('user_id'); $t->bigInteger('agent_id'); $t->string('status');
+    $t->bigInteger('account_id'); $t->bigInteger('user_id'); $t->bigInteger('agent_id')->nullable(); $t->string('status');
 });
 $assetSchema->create('funding_assets', static function (Blueprint $t): void {
     $t->bigInteger('asset_id'); $t->string('asset_code'); $t->integer('internal_scale'); $t->string('status');
@@ -111,6 +119,10 @@ $db->table('user_assets')->insert(['user_id'=>100,'asset_type'=>'USDT','wallet_b
 $asset->table('funding_accounts')->insert(['account_id'=>1,'user_id'=>100,'agent_id'=>0,'status'=>'ACTIVE']);
 $asset->table('funding_assets')->insert(['asset_id'=>1,'asset_code'=>'USDT','internal_scale'=>2,'status'=>'ENABLED']);
 $asset->table('funding_balances')->insert(['account_id'=>1,'asset_id'=>1,'available_amount'=>300,'held_amount'=>100]);
+$db->table('users')->insert(['user_id'=>107,'home_site_id'=>100,'agent_id'=>null]);
+$db->table('user_assets')->insert(['user_id'=>107,'asset_type'=>'USDT','wallet_balance'=>'8','frozen_balance'=>'1']);
+$asset->table('funding_accounts')->insert(['account_id'=>107,'user_id'=>107,'agent_id'=>null,'status'=>'ACTIVE']);
+$asset->table('funding_balances')->insert(['account_id'=>107,'asset_id'=>1,'available_amount'=>200,'held_amount'=>100]);
 $excludedUsers = [
     ['user_id'=>101,'home_site_id'=>null,'agent_id'=>0,'deleted_at'=>null],
     ['user_id'=>102,'home_site_id'=>0,'agent_id'=>0,'deleted_at'=>null],
@@ -130,17 +142,17 @@ $publisher = new AssetBalanceDirectSnapshotPublisher($db, $asset);
 assetCheck($publisher->capture(CarbonImmutable::now('UTC'), true) === 2, 'Boundary captures both account types');
 $snapshot = $db->table(AssetBalanceReportSchema::DIRECT_TABLE)->where('stat_date','2026-10-14')
     ->where('account_type','contract')->first();
-assetCheck(bccomp((string) $snapshot->opening_total, '12', 16) === 0 && bccomp((string) $snapshot->closing_available, '10', 16) === 0,
+assetCheck(bccomp((string) $snapshot->opening_total, '20', 16) === 0 && bccomp((string) $snapshot->closing_available, '17', 16) === 0,
     'Direct contract opening is actual zero-boundary balance');
 $funding = $db->table(AssetBalanceReportSchema::DIRECT_TABLE)->where('stat_date','2026-10-14')
     ->where('account_type','funding')->first();
-assetCheck(bccomp((string) $funding->opening_total, '4', 16) === 0, 'Funding minor units use asset scale');
-assetCheck((int) $snapshot->funded_user_count === 1 && (int) $funding->funded_user_count === 1,
+assetCheck(bccomp((string) $funding->opening_total, '7', 16) === 0, 'Funding includes NULL-agent direct users and scales minor units');
+assetCheck((int) $snapshot->funded_user_count === 2 && (int) $funding->funded_user_count === 2,
     'Missing/non-positive sites, merchant users and deleted users are excluded from both account snapshots');
 $closed = $db->table(AssetBalanceReportSchema::DIRECT_TABLE)->where('stat_date','2026-10-13')
     ->where('account_type','contract')->first();
 assetCheck((bool) $closed->is_finalized && bccomp((string) $closed->opening_total, '30', 16) === 0
-    && bccomp((string) $closed->closing_total, '12', 16) === 0,
+    && bccomp((string) $closed->closing_total, '20', 16) === 0,
     'UTC boundary closes prior day without replacing its opening snapshot');
 $beforeInvalidOrigin = $db->table(AssetBalanceReportSchema::DIRECT_TABLE)->orderBy('stat_date')->orderBy('account_type')->get()->toJson();
 $db->table('wl_sites')->insert(['site_id'=>200,'tenant_id'=>99]);

@@ -43,6 +43,13 @@ final class ReportUserScope
             'source_code' => $id, 'source_name' => $id, 'site_id' => '0'];
     }
 
+    /** Use the resolved current user, never an event's historical agent_id. */
+    public static function isDirectUser(array $user): bool
+    {
+        return array_key_exists('agent_id', $user)
+            && ($user['agent_id'] === null || (string) $user['agent_id'] === '0');
+    }
+
     public function filterMerchants(array $rows): array
     {
         return array_values(array_filter($rows, fn (array $row): bool => $this->merchant($row) !== null));

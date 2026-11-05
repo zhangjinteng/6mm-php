@@ -84,10 +84,9 @@ $predictionPublisher = new PredictionUserPnlPublisher($db, null, new PredictionU
 $summaryPublisher = new TradeSummaryPublisher($db, new TradeSummaryStore($db), null);
 
 // A 100 U fact counts once in each applicable layer, not once per parent merchant.
-// The platform includes two direct users; it is neither the merchant subtotal nor
-// the sum of all merchant + tenant rows.
+// The platform includes both merchant and direct users, without double-counting.
 $expectedUsers = ['merchant:1' => 0, 'merchant:5' => 2, 'merchant:77' => 1,
-    'tenant:10' => 2, 'tenant:20' => 3, 'platform:0' => 5];
+    'tenant:10' => 1, 'tenant:20' => 1, 'platform:0' => 5];
 $reports = [
     [Futures\TradeReportSchema::TABLE, 'trade_amount', 'trading_user_count', 1],
     [Futures\PnlReportSchema::TABLE, 'net_pnl', 'trading_user_count', 1],
@@ -149,8 +148,6 @@ foreach ([0, 1, 2, 3, 99] as $userType) {
         foreach ($query->get() as $row) $rows[$row->source_type . ':' . $row->source_id] = (array) $row;
         scopeCheck(count($rows) === count($expectedUsers), "type {$userType}, {$table}: exactly six sources, no historical merchant 999");
         foreach ($expectedUsers as $source => $users) {
-            $tradeUsers = str_starts_with($source, 'tenant:') ? 1 : $users;
-            if (in_array($table, [Futures\TradeReportSchema::TABLE, Futures\PnlReportSchema::TABLE], true)) $users = $tradeUsers;
             $label = "type {$userType}, {$table}, {$source}";
             scopeCheck(isset($rows[$source]), "{$label}: source is published");
             scopeCheck(bccomp((string) $rows[$source][$amount], (string) ($sign * 100 * $users), 16) === 0,
@@ -159,7 +156,7 @@ foreach ([0, 1, 2, 3, 99] as $userType) {
             scopeCheck((int) $rows[$source]['status'] === 1, "{$label}: excluded origins/cross-site merchants do not make valid data incomplete");
             if ($source === 'platform:0') scopeCheck($rows[$source]['source_name'] === '6MM', "{$label}: platform is named 6MM");
             if ($table === TradeSummarySchema::TABLE) {
-                scopeCheck(bccomp((string) $rows[$source]['contract_trade_amount'], (string) (100 * $tradeUsers), 16) === 0,
+                scopeCheck(bccomp((string) $rows[$source]['contract_trade_amount'], (string) (100 * $users), 16) === 0,
                     "{$label}: summary reuses direct-only tenant contract trade totals");
             }
         }

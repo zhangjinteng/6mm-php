@@ -33,7 +33,7 @@ final class PositionReportAggregator
             $tenant = $directory['tenants'][(string) $tenantId] ?? null;
             $complete = $tenant !== null && ($agent !== null || !ReportUserScope::positiveId((string) $user['agent_id']));
             if (!$complete) $incompleteOrigin = true;
-            foreach (array_filter([$agent, $tenant, $platform]) as $source) {
+            foreach (array_filter([$agent, ReportUserScope::isDirectUser($user) ? $tenant : null, $platform]) as $source) {
                 foreach (array_unique(['', (string) ($fact['symbol'] ?? '')]) as $symbol) {
                     $key = $this->key($source, $symbol);
                     $groups[$key] ??= $this->emptyRow($date, $source, $symbol, $completed, $at);

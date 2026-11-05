@@ -14,7 +14,7 @@ use SixMm\Shared\FuturesReports\SourceDirectory;
 final class SourceUserReportQuery
 {
     public const TABLE = 'admin_source_user_daily_statistics';
-    public const VERSION = 2;
+    public const VERSION = 3;
     private const COUNT_FIELDS = [
         'initial_user_count', 'new_user_count', 'transfer_in_user_count', 'transfer_out_user_count',
         'active_user_count', 'trading_user_count', 'prediction_trading_user_count',
@@ -38,7 +38,7 @@ final class SourceUserReportQuery
 
     /**
      * The optional merchant ID must come from the authenticated root merchant, never request parameters.
-     * Platform and tenant rows include all eligible users, including those without merchants.
+     * Platform rows include all eligible users; tenant rows include only direct users (agent_id=0/NULL).
      *
      * @return array{lists: array<int, array<string, mixed>>, count: int, page: int, limit: int}
      */

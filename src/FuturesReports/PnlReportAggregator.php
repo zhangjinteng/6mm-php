@@ -41,7 +41,7 @@ final class PnlReportAggregator
             $pnl = (string) ($fact['realized_pnl'] ?? '0');
             if (!is_numeric($pnl)) throw new InvalidArgumentException('合约盈亏事实金额无效');
             // Match the direct-user cohort of the shared white-label trade notional.
-            $directUser = (string) ($user['agent_id'] ?? '0') === '0';
+            $directUser = ReportUserScope::isDirectUser($user);
             foreach (array_filter([$agent, $directUser ? $tenant : null, $platform]) as $source) {
                 foreach (array_unique(['', (string) ($fact['symbol'] ?? '')]) as $symbol) {
                     $key = $this->key($source + ['symbol' => $symbol]);

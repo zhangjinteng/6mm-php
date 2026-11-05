@@ -44,7 +44,7 @@ final class TradeSummaryAggregator
             $tenant = $directory['tenants'][$tenantId] ?? null;
             $merchant = (new \SixMm\Shared\FuturesReports\ReportUserScope($directory))->merchant($fact);
             $partial = $tenant === null || ($user['agent_id'] !== '0' && $merchant === null);
-            foreach (array_filter([$merchant, $tenant, $platform]) as $source) {
+            foreach (array_filter([$merchant, \SixMm\Shared\FuturesReports\ReportUserScope::isDirectUser($user) ? $tenant : null, $platform]) as $source) {
                 $groups[$this->key($source)] ??= $this->emptyRow($date, $source);
                 $row = &$groups[$this->key($source)];
                 $row['identities']['prediction_users']['u:' . $id] = true;

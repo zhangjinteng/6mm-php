@@ -63,7 +63,8 @@ riskCheck($merchant['liquidation_user_count'] === 1 && $merchant['liquidation_co
 riskCheck($merchant['liquidation_position_amount'] === '120.0000000000000000' && $merchant['liquidation_trade_amount'] === '198.0000000000000000', 'Position notionals union while actual trade flows sum across all user types');
 riskCheck($merchant['liquidation_realized_pnl'] === '-25.6800000000000000' && $merchant['liquidation_fee'] === '0.2500000000000000', 'Signed PnL and fees retain exact decimals');
 riskCheck($merchant['bankruptcy_count'] === 1 && $merchant['bankruptcy_loss'] === '2.5000000000000000', 'Final bankruptcy loss uses the unique ledger event maximum');
-riskCheck(riskSource($rows, 'tenant', '900001')['liquidation_user_count'] === 2, 'White-label includes direct users');
+riskCheck(riskSource($rows, 'tenant', '900001')['liquidation_user_count'] === 1
+    && riskSource($rows, 'tenant', '900001')['liquidation_position_amount'] === '50.0000000000000000', 'White-label includes only direct users');
 riskCheck(riskSource($rows, 'platform', '0')['liquidation_user_count'] === 2, 'User type is unrestricted; non-USDT and missing/non-positive origins are excluded');
 $conflict = $agg->build('2026-10-09', [array_merge($base, ['user_id' => '813'])], $directory, true);
 riskCheck(riskSource($conflict, 'merchant', '1')['liquidation_count'] === 1 && riskSource($conflict, 'tenant', '900002')['status'] === 1,

@@ -39,6 +39,7 @@ final class AssetBalanceReportStore
         $type = (string) ($params['source_type'] ?? 'platform');
         if (!in_array($type, ['platform', 'tenant', 'merchant'], true)) throw new InvalidArgumentException('无效的来源类型');
         $scope = $merchantAccountId === null ? null : MerchantReportScope::forAccount($this->db, $merchantAccountId);
+        $tenantOnly = $scope === null && $type === 'tenant';
         $directory = (new SourceDirectory($this->db))->load();
         if ($tenantId !== null) {
             $directory['agents'] = array_filter($directory['agents'], static fn (array $agent): bool =>
@@ -50,7 +51,7 @@ final class AssetBalanceReportStore
         $currencyQuery = $this->db->table($prefix . 'admin_agent_margin_daily_statistics');
         if ($scope !== null) $currencyQuery->where('agent_id', $scope->merchantId);
         if ($tenantId !== null) $currencyQuery->whereIn('agent_id', array_keys($directory['agents']));
-        $currencies = $currencyQuery->whereNotNull('currency')->where('currency', '<>', '')
+        $currencies = $tenantOnly ? [] : $currencyQuery->whereNotNull('currency')->where('currency', '<>', '')
             ->distinct()->pluck('currency')->map(static fn ($value): string => (string) $value)->all();
         if ($scope === null) {
             $currencies = array_merge($currencies, $this->db->table($prefix . AssetBalanceReportSchema::DIRECT_TABLE)
@@ -65,7 +66,7 @@ final class AssetBalanceReportStore
         if ($scope !== null) $query->where('agent_id', $scope->merchantId);
         if ($tenantId !== null) $query->whereIn('agent_id', array_keys($directory['agents']));
         if ($currency !== '') $query->where('currency', $currency);
-        $merchantRows = $query->get();
+        $merchantRows = $tenantOnly ? [] : $query->get();
         $groups = [];
         $merchantSeen = [];
         foreach ($merchantRows as $record) {
@@ -74,11 +75,8 @@ final class AssetBalanceReportStore
             if ($record->currency === 'USDT') {
                 $merchantSeen[$record->stat_date . ':' . $record->agent_id . ':' . $record->account_type] = true;
             }
-            $merchantTenantId = (string) ($directory['sites'][$merchant['site_id']] ?? '');
-            $tenant = $directory['tenants'][$merchantTenantId] ?? null;
             $sources = [$merchant];
             if ($scope === null) {
-                if ($tenant !== null) $sources[] = $tenant;
                 $sources[] = $this->platform();
             }
             foreach ($sources as $source) $this->add($groups, $source, $record);
@@ -98,10 +96,8 @@ final class AssetBalanceReportStore
             // Source rows without a corresponding direct snapshot are explicitly incomplete.
             foreach ($groups as &$row) {
                 if ($row['source_type'] === 'merchant') continue;
-                if ($row['currency'] === 'USDT') {
+                if ($row['source_type'] === 'platform' && $row['currency'] === 'USDT') {
                     foreach ($directory['agents'] as $agent) {
-                        $agentTenantId = (string) ($directory['sites'][$agent['site_id']] ?? '');
-                        if ($row['source_type'] === 'tenant' && $row['source_id'] !== $agentTenantId) continue;
                         if (!isset($merchantSeen[$row['stat_date'] . ':' . $agent['source_id'] . ':' . $row['account_type']])) {
                             $row['stat_status'] = 2;
                         }

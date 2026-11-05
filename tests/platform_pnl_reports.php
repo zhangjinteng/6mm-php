@@ -69,7 +69,7 @@ $facts = [
 $aggregator = new PlatformPnlReportAggregator();
 $rows = $aggregator->build('2026-10-12', $facts, $directory, true);
 platformPnlCheck(platformPnlRow($rows, 'merchant', '1')['contract_total_pnl'] === '12.5000000000000000', 'Merchant formula matches Agent report');
-platformPnlCheck(platformPnlRow($rows, 'tenant', '7')['contract_total_pnl'] === '9.7500000000000000', 'Tenant includes direct users');
+platformPnlCheck(platformPnlRow($rows, 'tenant', '7')['contract_total_pnl'] === '-2.7500000000000000', 'Tenant includes only direct users');
 platformPnlCheck(platformPnlRow($rows, 'platform', '0')['contract_total_pnl'] === '7.2500000000000000', 'Platform includes both merchants and direct users');
 $unknown = $facts[0]; $unknown['user_id'] = 999;
 $excluded = platformPnlRow($aggregator->build('2026-10-12', [$unknown], $directory, true), 'platform', '0');
@@ -99,6 +99,9 @@ $tenantSearch = $store->search(['source_type' => 'tenant', 'source_keyword' => '
     'start_date' => '2026-10-12', 'end_date' => '2026-10-12']);
 platformPnlCheck($tenantSearch['count'] === 1 && $tenantSearch['lists'][0]['source_id'] === '7',
     'Platform source search narrows white-label rows');
+platformPnlCheck(bccomp($tenantSearch['lists'][0]['prediction_business_pnl'], '-3', 16) === 0
+    && bccomp($tenantSearch['lists'][0]['total_pnl'], '-5.75', 16) === 0,
+    'Tenant merged PnL excludes merchant users from both contract and prediction totals');
 $paged = $store->search(['source_type' => 'merchant', 'order_by' => 'total_pnl', 'order_dir' => 'desc',
     'page_size' => 1, 'start_date' => '2026-10-12', 'end_date' => '2026-10-12']);
 platformPnlCheck($paged['count'] === 2 && count($paged['lists']) === 1 && $paged['lists'][0]['source_id'] === '1',

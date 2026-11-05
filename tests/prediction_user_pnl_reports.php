@@ -68,7 +68,7 @@ predictionCheck($child['trading_user_count'] === 1 && $child['stake_amount'] ===
 $platform = $store->search(['source_type' => 'platform', 'start_date' => '2026-10-13', 'end_date' => '2026-10-13'])['lists'][0];
 predictionCheck($platform['trading_user_count'] === 5 && $platform['stake_amount'] === '1030', 'Platform includes direct site users and robots exactly once');
 $tenant = $store->search(['source_type' => 'tenant', 'source_id' => '7', 'start_date' => '2026-10-13', 'end_date' => '2026-10-13'])['lists'][0];
-predictionCheck($tenant['trading_user_count'] === 4 && $tenant['stake_amount'] === '1028', 'Tenant follows home-site origin across merchants and user types');
+predictionCheck($tenant['trading_user_count'] === 1 && $tenant['stake_amount'] === '7', 'Tenant includes only direct home-site users, excluding merchant users');
 $grid = $store->search(['play_type' => 'grid', 'symbol' => 'BTCUSDT', 'start_date' => '2026-10-13', 'end_date' => '2026-10-13'], '1')['lists'][0];
 predictionCheck($grid['trading_user_count'] === 2 && $grid['order_count'] === 4, 'Play and symbol dimensions stay independent');
 predictionCheck($store->search(['source_type' => 'merchant', 'source_keyword' => 'Merchant Two', 'start_date' => '2026-10-13', 'end_date' => '2026-10-13'])['count'] === 1, 'Source search must filter platform results');

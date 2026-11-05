@@ -60,7 +60,7 @@ final class RiskReportAggregator
             $tenantId = $directory['sites'][$user['site_id']] ?? null;
             $tenant = $directory['tenants'][(string) $tenantId] ?? null;
             $complete = $tenant !== null && ($merchant !== null || !ReportUserScope::positiveId((string) $user['agent_id']));
-            foreach (array_filter([$merchant, $tenant, $platform]) as $source) {
+            foreach (array_filter([$merchant, ReportUserScope::isDirectUser($user) ? $tenant : null, $platform]) as $source) {
                 foreach (array_unique(['', $symbol]) as $contract) {
                     $key = $this->key($source, $contract);
                     $groups[$key] ??= $this->emptyRow($date, $source, $contract, $completed);

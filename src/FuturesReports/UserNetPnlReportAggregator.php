@@ -36,7 +36,7 @@ final class UserNetPnlReportAggregator
             $tenantId = $directory['sites'][(string) $user['site_id']] ?? null;
             $tenant = $directory['tenants'][(string) $tenantId] ?? null;
             $complete = $tenant !== null && ($merchant !== null || !ReportUserScope::positiveId((string) $user['agent_id']));
-            foreach (array_filter([$merchant, $tenant, $platform]) as $source) {
+            foreach (array_filter([$merchant, ReportUserScope::isDirectUser($user) ? $tenant : null, $platform]) as $source) {
                 $groups[$this->key($source)] ??= $this->emptyRow($date, $source, $completed);
                 $group = &$groups[$this->key($source)];
                 $group['users'][$userId] ??= $this->emptyUser();

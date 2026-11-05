@@ -9,7 +9,7 @@ use Illuminate\Database\ConnectionInterface;
 use InvalidArgumentException;
 use SixMm\Shared\FuturesReports\SourceDirectory;
 
-/** Captures only direct users (agent_id=0); merchant snapshots remain Agent's responsibility. */
+/** Captures only direct users (agent_id=0/NULL); merchant snapshots remain Agent's responsibility. */
 final class AssetBalanceDirectSnapshotPublisher
 {
     public function __construct(private ConnectionInterface $db, private ConnectionInterface $assetDb) {}
@@ -23,7 +23,8 @@ final class AssetBalanceDirectSnapshotPublisher
         }
         $directory = (new SourceDirectory($this->db))->load();
         $prefix = $this->db->getDriverName() === 'pgsql' ? 'public.' : '';
-        $users = $this->db->table($prefix . 'users')->where('agent_id', 0)->whereNull('deleted_at')
+        $users = $this->db->table($prefix . 'users')
+            ->where(static fn ($query) => $query->where('agent_id', 0)->orWhereNull('agent_id'))->whereNull('deleted_at')
             ->where('home_site_id', '>', 0)
             ->get(['user_id', 'home_site_id']);
         $siteByUser = [];
@@ -69,7 +70,8 @@ final class AssetBalanceDirectSnapshotPublisher
             $funding = $this->assetDb->table('funding_balances as balances')
                 ->join('funding_accounts as accounts', 'accounts.account_id', '=', 'balances.account_id')
                 ->join('funding_assets as assets', 'assets.asset_id', '=', 'balances.asset_id')
-                ->whereIn('accounts.user_id', $ids)->where('accounts.agent_id', 0)
+                ->whereIn('accounts.user_id', $ids)
+                ->where(static fn ($query) => $query->where('accounts.agent_id', 0)->orWhereNull('accounts.agent_id'))
                 ->where('accounts.status', 'ACTIVE')->where('assets.status', 'ENABLED')
                 ->get(['accounts.user_id', 'assets.asset_code', 'assets.internal_scale',
                     'balances.available_amount', 'balances.held_amount']);

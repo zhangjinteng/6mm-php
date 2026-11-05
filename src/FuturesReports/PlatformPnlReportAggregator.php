@@ -36,7 +36,7 @@ final class PlatformPnlReportAggregator
             $fee = $this->decimal($fact['trading_fee'] ?? '0');
             $liquidation = $this->decimal($fact['liquidation_fee'] ?? '0');
             $funding = $this->decimal($fact['funding_fee'] ?? '0');
-            foreach (array_filter([$merchant, $tenant, $platform]) as $source) {
+            foreach (array_filter([$merchant, ReportUserScope::isDirectUser($user) ? $tenant : null, $platform]) as $source) {
                 $groups[$this->key($source)] ??= $this->emptyRow($date, $source, $completed);
                 $row = &$groups[$this->key($source)];
                 $row['contract_trade_pnl'] = bcsub($row['contract_trade_pnl'], $realized, 16);

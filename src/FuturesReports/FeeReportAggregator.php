@@ -34,7 +34,7 @@ final class FeeReportAggregator
             $tenant = $directory['tenants'][(string) $tenantId] ?? null;
             $complete = $tenant !== null && ($merchant !== null || !ReportUserScope::positiveId((string) $user['agent_id']));
             $symbol = strtoupper((string) ($fact['symbol'] ?? ''));
-            foreach (array_filter([$merchant, $tenant, $platform]) as $source) {
+            foreach (array_filter([$merchant, ReportUserScope::isDirectUser($user) ? $tenant : null, $platform]) as $source) {
                 foreach (array_unique(['', $symbol]) as $contract) {
                     $key = $this->key($source, $contract);
                     $groups[$key] ??= $this->emptyRow($date, $source, $contract, $completed);

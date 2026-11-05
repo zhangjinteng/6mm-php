@@ -90,8 +90,8 @@ checkPosition((int) $merchant['position_user_count'] === 2 && (int) $merchant['l
 checkPosition($merchant['closing_position_amount'] === '1139', 'Merchant includes all users with its agent ID regardless of site');
 checkPosition(bccomp($merchant['average_leverage'], '28.47500000', 8) === 0, 'Leverage uses total notional / occupied margin (1139 / 40)');
 $tenant = $store->search(['start_date' => '2026-10-09', 'end_date' => '2026-10-09', 'source_type' => 'tenant'])['lists'][0];
-checkPosition((int) $tenant['position_user_count'] === 4 && $tenant['closing_position_amount'] === '1169',
-    'Tenant follows user site origin independently of merchant site');
+checkPosition((int) $tenant['position_user_count'] === 1 && $tenant['closing_position_amount'] === '5',
+    'Tenant includes direct-user positions only');
 checkPosition((int) $tenant['stat_status'] === 1, 'Cross-site merchant attribution does not mark a complete snapshot partial');
 $btc = $store->search(['start_date' => '2026-10-09', 'end_date' => '2026-10-09', 'symbol' => 'BTC', 'source_type' => 'platform'])['lists'][0];
 checkPosition((int) $btc['position_user_count'] === 4 && $btc['closing_position_amount'] === '1129', 'Symbol filter uses its own snapshot counts');

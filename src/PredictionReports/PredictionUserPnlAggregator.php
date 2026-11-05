@@ -40,7 +40,7 @@ final class PredictionUserPnlAggregator
             if ($tenant === null) $incompletePlatform = true;
             $stake = $this->decimal($fact['stake_amount'] ?? '0');
             $returned = $this->decimal($fact['return_amount'] ?? '0');
-            foreach (array_filter([$merchant, $tenant, $platform]) as $source) {
+            foreach (array_filter([$merchant, ReportUserScope::isDirectUser($user) ? $tenant : null, $platform]) as $source) {
                 foreach ([['all', '*'], [$play, '*'], ['all', $symbol], [$play, $symbol]] as [$playScope, $symbolScope]) {
                     $key = $this->key($source, $playScope, $symbolScope);
                     $groups[$key] ??= $this->emptyRow($date, $source, $playScope, $symbolScope, $completed);

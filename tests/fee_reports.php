@@ -58,7 +58,8 @@ feeCheck($merchant['fee_user_count'] === 1 && $merchant['fee_count'] === 5, 'Fee
 feeCheck($merchant['maker_trade_amount'] === '18014398509481996.0000000000000002', 'Turnover preserves decimal precision');
 feeCheck($merchant['total_handling_fee'] === '0.7200000000000002', 'Total handling fee equals Maker plus Taker, not commissions/trading_fee');
 feeCheck(feeSource($rows, 'merchant', '2')['fee_user_count'] === 0 && feeSource($rows, 'merchant', '2')['maker_trade_amount'] === '50.0000000000000000', 'Zero-fee turnover remains without creating charged users');
-feeCheck(feeSource($rows, 'tenant', '900001')['fee_user_count'] === 2, 'White label includes direct users');
+feeCheck(feeSource($rows, 'tenant', '900001')['fee_user_count'] === 1
+    && feeSource($rows, 'tenant', '900001')['total_handling_fee'] === '0.1200000000000000', 'White label includes only direct users');
 feeCheck(feeSource($rows, 'platform', '0')['fee_user_count'] === 2, 'Eligible USDT users count independently of user type');
 $conflict = $agg->build('2026-10-09', [array_merge($base, ['user_id' => '813'])], $directory, true);
 feeCheck(feeSource($conflict, 'merchant', '1')['fee_count'] === 2 && feeSource($conflict, 'tenant', '900002')['status'] === 1,
