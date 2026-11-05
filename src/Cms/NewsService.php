@@ -365,7 +365,10 @@ class NewsService
         } else {
             $category = $this->category($space, (int) $data['category_id']);
             $parent = $category->parent_id ? $this->category($space, (int) $category->parent_id) : null;
-            if ($publishing && (!$category->is_enabled || ($parent && !$parent->is_enabled))) {
+            if (!$parent || $parent->parent_id !== null) {
+                $this->fail('新闻只能选择二级分类');
+            }
+            if ($publishing && (!$category->is_enabled || !$parent->is_enabled)) {
                 $this->fail('发布新闻的分类及父分类必须已启用');
             }
         }
