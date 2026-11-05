@@ -8,7 +8,9 @@ $output = $argv[2] ?? '';
 if (!preg_match('/^[0-9]+\.[0-9]+\.[0-9]+(?:-beta\.[0-9]+)?$/D', $version) || !is_dir($output)) {
     throw new InvalidArgumentException('Usage: php scripts/build-local-package.php VERSION EXISTING_OUTPUT_DIRECTORY');
 }
-$path = rtrim($output, '/').'/6mm-php-'.$version.'-customer-service.zip';
+$label = $argv[3] ?? 'customer-service';
+if (!preg_match('/^[a-z0-9]+(?:-[a-z0-9]+)*$/D', $label)) throw new InvalidArgumentException('Invalid artifact label');
+$path = rtrim($output, '/').'/6mm-php-'.$version.'-'.$label.'.zip';
 if (file_exists($path)) throw new RuntimeException('Artifact already exists; do not overwrite a versioned package');
 $zip = new ZipArchive();
 if ($zip->open($path, ZipArchive::CREATE | ZipArchive::EXCL) !== true) throw new RuntimeException('Cannot create artifact');
