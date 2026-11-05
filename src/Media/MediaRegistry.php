@@ -14,7 +14,7 @@ final class MediaRegistry
 {
     private const FOLDER = 'media/upload_files';
 
-    public function upload(UploadedFile $file, int $adminId): array
+    public function upload(UploadedFile $file, int $adminId, ?int $tenantId = null): array
     {
         if (!$file->isValid() || $file->getSize() > 5 * 1024 * 1024) {
             throw ValidationException::withMessages(['file' => '请选择不超过 5 MB 的有效图片']);
@@ -33,7 +33,10 @@ final class MediaRegistry
         $sha = hash('sha256', $bytes);
         $db = DB::connection('pgsql');
         $instance = config('imgbed.instance');
-        return $db->transaction(function () use ($file, $adminId, $db, $instance, $bytes, $mime, $size, $key, $name, $sha): array {
+        $ownerType = $tenantId === null ? 'platform' : 'white_label';
+        $ownerId = $tenantId ?? 0;
+        if ($tenantId !== null && $tenantId < 1) throw new \InvalidArgumentException('Invalid tenant');
+        return $db->transaction(function () use ($file, $adminId, $db, $instance, $bytes, $mime, $size, $key, $name, $sha, $ownerType, $ownerId): array {
             // Serialize only uploads targeting the same physical object, including initial registration.
             $db->select('SELECT pg_advisory_xact_lock(hashtextextended(?, 0))', [$instance.':'.$key]);
             $existing = $db->table('cms.media_files')->where('imgbed_instance', $instance)
@@ -41,6 +44,11 @@ final class MediaRegistry
             if ($existing) {
                 if ($existing->storage_status !== 'available' || $existing->sha256 !== $sha) {
                     throw ValidationException::withMessages(['file' => '同名图片内容不一致或文件不可用']);
+                }
+                // Proof of identical bytes permits reuse, not transfer of ownership.
+                if ($existing->owner_type !== 'platform' && ($existing->owner_type !== $ownerType || (int) $existing->owner_id !== $ownerId)) {
+                    $db->table('cms.media_upload_grants')->insertOrIgnore(['media_id' => $existing->id,
+                        'owner_type' => $ownerType, 'owner_id' => $ownerId]);
                 }
                 return ['media_id' => (string) $existing->id, 'url' => $existing->public_url];
             }
@@ -79,7 +87,7 @@ final class MediaRegistry
                 }
             }
             $id = $db->table('cms.media_files')->insertGetId([
-                'owner_type' => 'platform', 'owner_id' => 0, 'imgbed_instance' => $instance,
+                'owner_type' => $ownerType, 'owner_id' => $ownerId, 'imgbed_instance' => $instance,
                 'channel_name' => config('imgbed.channel'), 'file_id' => $key, 'src' => '/file/'.$key,
                 'public_url' => $url, 'original_name' => $file->getClientOriginalName(), 'mime_type' => $mime,
                 'size_bytes' => strlen($bytes), 'width' => $size[0], 'height' => $size[1], 'sha256' => $sha,
@@ -124,7 +132,13 @@ final class MediaRegistry
         foreach ($wanted as $id) {
             $file = $files->get($id);
             if (!$file || $file->storage_status !== 'available' ||
-                !($file->owner_type === 'platform' || ($file->owner_type === $ownerType && (int) $file->owner_id === $ownerId))) {
+                !($file->owner_type === 'platform' || ($file->owner_type === $ownerType && (int) $file->owner_id === $ownerId)
+                    || $db->table('cms.media_upload_grants')->where('media_id', $id)
+                        ->where(function ($q) use ($ownerType, $ownerId) {
+                            $q->where('owner_type', 'platform')->orWhere(function ($q) use ($ownerType, $ownerId) {
+                                $q->where('owner_type', $ownerType)->where('owner_id', $ownerId);
+                            });
+                        })->exists())) {
                 throw ValidationException::withMessages([$fieldKey => '图片不可用或不属于当前业务主体']);
             }
         }

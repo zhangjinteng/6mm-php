@@ -381,7 +381,9 @@ class HelpService
                     ] + $this->audit($actor, true));
                 }
             }
-            return $this->detail('articles', (int) $id);
+            $saved = $this->detail('articles', (int) $id);
+            ContentMediaReferences::sync($saved, 'help');
+            return $saved;
         });
     }
 
@@ -425,6 +427,7 @@ class HelpService
                 }
             } else {
                 $this->checkPublishPermission($canPublish, $old->publish_status, $old);
+                ContentMediaReferences::sync(['body_html' => '', 'cover_url' => null] + $this->cmsSourceRow((array) $old), 'help');
             }
             $this->scoped($table, $space)->where('id', $old->id)->update([
                 'deleted_at' => now(), 'is_enabled' => false, 'row_version' => $old->row_version + 1,

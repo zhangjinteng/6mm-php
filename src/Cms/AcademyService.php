@@ -217,6 +217,7 @@ class AcademyService
                 $this->fail('没有课程发布权限，不能删除已发布或定时发布的课程');
             }
             // Preserve translations and category relations for archived content.
+            ContentMediaReferences::sync(['body_html' => '', 'cover_url' => null] + $this->cmsSourceRow((array) $course), 'academy');
             $this->scoped('contents', $space)->where('id', $course->id)->update([
                 'deleted_at' => now(),
                 'is_enabled' => false,
@@ -277,7 +278,9 @@ class AcademyService
                 $this->db()->table('cms.content_categories')->insert(['space_id' => $space->id, 'content_id' => $id,
                     'category_id' => $categoryId, 'module' => 'academy', 'sort_order' => $sort] + $this->audit($actor, true));
             }
-            return $this->detail('courses', (int) $id);
+            $saved = $this->detail('courses', (int) $id);
+            ContentMediaReferences::sync($saved, 'academy');
+            return $saved;
         });
     }
 
