@@ -98,7 +98,7 @@ final class DomainConfigStore
                 $this->db->statement("SET LOCAL lock_timeout = '5s'");
                 $this->db->statement("SET LOCAL statement_timeout = '15s'");
                 // Use the business publisher's lock order so unrelated configuration edits are preserved.
-                $this->db->statement('LOCK TABLE control_plane.wl_config_snapshots, control_plane.wl_tenants, control_plane.wl_sites, control_plane.wl_site_modules, control_plane.wl_site_domains IN SHARE ROW EXCLUSIVE MODE');
+                $this->db->statement('LOCK TABLE control_plane.wl_config_snapshots, control_plane.wl_tenants, control_plane.wl_sites, control_plane.wl_site_modules, control_plane.wl_site_domains, control_plane.wl_site_config_domains IN SHARE ROW EXCLUSIVE MODE');
             }
             $site = $this->table('wl_sites')->where('site_id', $input['site_id'])->where('tenant_id', $input['tenant_id'])
                 ->when($this->enabledSitesOnly, fn ($q) => $q->where('status', 'enabled'))->lockForUpdate()->first();
@@ -111,7 +111,9 @@ final class DomainConfigStore
                     $this->reject('域名已被其他站点使用');
                 }
             }
-            if ($current === $desired) return ['changed' => false];
+            $names = array_column($desired, 'domain');
+            $map = $this->table('wl_site_config_domains');
+            if ($current === $desired && PublishedDomainMap::names($map, (string) $site->site_id) === $names) return ['changed' => false];
             [$snapshot, $payload, $target] = $this->snapshot((string) $site->tenant_id, (string) $site->site_id, $current);
             foreach ($payload->sites as $publishedSite) {
                 if ((string) $publishedSite->siteId === (string) $site->site_id) continue;
@@ -120,7 +122,6 @@ final class DomainConfigStore
                 }
             }
             $this->table('wl_site_domains')->where('site_id', $site->site_id)->update(['is_primary' => false]);
-            $names = array_column($desired, 'domain');
             $remove = $this->table('wl_site_domains')->where('site_id', $site->site_id);
             if ($names !== []) $remove->whereNotIn('domain', $names);
             $remove->delete();
@@ -146,6 +147,7 @@ final class DomainConfigStore
                     'publish_reason' => '品牌配置域名更新：站点 ' . $site->site_id, 'published_at' => $timestamp]);
                 $publishedVersion = (string) $version;
             }
+            PublishedDomainMap::sync($map, (string) $site->site_id, $names);
             $audit(['tenant_id' => (string) $site->tenant_id, 'site_id' => (string) $site->site_id,
                 'before' => $current, 'after' => $desired, 'snapshot_version' => $publishedVersion], $timestamp);
             return ['changed' => true, 'snapshot_version' => $publishedVersion, 'revision' => $this->revision($desired), 'updated_at' => $timestamp];

@@ -13,6 +13,7 @@ $db = $capsule->getConnection();
 $db->statement('CREATE TABLE wl_tenants (tenant_id integer PRIMARY KEY, tenant_name text, updated_at text)');
 $db->statement('CREATE TABLE wl_sites (site_id integer PRIMARY KEY, tenant_id integer, site_name text, status text, updated_at text)');
 $db->statement('CREATE TABLE wl_site_domains (site_id integer, domain text UNIQUE, is_primary boolean, created_at text)');
+$db->statement('CREATE TABLE wl_site_config_domains (domain text PRIMARY KEY, site_id integer NOT NULL)');
 $db->statement('CREATE TABLE wl_config_snapshots (snapshot_version integer PRIMARY KEY, schema_version integer, payload text, payload_sha256 text, previous_snapshot_version integer, rollback_of_snapshot_version integer, published_by text, publish_reason text, published_at text)');
 $db->table('wl_tenants')->insert([['tenant_id' => 1, 'tenant_name' => 'Alpha'], ['tenant_id' => 2, 'tenant_name' => 'Beta']]);
 $db->table('wl_sites')->insert([
@@ -61,5 +62,17 @@ $input['domains'][] = ['domain' => 'rollback.example', 'is_primary' => false];
 try { $store->save($input, 7, static function (): void { throw new RuntimeException('Audit failed'); }); }
 catch (RuntimeException $e) { $check($e->getMessage() === 'Audit failed'); }
 $check(!$db->table('wl_site_domains')->where('domain', 'rollback.example')->exists());
+$check(!$db->table('wl_site_config_domains')->where('domain', 'rollback.example')->exists());
+$check($db->table('wl_config_snapshots')->count() === 2);
+$db->table('wl_site_config_domains')->insert(['domain' => 'rollback.example', 'site_id' => 20]);
+try { $store->save($input, 7, $audit); throw new RuntimeException('Gateway domain reassigned'); }
+catch (DomainConfigException $e) { $check(str_contains($e->getMessage(), '其他站点')); }
+$check(!$db->table('wl_site_domains')->where('domain', 'rollback.example')->exists());
+$check((int) $db->table('wl_site_config_domains')->where('domain', 'rollback.example')->value('site_id') === 20);
+$check($db->table('wl_config_snapshots')->count() === 2);
+array_pop($input['domains']);
+$db->table('wl_site_config_domains')->where('site_id', 10)->delete();
+$check($store->save($input, 7, $audit)['changed']);
+$check($db->table('wl_site_config_domains')->where('site_id', 10)->orderBy('domain')->pluck('domain')->all() === ['backup.example', 'one.example']);
 $check($db->table('wl_config_snapshots')->count() === 2);
 echo "Tenant brand: {$checks} checks passed\n";
