@@ -102,17 +102,17 @@ class FeedbackService
                 ->where('imgbed_instance', config('imgbed.instance'))->where('storage_status', 'available')
                 ->where('sha256', $a->sha256)->value('file_id');
             $base = rtrim((string) config('imgbed.public_base'), '/');
-            if (!str_starts_with($base, 'https://') || !preg_match('~^media/upload_files/[a-f0-9]{32}\.(?:png|jpg)$~D', (string) $file)) {
+            if (!str_starts_with($base, 'https://') || !preg_match('~^media/upload_files/[a-f0-9]{32}\.(?:png|jpg|webp)$~D', (string) $file)) {
                 throw ValidationException::withMessages(['attachment_id' => '图床附件不可用']);
             }
             $response = Http::withoutRedirecting()->timeout(10)->withOptions(['stream' => true, 'read_timeout' => 10])->get($base.'/'.$file);
             $stream = $response->toPsrResponse()->getBody();
             try {
-                $bytes = $response->ok() ? \GuzzleHttp\Psr7\Utils::copyToString($stream, 2 * 1024 * 1024 + 1) : '';
+                $bytes = $response->ok() ? \GuzzleHttp\Psr7\Utils::copyToString($stream, 5 * 1024 * 1024 + 1) : '';
             } finally {
                 $stream->close();
             }
-            if (strlen($bytes) !== (int) $a->byte_size || !hash_equals((string) $a->sha256, hash('sha256', $bytes))) {
+            if (strlen($bytes) > 5 * 1024 * 1024 || strlen($bytes) !== (int) $a->byte_size || !hash_equals((string) $a->sha256, hash('sha256', $bytes))) {
                 throw ValidationException::withMessages(['attachment_id' => '图床附件内容校验失败']);
             }
         } else {
