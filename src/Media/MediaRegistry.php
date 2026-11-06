@@ -14,7 +14,7 @@ final class MediaRegistry
 {
     private const FOLDER = 'media/upload_files';
 
-    public function upload(UploadedFile $file, int $adminId, ?int $tenantId = null): array
+    public function upload(UploadedFile $file, ?int $adminId, ?int $tenantId = null): array
     {
         if (!$file->isValid() || $file->getSize() > 5 * 1024 * 1024) {
             throw ValidationException::withMessages(['file' => '请选择不超过 5 MB 的有效图片']);

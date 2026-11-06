@@ -7,6 +7,7 @@ namespace SixMm\Shared\Cms;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\ValidationException;
@@ -96,13 +97,33 @@ class FeedbackService
         if (!preg_match('~\A[a-zA-Z0-9][a-zA-Z0-9_./-]*\z~', $key) || preg_match('~(^|/)\.\.?(/|$)~', $key)) {
             throw ValidationException::withMessages(['attachment_id' => '附件存储路径不合法']);
         }
-        $diskName = (string) config('cms_feedback.attachment_disk', 'cms_feedback_private');
-        if ($diskName === 'public') throw new \RuntimeException('Feedback requires private storage');
-        $disk = Storage::disk($diskName);
-        if (!$disk->exists($key) || $disk->size($key) > 5 * 1024 * 1024) {
-            throw ValidationException::withMessages(['attachment_id' => '附件不存在或超过预览大小限制']);
+        if (preg_match('~^imgbed/([1-9][0-9]*)$~D', $key, $match)) {
+            $file = $this->db()->table('cms.media_files')->where('id', $match[1])
+                ->where('imgbed_instance', config('imgbed.instance'))->where('storage_status', 'available')
+                ->where('sha256', $a->sha256)->value('file_id');
+            $base = rtrim((string) config('imgbed.public_base'), '/');
+            if (!str_starts_with($base, 'https://') || !preg_match('~^media/upload_files/[a-f0-9]{32}\.(?:png|jpg)$~D', (string) $file)) {
+                throw ValidationException::withMessages(['attachment_id' => '图床附件不可用']);
+            }
+            $response = Http::withoutRedirecting()->timeout(10)->withOptions(['stream' => true, 'read_timeout' => 10])->get($base.'/'.$file);
+            $stream = $response->toPsrResponse()->getBody();
+            try {
+                $bytes = $response->ok() ? \GuzzleHttp\Psr7\Utils::copyToString($stream, 2 * 1024 * 1024 + 1) : '';
+            } finally {
+                $stream->close();
+            }
+            if (strlen($bytes) !== (int) $a->byte_size || !hash_equals((string) $a->sha256, hash('sha256', $bytes))) {
+                throw ValidationException::withMessages(['attachment_id' => '图床附件内容校验失败']);
+            }
+        } else {
+            $diskName = (string) config('cms_feedback.attachment_disk', 'cms_feedback_private');
+            if ($diskName === 'public') throw new \RuntimeException('Feedback requires private storage');
+            $disk = Storage::disk($diskName);
+            if (!$disk->exists($key) || $disk->size($key) > 5 * 1024 * 1024) {
+                throw ValidationException::withMessages(['attachment_id' => '附件不存在或超过预览大小限制']);
+            }
+            $bytes = $disk->get($key);
         }
-        $bytes = $disk->get($key);
         $info = @getimagesizefromstring($bytes);
         $mime = $info['mime'] ?? '';
         if (!in_array($mime, ['image/jpeg', 'image/png', 'image/webp'], true) || $info[0] > 8192 || $info[1] > 8192) {
