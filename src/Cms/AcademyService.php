@@ -168,9 +168,6 @@ class AcademyService
         return $this->mutate($actor, function ($space) use ($p, $actor) {
             $old = $this->editRow('categories', $space, $p);
             $data = ['name' => trim($p['name']), 'sort_order' => $p['sort_order'], 'is_enabled' => (bool) $p['is_enabled']];
-            if ($old && $this->scoped('contents', $space)->whereIn('id', $this->db()->table('cms.content_categories')->select('content_id')->where('space_id', $space->id)->where('category_id', $old->id))->whereNotNull('difficulty_level')->whereNotIn('difficulty_level', $p['difficulty_levels'])->exists()) {
-                $this->fail('分类内仍有课程使用被移除的难度，请先调整课程');
-            }
             $data['difficulty_levels'] = '{'.implode(',', array_map('intval', $p['difficulty_levels'])).'}';
             if ($old) {
                 $this->scoped('categories', $space)->where('id', $old->id)->update($data + ['row_version' => $old->row_version + 1] + $this->audit($actor));
@@ -234,7 +231,7 @@ class AcademyService
             'body_html' => 'nullable|string|max:1000000', 'seo_description' => 'nullable|string|max:2000',
             'cover_url' => 'nullable|string|max:2048', 'category_id' => 'prohibited', 'topic_ids' => 'prohibited',
             'category_ids' => 'present|array|max:50', 'category_ids.*' => 'integer|min:1|distinct',
-            'difficulty_level' => 'nullable|integer|between:1,3', 'estimated_minutes' => 'nullable|integer|between:1,100000',
+            'difficulty_level' => 'nullable|integer|between:1,3',
             'sort_order' => 'required|integer|between:0,2147483647', 'is_enabled' => 'required|boolean',
             'publish_status' => 'required|in:draft,scheduled,published', 'scheduled_at' => 'nullable|date',
         ])->validate();
@@ -245,9 +242,13 @@ class AcademyService
         return $this->mutate($actor, function ($space) use ($p, $actor, $canPublish) {
             $old = $this->editRow('contents', $space, $p);
             if (!$canPublish && ($p['publish_status'] !== 'draft' || ($old && $old->publish_status !== 'draft'))) $this->fail('没有课程发布权限，不能修改已发布或定时发布的课程');
-            $data = array_intersect_key($p, array_flip(['title', 'summary', 'body_html', 'seo_description', 'cover_url', 'difficulty_level', 'estimated_minutes', 'sort_order', 'is_enabled', 'publish_status']));
+            $data = array_intersect_key($p, array_flip(['title', 'summary', 'body_html', 'seo_description', 'cover_url', 'difficulty_level', 'sort_order', 'is_enabled', 'publish_status']));
             $data['title'] = trim($data['title']);
-            foreach (['summary', 'seo_description', 'cover_url', 'difficulty_level', 'estimated_minutes'] as $field) $data[$field] = $data[$field] ?? null;
+            foreach (['summary', 'seo_description', 'cover_url', 'difficulty_level'] as $field) $data[$field] = $data[$field] ?? null;
+            // Existing schema requires a positive duration for non-drafts. Never overwrite a historical duration.
+            if (!$old || ($old->estimated_minutes === null && $p['publish_status'] !== 'draft')) {
+                $data['estimated_minutes'] = 1;
+            }
             // Compatibility anchor only; all Academy classification uses the relation table.
             $data['category_id'] = $p['category_ids'][0] ?? null;
             $data['is_enabled'] = (bool) $data['is_enabled'];
@@ -289,14 +290,13 @@ class AcademyService
         $publishing = $data['publish_status'] !== 'draft';
         if ($publishing && !$categoryIds) $this->fail('发布课程必须选择分类');
         $categories = $this->scoped('categories', $space)->whereIn('id', $categoryIds)
-            ->select('*')->selectRaw('to_json(difficulty_levels) AS difficulty_levels')->get();
+            ->get(['is_enabled']);
         if ($categories->count() !== count($categoryIds)) $this->fail('所选分类不存在或不属于当前学院模板');
         foreach ($categories as $category) {
             if ($publishing && !$category->is_enabled) $this->fail('发布课程必须选择已启用的分类，存在已停用分类');
-            if (!empty($data['difficulty_level']) && !in_array((int) $data['difficulty_level'], json_decode($category->difficulty_levels, true), true)) $this->fail('课程难度不在所选分类的适用范围内');
         }
-        if ($publishing && (empty($data['difficulty_level']) || empty($data['estimated_minutes']) || trim(html_entity_decode(strip_tags($data['body_html']), ENT_QUOTES | ENT_HTML5, 'UTF-8'), " \t\n\r\0\x0B\xc2\xa0") === '')) {
-            $this->fail('发布课程需要填写正文、课程难度及预计课时');
+        if ($publishing && (empty($data['difficulty_level']) || trim(html_entity_decode(strip_tags($data['body_html']), ENT_QUOTES | ENT_HTML5, 'UTF-8'), " \t\n\r\0\x0B\xc2\xa0") === '')) {
+            $this->fail('发布课程需要填写正文和课程难度');
         }
     }
 
