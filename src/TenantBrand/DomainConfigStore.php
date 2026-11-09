@@ -8,6 +8,7 @@ use Illuminate\Database\Query\Builder;
 use Illuminate\Database\ConnectionInterface;
 use Carbon\CarbonImmutable;
 use SixMm\Shared\TenantConfig\ConfigSnapshotWriter;
+use SixMm\Shared\Media\MediaRegistry;
 
 final class DomainConfigStore
 {
@@ -77,6 +78,17 @@ final class DomainConfigStore
         return hash('sha256', json_encode($domains, JSON_THROW_ON_ERROR));
     }
 
+    private function assets(): SiteBrandAssets { return new SiteBrandAssets($this->db, $this->schema); }
+
+    public function upload(array $input, int $operatorId): array
+    {
+        $detail = $this->detail($input);
+        if ($operatorId <= 0 || !in_array((string)($input['site_id'] ?? ''), array_column($detail['sites'], 'site_id'), true)) {
+            $this->reject('站点不属于当前白标或已不存在');
+        }
+        return (new MediaRegistry())->upload($input['file'], $operatorId, (int)$input['tenant_id']);
+    }
+
     public function detail(array $input): array
     {
         return $this->db->transaction(function () use ($input): array {
@@ -88,9 +100,11 @@ final class DomainConfigStore
             return ['tenant_id' => (string) $tenant->tenant_id, 'tenant_name' => $tenant->tenant_name,
                 'sites' => $sites->map(function ($site): array {
                     $domains = $this->domains((string) $site->site_id);
+                    $brand = $this->assets()->read((string)$site->site_id);
                     return ['site_id' => (string) $site->site_id, 'site_name' => $site->site_name,
                         'config_version' => (string)$this->writer()->latest((int)$site->tenant_id, (int)$site->site_id)[0],
-                        'domains' => $domains, 'revision' => $this->revision($domains), 'updated_at' => $site->updated_at ?? null];
+                        'domains' => $domains, 'revision' => $this->revision($domains), 'updated_at' => $site->updated_at ?? null,
+                        'brand_revision' => SiteBrandAssets::revision($brand)] + $brand;
                 })->all()];
         });
     }
@@ -108,6 +122,8 @@ final class DomainConfigStore
             if (!$site || (string)$site->site_id !== (string)$input['site_id']) $this->reject('站点不属于当前白标或已不存在');
             $timestamp = CarbonImmutable::now()->format('Y-m-d H:i:s.uP');
             $current = $this->domains((string) $site->site_id);
+            $beforeBrand = $this->assets()->read((string)$site->site_id);
+            $desiredBrand = SiteBrandAssets::desired($input, $beforeBrand);
             if (!hash_equals($this->revision($current), $input['expected_revision'])) $this->reject('域名已被其他操作员修改，请重新加载后再保存');
             foreach ($desired as $row) {
                 if ($this->table('wl_site_domains')->where('domain', $row['domain'])->where('site_id', '<>', $site->site_id)->exists()) {
@@ -133,16 +149,19 @@ final class DomainConfigStore
                 }
                 $this->table('wl_sites')->where('site_id', $site->site_id)->update(['updated_at' => $timestamp]);
             }
+            $this->assets()->write((string)$site->site_id, (int)$site->tenant_id, $desiredBrand, $beforeBrand);
+            if ($beforeBrand !== $desiredBrand) $this->table('wl_sites')->where('site_id', $site->site_id)->update(['updated_at' => $timestamp]);
             $result = $writer->append((int)$site->tenant_id, (int)$site->site_id, $version, $operatorId,
                 ($actorType === 'platform' ? 'platform-admin:' : 'white-label-admin:').$operatorId,
                 '品牌配置域名更新：站点 '.$site->site_id);
-            if ($current !== $desired || $result['changed']) {
+            if ($current !== $desired || $result['changed'] || $beforeBrand !== $desiredBrand) {
                 $audit(['tenant_id'=>(string)$site->tenant_id,'site_id'=>(string)$site->site_id,'before'=>$current,'after'=>$desired,
+                    'before_brand'=>$beforeBrand, 'after_brand'=>$desiredBrand,
                     'snapshot_version'=>$result['config_version']], $timestamp);
                 $result['changed'] = true;
                 $result['updated_at'] = $timestamp;
             }
-            return $result + ['revision'=>$this->revision($desired)];
+            return $result + ['revision'=>$this->revision($desired), 'brand_revision'=>SiteBrandAssets::revision($desiredBrand)];
         }, 3);
     }
 }

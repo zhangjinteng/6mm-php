@@ -107,4 +107,34 @@ $publish((int)$result['config_version'],true);
 $check($second->status === 'disabled' && $second->authPolicy->version === 6 && $second->entitlementVersion === 2);
 $check($first->emailTemplateRef == $second->emailTemplateRef && $db->table('wl_site_email_template_versions')->where('site_id',20)->count() === 1);
 $check($db->table('wl_site_auth_policy_audits')->where('site_id',20)->value('action') === 'availability_change');
+foreach (\SixMm\Shared\TenantBrand\SiteBrandAssets::FIELDS as $field) $db->statement("ALTER TABLE wl_site_domains ADD COLUMN $field text");
+$brandInput = static function (array $extra = []) use ($store): array {
+    $site = $store->detail(['tenant_id' => '1'])['sites'][0];
+    return array_replace(['tenant_id' => '1', 'site_id' => '10', 'expected_config_version' => $site['config_version'],
+        'expected_revision' => $site['revision'], 'expected_brand_revision' => $site['brand_revision'],
+        'domains' => $site['domains'], 'template_id' => $site['template_id'], 'logo_url' => $site['logo_url'], 'favicon_url' => $site['favicon_url']], $extra);
+};
+$brand = $brandInput(['template_id' => 'template-2', 'logo_url' => 'https://cdn.example/logo.png', 'favicon_url' => 'https://cdn.example/icon.webp']);
+$savedBrand = $store->save($brand, 7, $audit, 'white_label');
+$check($savedBrand['changed'] && $savedBrand['brand_revision'] !== $brand['expected_brand_revision']);
+$check($db->table('wl_site_domains')->where('site_id', 10)->where('template_id', 'template-2')->count() === 2);
+$check($store->detail(['tenant_id' => '1'])['sites'][0]['logo_url'] === 'https://cdn.example/logo.png');
+$check($db->table('wl_site_domains')->where('site_id', 20)->value('template_id') === null);
+try { $store->save($brand, 7, $audit); throw new RuntimeException('Stale branding accepted'); }
+catch (DomainConfigException $e) { $check(str_contains($e->getMessage(), '标识已变化')); }
+$check(!$store->save($brandInput(), 7, $audit)['changed']);
+foreach (['template_id' => 'custom', 'logo_url' => 'javascript:alert(1)', 'favicon_url' => 'http://unsafe.example/icon.png'] as $field => $value) {
+    try { $store->save($brandInput([$field => $value]), 7, $audit); throw new RuntimeException('Invalid brand asset accepted'); }
+    catch (DomainConfigException $e) { $check(true); }
+}
+$oldClient = $brandInput(['domains' => [['domain' => 'replacement.example', 'is_primary' => true]]]);
+foreach (['expected_brand_revision', ...\SixMm\Shared\TenantBrand\SiteBrandAssets::FIELDS] as $key) unset($oldClient[$key]);
+$store->save($oldClient, 7, $audit);
+$check($db->table('wl_site_domains')->where('site_id', 10)->value('logo_url') === 'https://cdn.example/logo.png');
+$check($db->table('wl_site_domains')->where('site_id', 10)->value('template_id') === 'template-2');
+try { $store->save($brandInput(['logo_url' => null]), 7, static fn () => throw new RuntimeException('brand audit failure')); }
+catch (RuntimeException $e) { $check($e->getMessage() === 'brand audit failure'); }
+$check($store->detail(['tenant_id' => '1'])['sites'][0]['logo_url'] === 'https://cdn.example/logo.png');
+$store->save($brandInput(['logo_url' => null, 'favicon_url' => null]), 7, $audit);
+$check($store->detail(['tenant_id' => '1'])['sites'][0]['logo_url'] === null);
 echo "Tenant brand: {$checks} checks passed\n";
