@@ -16,18 +16,9 @@ final class MediaRegistry
 
     public function upload(UploadedFile $file, ?int $adminId, ?int $tenantId = null): array
     {
-        if (!$file->isValid() || $file->getSize() > 5 * 1024 * 1024) {
-            throw ValidationException::withMessages(['file' => '请选择不超过 5 MB 的有效图片']);
-        }
-        $bytes = file_get_contents($file->getPathname());
-        $mime = $file->getMimeType();
-        $extension = ['image/png' => 'png', 'image/jpeg' => 'jpg', 'image/webp' => 'webp'][$mime] ?? null;
-        if ($bytes === false || !$extension || !($size = getimagesizefromstring($bytes))) {
-            throw ValidationException::withMessages(['file' => '无效的封面图片']);
-        }
-        if (max($size[0], $size[1]) > 8192) {
-            throw ValidationException::withMessages(['file' => '图片宽高不能超过 8192 像素']);
-        }
+        $image = ImageFile::uploaded($file);
+        $bytes = $image['bytes']; $mime = $image['mime']; $extension = $image['extension'];
+        $size = [$image['width'], $image['height']];
         $name = md5($bytes).'.'.$extension;
         $key = self::FOLDER.'/'.$name;
         $sha = hash('sha256', $bytes);

@@ -102,7 +102,7 @@ class FeedbackService
                 ->where('imgbed_instance', config('imgbed.instance'))->where('storage_status', 'available')
                 ->where('sha256', $a->sha256)->value('file_id');
             $base = rtrim((string) config('imgbed.public_base'), '/');
-            if (!str_starts_with($base, 'https://') || !preg_match('~^media/upload_files/[a-f0-9]{32}\.(?:png|jpg|webp)$~D', (string) $file)) {
+            if (!str_starts_with($base, 'https://') || !preg_match('~^media/upload_files/[a-f0-9]{32}\.(?:png|jpg|webp|svg|ico)$~D', (string) $file)) {
                 throw ValidationException::withMessages(['attachment_id' => '图床附件不可用']);
             }
             $response = Http::withoutRedirecting()->timeout(10)->withOptions(['stream' => true, 'read_timeout' => 10])->get($base.'/'.$file);
@@ -124,11 +124,9 @@ class FeedbackService
             }
             $bytes = $disk->get($key);
         }
-        $info = @getimagesizefromstring($bytes);
-        $mime = $info['mime'] ?? '';
-        if (!in_array($mime, ['image/jpeg', 'image/png', 'image/webp'], true) || $info[0] > 8192 || $info[1] > 8192) {
-            throw ValidationException::withMessages(['attachment_id' => '仅支持有效的 JPG、PNG、WebP 图片附件']);
-        }
+        try { $info = \SixMm\Shared\Media\ImageFile::inspect($bytes); }
+        catch (ValidationException $e) { throw ValidationException::withMessages(['attachment_id' => collect($e->errors())->flatten()->first()]); }
+        $mime = $info['mime'];
         return ['data_url' => 'data:'.$mime.';base64,'.base64_encode($bytes)];
     }
 

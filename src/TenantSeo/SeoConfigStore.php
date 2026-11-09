@@ -98,7 +98,7 @@ final class SeoConfigStore
         $scope = ['tenant_id' => 'required|integer|min:1|max:9223372036854775807', 'site_id' => 'required|integer|min:1|max:9223372036854775807'];
         return match ($action) {
             'detail', 'translationContext' => $scope,
-            'upload' => $scope + ['file' => 'required|file|mimes:jpg,jpeg,png,webp|max:5120'],
+            'upload' => $scope + ['file' => \SixMm\Shared\Media\ImageFile::rules()],
             'translate' => $scope + ['source_locale' => 'required|string|max:35', 'target_locale' => 'required|string|max:35',
                 'fields' => 'required|array:title,description|min:1|max:2',
                 'fields.title' => 'sometimes|required|string|max:200', 'fields.description' => 'sometimes|required|string|max:1000'],

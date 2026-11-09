@@ -39,9 +39,9 @@ domain and identity changes together. Branding-only saves do not change access-p
 snapshots or entitlements.
 
 `DomainConfigStore::upload()` authorizes the same site's tenant scope then delegates
-to the shared `MediaRegistry`. Hosts validate JPG/PNG/WebP and 5120 KiB, matching the
-registry's MIME/size/dimension checks. Uploading is separate from saving: media usage
+to the shared `MediaRegistry`. Hosts use `ImageFile::rules()` for JPG/PNG/WebP/SVG/ICO
+and 5120 KiB, matching the registry's byte-level size/dimension and safety checks. Uploading is separate from saving: media usage
 becomes active only when the brand is saved. Platform and Agent share the same media
 usage keys so changing/removing either image releases the previous reference. No
 credentials or image bytes are stored in the domain table. The two preview SVGs are
-static UI assets, not merchant-uploaded SVGs.
+static UI assets. Uploaded SVGs must also pass the shared static-SVG security policy.
