@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace SixMm\Shared\TenantSeo;
 
 use SixMm\Shared\Cms\TranslationCatalog;
+use SixMm\Shared\Media\MediaRegistry;
 use Illuminate\Database\ConnectionInterface;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Validation\ValidationException;
@@ -97,6 +98,7 @@ final class SeoConfigStore
         $scope = ['tenant_id' => 'required|integer|min:1|max:9223372036854775807', 'site_id' => 'required|integer|min:1|max:9223372036854775807'];
         return match ($action) {
             'detail', 'translationContext' => $scope,
+            'upload' => $scope + ['file' => 'required|file|mimes:jpg,jpeg,png,webp|max:5120'],
             'translate' => $scope + ['source_locale' => 'required|string|max:35', 'target_locale' => 'required|string|max:35',
                 'fields' => 'required|array:title,description|min:1|max:2',
                 'fields.title' => 'sometimes|required|string|max:200', 'fields.description' => 'sometimes|required|string|max:1000'],
@@ -134,6 +136,12 @@ final class SeoConfigStore
         $row = $this->query()->addSelect('c.og_image_url')->where('t.tenant_id', $input['tenant_id'])->where('s.site_id', $input['site_id'])->first();
         if (!$row) $this->reject('白标站点不存在或不属于该白标');
         return $this->normalized($row, true);
+    }
+
+    public function upload(array $input, int $operatorId): array
+    {
+        $this->detail($input); // Verify the authenticated tenant/site scope before storing any bytes.
+        return (new MediaRegistry())->upload($input['file'], $operatorId, (int) $input['tenant_id']);
     }
 
     public function save(array $input, int $operatorId, string $actorType, callable $audit): array
@@ -188,6 +196,12 @@ final class SeoConfigStore
                     'created_by' => $operatorId, 'created_by_type' => $actorType, 'created_at' => $now]);
             } else {
                 $this->table('wl_site_seo_configs')->where('site_id', $site->site_id)->update($values);
+            }
+            if ($this->db->getDriverName() === 'pgsql' && array_key_exists('og_image_url', $values)
+                && $before['og_image_url'] !== $values['og_image_url']) {
+                $media = new MediaRegistry();
+                $media->checkMediaReferences('platform_admin', 'white_label', (int) $tenant->tenant_id, 'seo',
+                    'site', (string) $site->site_id, 'og_image_url', 'published', $media->idsForUrl($values['og_image_url'], 'og_image_url'));
             }
             $audit([
                 'tenant_id' => (string) $tenant->tenant_id, 'site_id' => (string) $site->site_id,
