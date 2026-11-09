@@ -7,6 +7,7 @@ namespace SixMm\Shared\TenantFeatures;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Database\ConnectionInterface;
 use Carbon\CarbonImmutable;
+use SixMm\Shared\TenantConfig\ConfigSnapshotWriter;
 
 final class FeatureConfigStore
 {
@@ -117,7 +118,7 @@ final class FeatureConfigStore
         return $detail;
     }
 
-    public function save(array $input, callable $audit): array
+    public function save(array $input, int $operatorId, string $actor, callable $audit): array
     {
         if (!isset($input['tenant_id'], $input['site_id']) || !is_scalar($input['tenant_id']) || !is_scalar($input['site_id'])) $this->reject('白标或站点参数不正确');
         $features = $input['features'] ?? null;
@@ -128,13 +129,9 @@ final class FeatureConfigStore
         if (array_intersect(array_keys($features), self::CONTENT_CODES) && !$hasRevision) $this->reject('内容开关需要配置版本，请刷新后重试');
         if (!array_key_exists('expected_updated_at', $input) || ($input['expected_updated_at'] !== null
             && (!is_string($input['expected_updated_at']) || strlen($input['expected_updated_at']) > 64))) $this->reject('配置版本参数不正确');
-        return $this->db->transaction(function () use ($input, $audit): array {
-            if ($this->db->getDriverName() === 'pgsql') {
-                $this->db->statement("SET LOCAL lock_timeout = '5s'");
-                $this->db->statement("SET LOCAL statement_timeout = '15s'");
-                // Match the business publisher's table-lock order before reading site rows.
-                $this->db->statement('LOCK TABLE control_plane.wl_tenants, control_plane.wl_sites, control_plane.wl_site_modules IN SHARE ROW EXCLUSIVE MODE');
-            }
+        return $this->db->transaction(function () use ($input, $operatorId, $actor, $audit): array {
+            $writer = new ConfigSnapshotWriter($this->table(...), $this->reject(...));
+            $writer->lock();
             [$tenant, $site, $rows] = $this->context((string) $input['tenant_id'], isset($input['site_id']) ? (string) $input['site_id'] : null);
             if ((string) $site->site_id !== (string) $input['site_id']) $this->reject('默认站点已变化，请重新打开配置');
             if (array_key_exists('expected_revision', $input)) {
@@ -144,6 +141,7 @@ final class FeatureConfigStore
             $changes = [];
             foreach ($input['features'] as $code => $enabled) if ($before[$code] !== $enabled) $changes[$code] = $enabled;
             if (!$changes) return ['changed' => false, 'detail' => $this->detail($input)];
+            [$expected] = $writer->latest((int) $tenant->tenant_id, (int) $site->site_id);
             $clock = CarbonImmutable::now();
             $latest = $this->latestUpdatedAt($rows);
             if ($latest && $clock->lessThanOrEqualTo(CarbonImmutable::parse($latest))) $clock = CarbonImmutable::parse($latest)->addMicrosecond();
@@ -158,6 +156,7 @@ final class FeatureConfigStore
                         'module_code' => $code, 'module_type' => 'feature', 'created_at' => $now]);
                 }
             }
+            $writer->append((int) $tenant->tenant_id, (int) $site->site_id, $expected, $operatorId, $actor, '保存功能开关');
             $audit(['tenant_id' => (string) $tenant->tenant_id, 'site_id' => (string) $site->site_id,
                 'before' => array_intersect_key($before, $changes), 'features' => $changes, 'updated_at' => $now], $now);
             return ['changed' => true, 'detail' => $this->detail($input)];
