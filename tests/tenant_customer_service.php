@@ -41,6 +41,14 @@ $context = new CustomerServiceContext($db, $http, new Validator(new Translator(n
     new Encrypter(str_repeat('C', 32), 'AES-256-CBC'), 'private-api', 'fingerprint', 7, 'white_label',
     static function (array $change) use (&$audits): void { $audits[] = $change; }, static fn () => true, static fn () => true);
 $store = new BusinessConfigStore($context);
+$contract = $db->table('wl_site_modules')->where('site_id', 10)->where('module_code', 'contract');
+$contract->update(['enabled' => false]); // Snapshot still grants contract.
+$check(!$store->detail(['tenant_id' => '1'])['modules']['contract']);
+$check($store->listing([])['lists'][0]['enabled_count'] === 0);
+$check($store->detail(['tenant_id' => '2'])['modules']['contract']);
+try { $store->toggleCustomer(['tenant_id' => '1', 'site_id' => '10', 'expected_entitlement_version' => '3', 'expected_config_version' => '8', 'enabled' => true], 7); throw new RuntimeException('Mismatched snapshot accepted'); }
+catch (\Illuminate\Validation\ValidationException $e) { $check($calls === 0); }
+$contract->update(['enabled' => true]);
 $check(!$store->detail(['tenant_id' => '1'])['modules']['customer_service']);
 $result = $store->toggleCustomer(['tenant_id' => '1', 'site_id' => '10', 'expected_entitlement_version' => '3', 'expected_config_version' => '8', 'enabled' => true], 7);
 $check($result['detail']['modules']['customer_service'] && $calls === 1);

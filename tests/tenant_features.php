@@ -32,27 +32,27 @@ $platform = new FeatureConfigStore($db);
 $checks = 0;
 $check = static function (bool $value) use (&$checks): void { ++$checks; if (!$value) throw new RuntimeException('Feature check failed #' . $checks); };
 $detail = $store->detail(['tenant_id' => '1']);
-$check($detail['features'] === ['trade_ranking' => true] && $detail['expected_updated_at'] === null);
+$check($detail['features'] === ['trade_ranking' => false] && $detail['expected_updated_at'] === null);
 $check(array_column($detail['sites'], 'site_id') === ['10', '11']);
 $check($db->table('wl_site_modules')->count() === 2);
 $check($store->detail(['tenant_id' => 1, 'site_id' => 11])['site_id'] === '11');
 $check($platform->detail(['tenant_id' => 1, 'site_id' => 11])['site_id'] === '10');
 $audits = [];
 $audit = static function (array $change) use (&$audits): void { $audits[] = $change; };
-$input = ['tenant_id' => '1', 'site_id' => '10', 'expected_updated_at' => null, 'features' => ['trade_ranking' => false]];
+$input = ['tenant_id' => '1', 'site_id' => '10', 'expected_updated_at' => null, 'features' => ['trade_ranking' => true]];
 CarbonImmutable::setTestNow(CarbonImmutable::parse('2026-11-03T10:00:00Z'));
 $saved = $store->save($input, $audit);
 $token = $saved['detail']['expected_updated_at'];
-$check($saved['changed'] && $saved['detail']['features'] === ['trade_ranking' => false]);
+$check($saved['changed'] && $saved['detail']['features'] === ['trade_ranking' => true]);
 $check($audits[0]['site_id'] === '10' && $audits[0]['updated_at'] === $token);
 $check(!$store->save(array_replace($input, ['expected_updated_at' => $token]), $audit)['changed']);
 $check(count($audits) === 1);
 try { $store->save($input, $audit); throw new RuntimeException('Stale accepted'); }
 catch (FeatureConfigException $e) { $check(true); }
-$next = $store->save(array_replace($input, ['expected_updated_at' => $token, 'features' => ['trade_ranking' => true]]), $audit);
+$next = $store->save(array_replace($input, ['expected_updated_at' => $token, 'features' => ['trade_ranking' => false]]), $audit);
 $check(CarbonImmutable::parse($next['detail']['expected_updated_at'])->greaterThan(CarbonImmutable::parse($token)));
 CarbonImmutable::setTestNow();
-foreach ([['site_id' => 20], ['site_id' => 12], ['features' => ['contract' => false]], ['features' => ['trade_ranking' => 'false']], ['features' => []], ['features' => ['trade_ranking' => true, 'feedback' => true]]] as $invalid) {
+foreach ([['site_id' => 20], ['site_id' => 12], ['features' => ['contract' => false]], ['features' => ['trade_ranking' => 'false']], ['features' => []], ['features' => ['trade_ranking' => false, 'feedback' => false]]] as $invalid) {
     try { $store->save(array_replace($input, $invalid), $audit); throw new RuntimeException('Invalid save accepted'); }
     catch (FeatureConfigException $e) { $check(true); }
 }
@@ -67,15 +67,15 @@ $check($db->table('wl_sites')->where('site_id', 10)->value('entitlement_version'
 $check($db->table('wl_config_snapshots')->value('payload') === '{"preserve":true}');
 $check($platform->listing(['keyword' => '_%'])['count'] === 1);
 $content = new FeatureConfigStore($db, true, true, null, true);
-$all = ['trade_ranking' => true, 'news' => true, 'academy' => true, 'help_center' => true, 'feedback' => true, 'announcement' => true];
+$all = ['trade_ranking' => false, 'news' => false, 'academy' => false, 'help_center' => false, 'feedback' => false, 'announcement' => false];
 $initial = $content->detail(['tenant_id' => 1, 'site_id' => 11]);
 $check($initial['features'] === $all);
 $check(strlen($initial['expected_revision']) === 64);
 $check(!$db->table('wl_site_modules')->where('site_id', 11)->exists());
 $contentInput = ['tenant_id' => 1, 'site_id' => 11, 'expected_updated_at' => null,
-    'expected_revision' => $initial['expected_revision'], 'features' => array_replace($all, ['news' => false, 'feedback' => false])];
+    'expected_revision' => $initial['expected_revision'], 'features' => array_replace($all, ['news' => true, 'feedback' => true])];
 $result = $content->save($contentInput, $audit);
-$check(!$result['detail']['features']['news'] && !$result['detail']['features']['feedback']);
+$check($result['detail']['features']['news'] && $result['detail']['features']['feedback']);
 $check($db->table('wl_site_modules')->where('site_id', 11)->count() === 2);
 $check($result['detail']['expected_revision'] !== $initial['expected_revision']);
 $check($content->detail(['tenant_id' => 2, 'site_id' => 20])['features'] === $all);
@@ -89,32 +89,32 @@ foreach ([['expected_revision' => null], ['expected_revision' => 'bad'], ['site_
     catch (FeatureConfigException $e) { $check(true); }
 }
 // Audit rollback is atomic across multiple flags.
-try { $content->save(array_replace($fresh, ['features' => ['academy' => false, 'announcement' => false]]), static function (): void { throw new RuntimeException('Audit failed'); }); }
+try { $content->save(array_replace($fresh, ['features' => ['academy' => true, 'announcement' => true]]), static function (): void { throw new RuntimeException('Audit failed'); }); }
 catch (RuntimeException $e) { $check($e->getMessage() === 'Audit failed'); }
-$check($content->detail(['tenant_id' => 1, 'site_id' => 11])['features']['academy']);
+$check(!$content->detail(['tenant_id' => 1, 'site_id' => 11])['features']['academy']);
 $check($db->table('wl_site_modules')->where('site_id', 11)->count() === 2);
 // Platform remains ranking-only and cannot overwrite content rows.
 $owned = $content->detail(['tenant_id' => 1, 'site_id' => 10]);
 $content->save(['tenant_id' => 1, 'site_id' => 10, 'expected_updated_at' => $owned['expected_updated_at'],
-    'expected_revision' => $owned['expected_revision'], 'features' => ['news' => false]], $audit);
+    'expected_revision' => $owned['expected_revision'], 'features' => ['news' => true]], $audit);
 $owned = $content->detail(['tenant_id' => 1, 'site_id' => 10]);
 $platformDetail = $platform->detail(['tenant_id' => 1]);
 $check(array_keys($platformDetail['features']) === ['trade_ranking']);
 $check(!array_key_exists('expected_revision', $platformDetail));
-$platform->save(['tenant_id' => 1, 'site_id' => 10, 'expected_updated_at' => $platformDetail['expected_updated_at'], 'features' => ['trade_ranking' => false]], $audit);
-$check(!$content->detail(['tenant_id' => 1, 'site_id' => 10])['features']['news']);
+$platform->save(['tenant_id' => 1, 'site_id' => 10, 'expected_updated_at' => $platformDetail['expected_updated_at'], 'features' => ['trade_ranking' => true]], $audit);
+$check($content->detail(['tenant_id' => 1, 'site_id' => 10])['features']['news']);
 try { $content->save(['tenant_id' => 1, 'site_id' => 10, 'expected_updated_at' => $owned['expected_updated_at'],
     'expected_revision' => $owned['expected_revision'], 'features' => $all], $audit); throw new RuntimeException('Platform update lost'); }
 catch (FeatureConfigException $e) { $check(true); }
 $legacy = $content->detail(['tenant_id' => 1, 'site_id' => 10]);
-$content->save(['tenant_id' => 1, 'site_id' => 10, 'expected_updated_at' => $legacy['expected_updated_at'], 'features' => ['trade_ranking' => true]], $audit);
-$check(!$content->detail(['tenant_id' => 1, 'site_id' => 10])['features']['news']);
+$content->save(['tenant_id' => 1, 'site_id' => 10, 'expected_updated_at' => $legacy['expected_updated_at'], 'features' => ['trade_ranking' => false]], $audit);
+$check($content->detail(['tenant_id' => 1, 'site_id' => 10])['features']['news']);
 // A second row can change while the aggregate maximum timestamp stays unchanged.
 $snapshot = $content->detail(['tenant_id' => 1, 'site_id' => 11]);
-$db->table('wl_site_modules')->where('site_id', 11)->where('module_code', 'news')->update(['enabled' => true]);
+$db->table('wl_site_modules')->where('site_id', 11)->where('module_code', 'news')->update(['enabled' => false]);
 $check($content->detail(['tenant_id' => 1, 'site_id' => 11])['expected_updated_at'] === $snapshot['expected_updated_at']);
 try { $content->save(['tenant_id' => 1, 'site_id' => 11, 'expected_updated_at' => $snapshot['expected_updated_at'],
-    'expected_revision' => $snapshot['expected_revision'], 'features' => ['news' => false]], $audit); throw new RuntimeException('Equal timestamp conflict missed'); }
+    'expected_revision' => $snapshot['expected_revision'], 'features' => ['news' => true]], $audit); throw new RuntimeException('Equal timestamp conflict missed'); }
 catch (FeatureConfigException $e) { $check(true); }
 // A code already used as a business entitlement must never be overwritten.
 $db->table('wl_site_modules')->insert(['site_id' => 20, 'module_code' => 'news', 'module_type' => 'business', 'enabled' => true]);

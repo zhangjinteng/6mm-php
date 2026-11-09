@@ -26,7 +26,7 @@ final class FeatureConfigStore
     private function values(array $rows): array
     {
         $values = [];
-        foreach ($this->codes() as $code) $values[$code] = isset($rows[$code]) ? (bool) $rows[$code]->enabled : true;
+        foreach ($this->codes() as $code) $values[$code] = (bool) ($rows[$code]->enabled ?? false);
         return $values;
     }
 
@@ -80,7 +80,7 @@ final class FeatureConfigStore
         return ['count' => $count, 'lists' => $tenants->map(function ($tenant) use ($sites, $rows): array {
             $site = $sites->get($tenant->tenant_id);
             $row = $rows->get($site?->site_id);
-            $enabled = $row ? (bool) $row->enabled : true;
+            $enabled = (bool) ($row->enabled ?? false);
             return ['tenant_id' => (string) $tenant->tenant_id, 'tenant_name' => $tenant->tenant_name,
                 'site_id' => $site ? (string) $site->site_id : null,
                 'features' => [self::CODE => $enabled], 'enabled_count' => $enabled ? 1 : 0,

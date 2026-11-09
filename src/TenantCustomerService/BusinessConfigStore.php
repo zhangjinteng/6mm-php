@@ -85,11 +85,17 @@ final class BusinessConfigStore
         })->all()];
     }
 
-    private function context(string $tenantId): array
+    private function tenantSite(string $tenantId): array
     {
         $tenant = $this->table('wl_tenants')->where('tenant_id', $tenantId)->first();
         $site = $this->table('wl_sites')->where('tenant_id', $tenantId)->orderBy('site_id')->first();
         if (!$tenant || !$site) $this->reject('白标不存在或尚未配置站点');
+        return [$tenant, $site];
+    }
+
+    private function context(string $tenantId): array
+    {
+        [$tenant, $site] = $this->tenantSite($tenantId);
         [$version, $target] = $this->writer()->latest((int)$tenantId, (int)$site->site_id);
         if (!$target) $this->reject('默认站点尚未进入发布快照，请先完成站点初始化');
         $enabled = $this->businessModules()->where('site_id', $site->site_id)->where('enabled', true)->distinct()->pluck('module_code')->all();
@@ -107,13 +113,17 @@ final class BusinessConfigStore
 
     public function detail(array $input): array
     {
-        [$tenant, $site, $version, $target] = $this->context((string) $input['tenant_id']);
+        [$tenant, $site] = $this->tenantSite((string) $input['tenant_id']);
+        $enabled = $this->businessModules()->where('site_id', $site->site_id)
+            ->whereIn('module_code', self::MODULES)->where('enabled', true)->pluck('module_code')->all();
+        // The snapshot supplies only the concurrency token, never the displayed flags.
+        $version = (int) $this->table('wl_site_config_snapshots')->where('site_id', $site->site_id)->max('config_version');
         return ['tenant_id' => (string) $tenant->tenant_id, 'tenant_name' => $tenant->tenant_name,
             'site_id' => (string) $site->site_id, 'site_name' => $site->site_name,
             'entitlement_version' => (string) $site->entitlement_version,
             'snapshot_version' => (string)$version, 'config_version' => (string)$version,
             'customer_operation' => (new CustomerLifecycleService($this->host))->operation((string) $tenant->tenant_id),
-            'modules' => array_combine(self::MODULES, array_map(fn ($code) => in_array($code, $target->entitlements, true), self::MODULES))];
+            'modules' => array_replace(array_fill_keys(self::MODULES, false), array_fill_keys($enabled, true))];
     }
 
     public function publish(array $input, int $operatorId): array
