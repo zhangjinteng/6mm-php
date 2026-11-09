@@ -37,6 +37,8 @@ $db->table('wl_tenants')->insert([['tenant_id'=>1,'tenant_name'=>'Alpha_%','stat
 foreach ([10,11,12,20] as $id) $db->table('wl_sites')->insert(['site_id'=>$id,'tenant_id'=>$id===20?2:1,'site_name'=>'Site'.$id,'status'=>$id===12?'disabled':'enabled']);
 foreach (array_keys(ComplianceConfigStore::TYPES) as $type) $db->table('wl_agreements')->insert(['scope_type'=>'platform','agreement_type'=>$type,'draft_sections'=>'[{"title":"PRIVATE DRAFT"}]','updated_at'=>'2026-11-04 00:00:00']);
 $platform=new ComplianceConfigStore($db); $tenant=new ComplianceConfigStore($db,true);
+require __DIR__.'/fixtures/site_themes.php';
+themeFixture($db);
 $checks=0; $check=static function(bool $ok) use (&$checks): void {++$checks; if(!$ok) throw new RuntimeException('Compliance check failed #'.$checks);};
 $check(array_column($tenant->sites('1'),'site_id')===['10','11']);
 $check($platform->listing(['keyword'=>'_%'])['count']===3);

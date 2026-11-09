@@ -192,7 +192,10 @@ final class ComplianceConfigStore
                 }
             }
             $profileChanged=$before['profile']!==$profile;
-            if (!$profileChanged && !$changes) return ['changed'=>false,'detail'=>$before];
+            if (!$profileChanged && !$changes) {
+                $this->syncTheme($input, $operatorId, $actorType);
+                return ['changed'=>false,'detail'=>$before];
+            }
             $now=\Carbon\Carbon::now();
             if ($existingProfile?->updated_at && $now->lessThanOrEqualTo(\Carbon\Carbon::parse($existingProfile->updated_at))) $now=\Carbon\Carbon::parse($existingProfile->updated_at)->addMicrosecond();
             $timestamp=$now->format('Y-m-d H:i:s.uP');
@@ -217,6 +220,7 @@ final class ComplianceConfigStore
                 else $this->table('wl_agreements')->insert($data+['scope_type'=>'site','site_id'=>$site->site_id,'agreement_type'=>$type,'locale'=>'en',
                     'created_by_type'=>$actorType,'created_by_id'=>$operatorId,'created_at'=>$timestamp]);
             }
+            $this->syncTheme($input, $operatorId, $actorType);
             $after=$this->detail($input);
             $summary=static fn (array $d): array=>['profile_sha256'=>hash('sha256',json_encode($d['profile'],JSON_THROW_ON_ERROR)),
                 'agreements'=>array_map(static fn ($a)=>['type'=>$a['agreement_type'],'mode'=>$a['mode'],'enabled'=>$a['is_enabled'],'url_sha256'=>hash('sha256',$a['url'])],$d['agreements'])];
@@ -224,5 +228,12 @@ final class ComplianceConfigStore
                 'actor_type'=>$actorType,'before'=>$summary($before),'after'=>$summary($after)],$timestamp);
             return ['changed'=>true,'detail'=>$after];
         },3);
+    }
+
+    private function syncTheme(array $input, int $operator, string $actorType): void
+    {
+        (new \SixMm\Shared\TenantConfig\ThemeSnapshotWriter($this->table(...)))->sync(
+            (int)$input['tenant_id'], (int)$input['site_id'], $operator,
+            ($actorType === 'platform' ? 'platform-admin:' : 'white-label-admin:').$operator, '保存合规配置');
     }
 }

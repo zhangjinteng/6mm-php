@@ -161,7 +161,8 @@ final class ConfigSnapshotWriter
         if ($old && json_decode($payload) == $old) {
             $repair = $map->orderBy('domain')->pluck('domain')->all() !== $domains;
             if ($repair) $this->replaceDomains($site,$domains);
-            return ['changed'=>$repair,'publication_version'=>(string)$global,'config_version'=>(string)$previous,'snapshot_version'=>(string)$previous];
+            $theme = (new ThemeSnapshotWriter($this->table))->sync($tenant, $site, $operator, $actor, $reason, $previous);
+            return ['changed'=>$repair || $theme['changed'],'publication_version'=>(string)$global,'config_version'=>(string)$previous,'snapshot_version'=>(string)$previous];
         }
         $version = $db->getDriverName() === 'sqlite' ? $global+1 :
             (int)$db->selectOne("SELECT nextval('control_plane.wl_snapshot_version_seq'::regclass) AS version")->version;
@@ -180,6 +181,7 @@ final class ConfigSnapshotWriter
         $this->rows('wl_site_config_snapshots')->insert(['site_id'=>$site,'config_version'=>$version,'schema_version'=>4,'payload'=>$payload,
             'payload_sha256'=>hash('sha256',$payload),'previous_config_version'=>$previous ?: null,'rollback_of_config_version'=>null]);
         $this->replaceDomains($site,$domains);
+        (new ThemeSnapshotWriter($this->table))->sync($tenant, $site, $operator, $actor, $reason, $version);
         return ['changed'=>true,'publication_version'=>(string)$version,'config_version'=>(string)$version,'snapshot_version'=>(string)$version];
     }
 

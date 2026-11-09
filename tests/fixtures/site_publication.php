@@ -8,6 +8,8 @@ use Illuminate\Database\Connection;
 function publicationFixture(Connection $db, array $sites, bool $controlPlane = false): void
 {
     $prefix = $controlPlane ? 'control_plane.' : '';
+    require_once __DIR__.'/site_themes.php';
+    themeFixture($db, $prefix);
     foreach ([
         'wl_site_config_publications' => 'publication_version integer primary key, published_by text, publish_reason text, published_at text',
         'wl_site_config_snapshots' => 'site_id integer, config_version integer references wl_site_config_publications, previous_config_version integer, rollback_of_config_version integer, schema_version integer, payload text, payload_sha256 text, primary key(site_id,config_version)',

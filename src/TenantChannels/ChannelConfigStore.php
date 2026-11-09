@@ -97,7 +97,10 @@ final class ChannelConfigStore
                 }
                 $encoded[$field] = json_encode((object) $merged, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
             }
-            if ($before === $after) return ['changed' => false, 'detail' => $this->format($tenant, $row)];
+            if ($before === $after) {
+                $this->syncTheme($tenantId, $actorId, $actorType);
+                return ['changed' => false, 'detail' => $this->format($tenant, $row)];
+            }
             $now = CarbonImmutable::now();
             if ($row && $now->lessThanOrEqualTo(CarbonImmutable::parse($row->updated_at))) $now = CarbonImmutable::parse($row->updated_at)->addMicrosecond();
             $timestamp = $now->format('Y-m-d H:i:s.uP');
@@ -106,8 +109,16 @@ final class ChannelConfigStore
             $data = $encoded + ['updated_by' => $actorType === 'platform' ? $actorId : null, 'updated_at' => $timestamp];
             if ($row) $this->table('wl_channel_configs')->where('tenant_id', $tenantId)->update($data);
             else $this->table('wl_channel_configs')->insert($data + ['tenant_id' => $tenantId, 'created_at' => $timestamp]);
+            $this->syncTheme($tenantId, $actorId, $actorType);
             if ($audit !== null) $audit($before, $after, $timestamp);
             return ['changed' => true, 'detail' => $this->detail($tenantId)];
         }, 3);
+    }
+
+    private function syncTheme(string $tenant, int $operator, string $actorType): void
+    {
+        (new \SixMm\Shared\TenantConfig\ThemeSnapshotWriter($this->table(...)))->sync(
+            (int)$tenant, null, $operator,
+            ($actorType === 'platform' ? 'platform-admin:' : 'white-label-admin:').$operator, '保存渠道配置');
     }
 }

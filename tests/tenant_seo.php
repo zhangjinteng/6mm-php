@@ -28,6 +28,8 @@ foreach ([10, 11, 12, 20] as $id) {
     $db->table('wl_site_domains')->insert(['site_id' => $id, 'domain' => 'site'.$id.'.example', 'is_primary' => true]);
 }
 $platform = new SeoConfigStore($db); $tenant = new SeoConfigStore($db, true);
+require __DIR__.'/fixtures/site_themes.php';
+themeFixture($db);
 $checks = 0;
 $check = static function ($ok) use (&$checks) { ++$checks; if (!$ok) throw new RuntimeException('SEO check failed #'.$checks); };
 $check(array_column($tenant->sites('1'), 'site_id') === ['10', '11']);

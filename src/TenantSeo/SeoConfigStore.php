@@ -186,7 +186,10 @@ final class SeoConfigStore
             foreach ($values as $key => $value) {
                 if ($before[$key] != $value) $same = false;
             }
-            if ($same) return ['changed' => false, 'version' => $before['version']];
+            if ($same) {
+                $this->syncTheme($input, $operatorId, $actorType);
+                return ['changed' => false, 'version' => $before['version']];
+            }
             $now = \Carbon\CarbonImmutable::now()->format('Y-m-d H:i:s.uP');
             $version = $before['version'] + 1;
             $values['translations'] = json_encode((object) $translations, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
@@ -203,6 +206,7 @@ final class SeoConfigStore
                 $media->checkMediaReferences('platform_admin', 'white_label', (int) $tenant->tenant_id, 'seo',
                     'site', (string) $site->site_id, 'og_image_url', 'published', $media->idsForUrl($values['og_image_url'], 'og_image_url'));
             }
+            $this->syncTheme($input, $operatorId, $actorType);
             $audit([
                 'tenant_id' => (string) $tenant->tenant_id, 'site_id' => (string) $site->site_id,
                 'actor_type' => $actorType, 'previous_version' => $before['version'], 'version' => $version,
@@ -211,5 +215,12 @@ final class SeoConfigStore
             ], $now);
             return ['changed' => true, 'version' => $version];
         }, 3);
+    }
+
+    private function syncTheme(array $input, int $operator, string $actorType): void
+    {
+        (new \SixMm\Shared\TenantConfig\ThemeSnapshotWriter($this->table(...)))->sync(
+            (int)$input['tenant_id'], (int)$input['site_id'], $operator,
+            ($actorType === 'platform_admin' ? 'platform-admin:' : 'white-label-admin:').$operator, '保存SEO配置');
     }
 }

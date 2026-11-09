@@ -40,6 +40,7 @@
     },
     "scripts": {
         "test": [
+            "@php tests/site_themes.php",
             "@php tests/media_image.php",
             "@php tests/tenant_customer_service.php",
             "@php tests/tenant_compliance.php",

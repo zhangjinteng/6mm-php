@@ -140,7 +140,11 @@ final class FeatureConfigStore
             $before = $this->values($rows);
             $changes = [];
             foreach ($input['features'] as $code => $enabled) if ($before[$code] !== $enabled) $changes[$code] = $enabled;
-            if (!$changes) return ['changed' => false, 'detail' => $this->detail($input)];
+            if (!$changes) {
+                (new \SixMm\Shared\TenantConfig\ThemeSnapshotWriter($this->table(...)))->sync(
+                    (int)$tenant->tenant_id, (int)$site->site_id, $operatorId, $actor, '保存功能开关');
+                return ['changed' => false, 'detail' => $this->detail($input)];
+            }
             [$expected] = $writer->latest((int) $tenant->tenant_id, (int) $site->site_id);
             $clock = CarbonImmutable::now();
             $latest = $this->latestUpdatedAt($rows);
