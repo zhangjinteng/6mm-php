@@ -6,6 +6,7 @@ namespace SixMm\Shared\TenantCustomerService;
 
 use Illuminate\Database\Query\Builder;
 use Illuminate\Validation\ValidationException;
+use SixMm\Shared\TenantConfig\ConfigSnapshotWriter;
 
 final class BusinessConfigStore
 {
@@ -39,26 +40,16 @@ final class BusinessConfigStore
         }
     }
 
-    private function appendSnapshot(object $snapshot, object $payload, int $operatorId, string $reason): string
+    private function appendSnapshot(object $snapshot, object $payload, string $reason): string
     {
-        $version = $this->host->db->getDriverName() === 'pgsql'
-            ? (int) $this->host->db->selectOne("SELECT nextval('control_plane.wl_snapshot_version_seq'::regclass) AS version")->version
-            : (int) $snapshot->snapshot_version + 1;
-        if ($version <= (int) $snapshot->snapshot_version) $this->reject('快照序列异常，请联系管理员');
-        $payload->snapshotVersion = $version;
-        $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR);
-        $this->table('wl_config_snapshots')->insert([
-            'snapshot_version' => $version, 'schema_version' => $snapshot->schema_version,
-            'payload' => $json, 'payload_sha256' => hash('sha256', $json),
-            'previous_snapshot_version' => $snapshot->snapshot_version,
-            'rollback_of_snapshot_version' => null, 'published_by' => $this->host->actorReference(),
-            'publish_reason' => $reason, 'published_at' => \Carbon\CarbonImmutable::now(),
-        ]);
-        return (string) $version;
+        return ConfigSnapshotWriter::append(
+            $this->table('wl_config_snapshots'), $snapshot, $payload, $this->host->actorReference(),
+            $reason, \Carbon\CarbonImmutable::now(), $this->reject(...),
+        );
     }
 
     /** Called before account row locks, inside the same account-edit transaction. */
-    public function initializeSiteIfMissing(string $tenantId, string $siteId, int $operatorId): array
+    public function initializeSiteIfMissing(string $tenantId, string $siteId, int $operatorId, ?string $publishReason = null): array
     {
         if ($this->host->db->transactionLevel() < 1) throw new \LogicException('Site initialization requires a transaction');
         $this->lockPublication(true);
@@ -130,8 +121,8 @@ final class BusinessConfigStore
             }
         }
         $payload->sites[] = $target;
-        return ['initialized' => true, 'snapshot_version' => $this->appendSnapshot($snapshot, $payload, $operatorId,
-            '编辑白标保存时首次初始化站点 '.$siteId)];
+        return ['initialized' => true, 'snapshot_version' => $this->appendSnapshot($snapshot, $payload,
+            $publishReason ?? '编辑白标保存时首次初始化站点 '.$siteId)];
     }
 
     public function listing(array $input): array
@@ -310,7 +301,7 @@ final class BusinessConfigStore
             }
             if ($operationId) (new CustomerLifecycleService($this->host))->complete((string) $input['tenant_id'], $operationId, $operatorId);
             if (!$changed) return ['changed' => false, 'snapshot_version' => (string) $snapshot->snapshot_version];
-            $version = $this->appendSnapshot($snapshot, $payload, $operatorId, $input['reason']);
+            $version = $this->appendSnapshot($snapshot, $payload, $input['reason']);
             return ['changed' => true, 'snapshot_version' => (string) $version,
                 'entitlement_version' => (string) $target->entitlementVersion];
         }, 3);

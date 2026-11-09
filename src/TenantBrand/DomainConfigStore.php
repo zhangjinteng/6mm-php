@@ -7,6 +7,7 @@ namespace SixMm\Shared\TenantBrand;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Database\ConnectionInterface;
 use Carbon\CarbonImmutable;
+use SixMm\Shared\TenantConfig\ConfigSnapshotWriter;
 
 final class DomainConfigStore
 {
@@ -135,17 +136,11 @@ final class DomainConfigStore
             $publishedVersion = (string) $snapshot->snapshot_version;
             if ($oldNames !== $names) {
                 $target->domains = $names;
-                $version = $this->db->getDriverName() === 'pgsql'
-                    ? (int) $this->db->selectOne("SELECT nextval('control_plane.wl_snapshot_version_seq'::regclass) AS value")->value
-                    : (int) $snapshot->snapshot_version + 1;
-                if ($version <= (int) $snapshot->snapshot_version) $this->reject('快照序列异常，请联系管理员');
-                $payload->snapshotVersion = $version;
-                $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR);
-                $this->table('wl_config_snapshots')->insert(['snapshot_version' => $version, 'schema_version' => $snapshot->schema_version,
-                    'payload' => $json, 'payload_sha256' => hash('sha256', $json), 'previous_snapshot_version' => $snapshot->snapshot_version,
-                    'rollback_of_snapshot_version' => null, 'published_by' => ($actorType === 'platform' ? 'platform-admin:' : 'white-label-admin:') . $operatorId,
-                    'publish_reason' => '品牌配置域名更新：站点 ' . $site->site_id, 'published_at' => $timestamp]);
-                $publishedVersion = (string) $version;
+                $publishedVersion = ConfigSnapshotWriter::append(
+                    $this->table('wl_config_snapshots'), $snapshot, $payload,
+                    ($actorType === 'platform' ? 'platform-admin:' : 'white-label-admin:') . $operatorId,
+                    '品牌配置域名更新：站点 ' . $site->site_id, $timestamp, $this->reject(...),
+                );
             }
             PublishedDomainMap::sync($map, (string) $site->site_id, $names);
             $audit(['tenant_id' => (string) $site->tenant_id, 'site_id' => (string) $site->site_id,
