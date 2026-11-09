@@ -67,6 +67,11 @@ final class DomainConfigStore
         return $rows;
     }
 
+    private function writer(): ConfigSnapshotWriter
+    {
+        return new ConfigSnapshotWriter($this->table(...), $this->reject(...));
+    }
+
     private function revision(array $domains): string
     {
         return hash('sha256', json_encode($domains, JSON_THROW_ON_ERROR));
@@ -79,11 +84,12 @@ final class DomainConfigStore
             $tenant = $this->table('wl_tenants')->where('tenant_id', $input['tenant_id'])->first();
             if (!$tenant) $this->reject('白标不存在');
             $sites = $this->table('wl_sites')->where('tenant_id', $tenant->tenant_id)
-                ->when($this->enabledSitesOnly, fn ($q) => $q->where('status', 'enabled'))->orderBy('site_id')->get();
+                ->when($this->enabledSitesOnly, fn ($q) => $q->where('status', 'enabled'))->orderBy('site_id')->limit(1)->get();
             return ['tenant_id' => (string) $tenant->tenant_id, 'tenant_name' => $tenant->tenant_name,
                 'sites' => $sites->map(function ($site): array {
                     $domains = $this->domains((string) $site->site_id);
                     return ['site_id' => (string) $site->site_id, 'site_name' => $site->site_name,
+                        'config_version' => (string)$this->writer()->latest((int)$site->tenant_id, (int)$site->site_id)[0],
                         'domains' => $domains, 'revision' => $this->revision($domains), 'updated_at' => $site->updated_at ?? null];
                 })->all()];
         });
@@ -95,15 +101,11 @@ final class DomainConfigStore
         if (!is_string($input['expected_revision'] ?? null) || !preg_match('/^[a-f0-9]{64}$/D', $input['expected_revision'])) $this->reject('域名版本参数不正确');
         $desired = DomainConfigValidator::normalize($input['domains'] ?? null);
         return $this->db->transaction(function () use ($input, $operatorId, $desired, $audit, $actorType): array {
-            if ($this->db->getDriverName() === 'pgsql') {
-                $this->db->statement("SET LOCAL lock_timeout = '5s'");
-                $this->db->statement("SET LOCAL statement_timeout = '15s'");
-                // Use the business publisher's lock order so unrelated configuration edits are preserved.
-                $this->db->statement('LOCK TABLE control_plane.wl_config_snapshots, control_plane.wl_tenants, control_plane.wl_sites, control_plane.wl_site_modules, control_plane.wl_site_domains, control_plane.wl_site_config_domains IN SHARE ROW EXCLUSIVE MODE');
-            }
-            $site = $this->table('wl_sites')->where('site_id', $input['site_id'])->where('tenant_id', $input['tenant_id'])
-                ->when($this->enabledSitesOnly, fn ($q) => $q->where('status', 'enabled'))->lockForUpdate()->first();
-            if (!$site) $this->reject('站点不属于当前白标或已不存在');
+            $writer = $this->writer();
+            $writer->lock();
+            $site = $this->table('wl_sites')->where('tenant_id', $input['tenant_id'])
+                ->when($this->enabledSitesOnly, fn ($q) => $q->where('status', 'enabled'))->orderBy('site_id')->lockForUpdate()->first();
+            if (!$site || (string)$site->site_id !== (string)$input['site_id']) $this->reject('站点不属于当前白标或已不存在');
             $timestamp = CarbonImmutable::now()->format('Y-m-d H:i:s.uP');
             $current = $this->domains((string) $site->site_id);
             if (!hash_equals($this->revision($current), $input['expected_revision'])) $this->reject('域名已被其他操作员修改，请重新加载后再保存');
@@ -113,69 +115,34 @@ final class DomainConfigStore
                 }
             }
             $names = array_column($desired, 'domain');
-            $map = $this->table('wl_site_config_domains');
-            if ($current === $desired && PublishedDomainMap::names($map, (string) $site->site_id) === $names) return ['changed' => false];
-            [$snapshot, $payload, $target] = $this->snapshot((string) $site->tenant_id, (string) $site->site_id, $current);
-            foreach ($payload->sites as $publishedSite) {
-                if ((string) $publishedSite->siteId === (string) $site->site_id) continue;
-                if (array_intersect(array_column($desired, 'domain'), $publishedSite->domains) !== []) {
-                    $this->reject('域名已在其他站点的发布配置中使用，请先核对配置');
+            [$version, $old] = $writer->latest((int)$site->tenant_id, (int)$site->site_id);
+            if ((string)$version !== (string)($input['expected_config_version'] ?? '')) $this->reject('站点配置已变化，请重新加载后保存');
+            if (!$old) $this->reject('站点尚未发布，请先由平台完成初始化');
+            $oldDomains = $old->domains;
+            sort($oldDomains, SORT_STRING);
+            if ($oldDomains !== array_column($current, 'domain')) $this->reject('域名表与发布快照不一致');
+            if ($current !== $desired) {
+                $this->table('wl_site_domains')->where('site_id', $site->site_id)->update(['is_primary' => false]);
+                $remove = $this->table('wl_site_domains')->where('site_id', $site->site_id);
+                if ($names !== []) $remove->whereNotIn('domain', $names);
+                $remove->delete();
+                foreach ($desired as $row) {
+                    $query = $this->table('wl_site_domains')->where('site_id', $site->site_id)->where('domain', $row['domain']);
+                    if ($query->exists()) $query->update(['is_primary' => $row['is_primary']]);
+                    else $this->table('wl_site_domains')->insert($row + ['site_id' => $site->site_id, 'created_at' => $timestamp]);
                 }
+                $this->table('wl_sites')->where('site_id', $site->site_id)->update(['updated_at' => $timestamp]);
             }
-            $this->table('wl_site_domains')->where('site_id', $site->site_id)->update(['is_primary' => false]);
-            $remove = $this->table('wl_site_domains')->where('site_id', $site->site_id);
-            if ($names !== []) $remove->whereNotIn('domain', $names);
-            $remove->delete();
-            foreach ($desired as $row) {
-                $query = $this->table('wl_site_domains')->where('site_id', $site->site_id)->where('domain', $row['domain']);
-                if ($query->exists()) $query->update(['is_primary' => $row['is_primary']]);
-                else $this->table('wl_site_domains')->insert($row + ['site_id' => $site->site_id, 'created_at' => $timestamp]);
+            $result = $writer->append((int)$site->tenant_id, (int)$site->site_id, $version, $operatorId,
+                ($actorType === 'platform' ? 'platform-admin:' : 'white-label-admin:').$operatorId,
+                '品牌配置域名更新：站点 '.$site->site_id);
+            if ($current !== $desired || $result['changed']) {
+                $audit(['tenant_id'=>(string)$site->tenant_id,'site_id'=>(string)$site->site_id,'before'=>$current,'after'=>$desired,
+                    'snapshot_version'=>$result['config_version']], $timestamp);
+                $result['changed'] = true;
+                $result['updated_at'] = $timestamp;
             }
-            $this->table('wl_sites')->where('site_id', $site->site_id)->update(['updated_at' => $timestamp]);
-            $oldNames = array_column($current, 'domain');
-            $publishedVersion = (string) $snapshot->snapshot_version;
-            if ($oldNames !== $names) {
-                $target->domains = $names;
-                $publishedVersion = ConfigSnapshotWriter::append(
-                    $this->table('wl_config_snapshots'), $snapshot, $payload,
-                    ($actorType === 'platform' ? 'platform-admin:' : 'white-label-admin:') . $operatorId,
-                    '品牌配置域名更新：站点 ' . $site->site_id, $timestamp, $this->reject(...),
-                );
-            }
-            PublishedDomainMap::sync($map, (string) $site->site_id, $names);
-            $audit(['tenant_id' => (string) $site->tenant_id, 'site_id' => (string) $site->site_id,
-                'before' => $current, 'after' => $desired, 'snapshot_version' => $publishedVersion], $timestamp);
-            return ['changed' => true, 'snapshot_version' => $publishedVersion, 'revision' => $this->revision($desired), 'updated_at' => $timestamp];
+            return $result + ['revision'=>$this->revision($desired)];
         }, 3);
-    }
-
-    private function snapshot(string $tenantId, string $siteId, array $current): array
-    {
-        $snapshot = $this->table('wl_config_snapshots')->orderByDesc('snapshot_version')->first();
-        if (!$snapshot || !hash_equals($snapshot->payload_sha256, hash('sha256', $snapshot->payload))) $this->reject('发布快照缺失或校验失败，请联系管理员');
-        try { $payload = json_decode($snapshot->payload, false, 512, JSON_THROW_ON_ERROR); }
-        catch (\JsonException $e) { $this->reject('发布快照格式错误'); }
-        if (!is_object($payload) || (int) $snapshot->schema_version !== 4 || ($payload->schemaVersion ?? null) !== 4
-            || ($payload->snapshotVersion ?? null) !== (int) $snapshot->snapshot_version || !is_array($payload->sites ?? null)) {
-            $this->reject('发布快照版本不受支持');
-        }
-        $seen = [];
-        foreach ($payload->sites as $entry) {
-            if (!is_object($entry) || !is_int($entry->siteId ?? null) || $entry->siteId <= 0
-                || !is_int($entry->tenantId ?? null) || $entry->tenantId <= 0 || isset($seen[$entry->siteId])
-                || !is_array($entry->domains ?? null) || count(array_filter($entry->domains, 'is_string')) !== count($entry->domains)) {
-                $this->reject('发布快照站点结构无效');
-            }
-            $seen[$entry->siteId] = true;
-        }
-        $matches = array_filter($payload->sites, fn ($s) => is_object($s) && (string) ($s->siteId ?? '') === $siteId);
-        if (count($matches) !== 1) $this->reject('站点尚未进入发布快照，请先完成站点初始化');
-        $target = array_values($matches)[0];
-        if ((string) ($target->tenantId ?? '') !== $tenantId || !is_array($target->domains ?? null)
-            || count(array_filter($target->domains, 'is_string')) !== count($target->domains)) $this->reject('快照站点归属或域名格式不正确');
-        $published = $target->domains;
-        sort($published);
-        if ($published !== array_column($current, 'domain')) $this->reject('域名表与发布快照不一致，请先核对配置');
-        return [$snapshot, $payload, $target];
     }
 }
