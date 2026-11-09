@@ -62,6 +62,7 @@ final class SeoConfigStore
             'total_locales' => count(TranslationCatalog::LOCALES), 'updated_at' => $row->updated_at];
         if (!$detail) return $data;
         return $data + ['default_locale' => $defaultLocale, 'translations' => (object) $translations,
+            'og_image_url' => $row->og_image_url,
             'google_verification_token' => $row->google_verification_token,
             'verification_domain' => $row->verification_domain,
             'verification_domain_matches' => $row->google_verification_token !== null && $row->primary_domain !== null
@@ -104,6 +105,7 @@ final class SeoConfigStore
                 'default_locale' => 'required|string|max:35', 'translations' => 'present|array|max:20',
                 'translations.*' => 'array:title,description', 'translations.*.title' => 'present|nullable|string|max:200',
                 'translations.*.description' => 'present|nullable|string|max:1000',
+                'og_image_url' => ['sometimes', 'nullable', 'string', 'max:2048', 'url', 'regex:~^https://[^/@?#\s]+(?:[/?#][^\s]*)?$~iD'],
                 'google_verification_token' => ['present', 'nullable', 'string', 'max:512', 'regex:/\\A[A-Za-z0-9_-]+\\z/'],
                 'verification_domain' => 'present|nullable|string|max:253'],
         };
@@ -129,7 +131,7 @@ final class SeoConfigStore
     public function detail(array $input): array
     {
         foreach (['tenant_id', 'site_id'] as $key) $this->id($input[$key] ?? null);
-        $row = $this->query()->where('t.tenant_id', $input['tenant_id'])->where('s.site_id', $input['site_id'])->first();
+        $row = $this->query()->addSelect('c.og_image_url')->where('t.tenant_id', $input['tenant_id'])->where('s.site_id', $input['site_id'])->first();
         if (!$row) $this->reject('白标站点不存在或不属于该白标');
         return $this->normalized($row, true);
     }
@@ -170,6 +172,8 @@ final class SeoConfigStore
             }
             $values = ['indexing_enabled' => $input['indexing_enabled'], 'default_locale' => $input['default_locale'],
                 'translations' => (object) $translations, 'google_verification_token' => $token, 'verification_domain' => $domain];
+            // Older clients do not send this site-wide setting; only an explicit null clears it.
+            if (array_key_exists('og_image_url', $input)) $values['og_image_url'] = $input['og_image_url'] ?: null;
             $same = true;
             foreach ($values as $key => $value) {
                 if ($before[$key] != $value) $same = false;

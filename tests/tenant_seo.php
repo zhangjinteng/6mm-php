@@ -19,7 +19,7 @@ $db = $capsule->getConnection();
 $db->statement('CREATE TABLE wl_tenants (tenant_id integer PRIMARY KEY, tenant_name text, status text)');
 $db->statement('CREATE TABLE wl_sites (site_id integer PRIMARY KEY, tenant_id integer, site_name text, status text)');
 $db->statement('CREATE TABLE wl_site_domains (site_id integer, domain text, is_primary boolean)');
-$db->statement('CREATE TABLE wl_site_seo_configs (site_id integer PRIMARY KEY, indexing_enabled boolean, default_locale text, translations text, google_verification_token text, verification_domain text, version integer, created_by integer, created_by_type text, updated_by integer, updated_by_type text, created_at text, updated_at text)');
+$db->statement('CREATE TABLE wl_site_seo_configs (site_id integer PRIMARY KEY, indexing_enabled boolean, default_locale text, translations text, og_image_url text, google_verification_token text, verification_domain text, version integer, created_by integer, created_by_type text, updated_by integer, updated_by_type text, created_at text, updated_at text)');
 $db->statement('CREATE TABLE wl_config_snapshots (payload text)');
 $db->table('wl_config_snapshots')->insert(['payload' => 'unchanged']);
 $db->table('wl_tenants')->insert([['tenant_id' => 1, 'tenant_name' => 'Tenant_%', 'status' => 'enabled'], ['tenant_id' => 2, 'tenant_name' => 'Other', 'status' => 'enabled']]);
