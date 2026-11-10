@@ -7,6 +7,7 @@ namespace SixMm\Shared\TenantConfig;
 use Closure;
 use SixMm\Shared\TenantChannels\ChannelConfigValidator;
 use SixMm\Shared\TenantCompliance\ComplianceConfigStore;
+use SixMm\Shared\TenantCustomerService\CustomerService;
 use SixMm\Shared\TenantSeo\SeoTranslations;
 
 /** One trusted, transactional writer for both hosts. Never accepts a browser-provided payload. */
@@ -80,6 +81,12 @@ final class ThemeSnapshotWriter
         $primary = $domains->first(fn ($row) => (bool)$row->is_primary)?->domain;
         $verification = $seo && $seo->verification_domain === $primary ? $this->nullable($seo->google_verification_token) : null;
         $channel = $this->rows('wl_channel_configs')->where('tenant_id', $tenant->tenant_id)->first();
+        $customer = $this->object($channel?->customer_service ?? null);
+        $connected = $flag(CustomerService::MODULE, 'business')
+            && CustomerService::isProvider($customer['provider'] ?? null)
+            && ($customer['status'] ?? null) === 'bound'
+            && CustomerService::validAppKey($customer['appKey'] ?? null);
+        $support = ['provider'=>$connected ? '6mm' : null, 'publicWidgetId'=>$connected ? $customer['appKey'] : null];
         $social = ChannelConfigValidator::supported($this->object($channel?->social_links ?? null), ChannelConfigValidator::SOCIAL_KEYS);
         $downloads = ChannelConfigValidator::supported($this->object($channel?->app_downloads ?? null), ChannelConfigValidator::DOWNLOAD_KEYS);
         $links = [];
@@ -105,7 +112,7 @@ final class ThemeSnapshotWriter
             'config'=>['templateId'=>$template,'brand'=>['logoUrl'=>$this->nullable($brand?->logo_url ?? null),'faviconUrl'=>$this->nullable($brand?->favicon_url ?? null)],
                 'seo'=>['indexingRequested'=>(bool)($seo?->indexing_enabled ?? false),'homeByLocale'=>(object)$home,
                     'ogImageUrl'=>$this->nullable($seo?->og_image_url ?? null),'googleSiteVerification'=>$verification],
-                'features'=>$features,'channels'=>['social'=>$links,'downloads'=>['appStore'=>$downloads['app_store'] ?? null,
+                'features'=>$features,'channels'=>['support'=>$support,'social'=>$links,'downloads'=>['appStore'=>$downloads['app_store'] ?? null,
                     'googlePlay'=>$downloads['google_play'] ?? null,'apk'=>$downloads['apk'] ?? null]],
                 'supportEmail'=>$this->nullable($profile?->support_email ?? null),
                 'legal'=>['entity'=>['name'=>$this->nullable($profile?->legal_entity_name ?? null),

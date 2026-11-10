@@ -97,6 +97,9 @@ final class CustomerService
         $data += $this->host->operatorColumns($row === null);
         if ($row) $this->table('wl_channel_configs')->where('tenant_id', $id)->update($data);
         else $this->table('wl_channel_configs')->insert($data + ['tenant_id' => $id, 'created_at' => $timestamp]);
+        // Manual provisioning also uses the shared theme projection; the business switch still gates exposure.
+        (new \SixMm\Shared\TenantConfig\ThemeSnapshotWriter($this->host->table(...)))->sync(
+            (int)$id, null, $operatorId, $this->host->actorReference(), '保存客服绑定');
         $this->host->audit(['tenant_id' => $id, 'merchant_id' => $config['merchant_id'], 'phase' => $phase,
             'status' => $config['status'], 'customer_tenant_id' => $config['tenant_id'] ?? null], $timestamp, self::ACTION);
     }

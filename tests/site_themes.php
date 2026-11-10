@@ -45,6 +45,7 @@ $check($p['config']['templateId']==='template-1' && $p['config']['brand']['favic
 $check($p['config']['seo']['homeByLocale']['zh-CN']['title']==='标题' && $p['config']['seo']['googleSiteVerification']==='token');
 $check(count($p['config']['channels']['social'])===1 && $p['config']['channels']['downloads']['apk']==='https://download.example/app.apk');
 $check($p['config']['supportEmail']==='support@example.com' && !str_contains($row->payload,'secret'));
+$check($p['config']['channels']['support'] === ['provider'=>null,'publicWidgetId'=>null]);
 $check(!$p['config']['legal']['documents'][0]['usePlatformTemplate'] && $p['config']['legal']['documents'][0]['source']['url']==='https://legal.example/terms');
 $check($p['config']['legal']['documents'][1]['usePlatformTemplate'] && $p['config']['legal']['documents'][1]['source']['url']===null);
 $check(hash_equals($row->payload_sha256,hash('sha256',$row->payload)) && $row->previous_config_version===null);
@@ -67,6 +68,33 @@ try { $db->transaction(function () use ($db,$writer) {
 }); throw new RuntimeException('Failure swallowed'); } catch (\Illuminate\Database\QueryException $e) { $check(true); }
 $check($db->table('wl_sites')->where('site_id',10)->value('site_name')==='交易所');
 $db->statement('DROP TRIGGER deny_theme');
+$db->table('wl_channel_configs')->where('tenant_id',1)->update(['customer_service'=>json_encode([
+    'provider'=>'6mm','status'=>'bound','appKey'=>'fixture-widget-key','app_key_encrypted'=>'must-not-publish'])]);
+$sync();
+$latestPayload = fn () => json_decode($db->table('wl_site_config_themes')->where('site_id',10)->orderByDesc('config_version')->value('payload'),true);
+$check($latestPayload()['config']['channels']['support'] === ['provider'=>null,'publicWidgetId'=>null]);
+$db->table('wl_site_modules')->insert(['site_id'=>10,'module_code'=>'customer_service','module_type'=>'business','enabled'=>true]);
+$check($sync()['changed']);
+$check($latestPayload()['config']['channels']['support'] === ['provider'=>'6mm','publicWidgetId'=>'fixture-widget-key']);
+$check(!str_contains(json_encode($latestPayload()), 'must-not-publish'));
+$check(!$sync()['changed']);
+$db->table('wl_site_modules')->where('module_code','customer_service')->update(['enabled'=>false]);
+$check($sync()['changed'] && $latestPayload()['config']['channels']['support'] === ['provider'=>null,'publicWidgetId'=>null]);
+$db->table('wl_site_modules')->where('module_code','customer_service')->update(['enabled'=>true]);
+foreach ([
+    ['provider'=>'other','status'=>'bound','appKey'=>'not-ours'],
+    ['provider'=>'6mm','status'=>'pending','appKey'=>'pending-key'],
+    ['provider'=>'6mm','status'=>'bound','app_key_encrypted'=>'ciphertext'],
+    ['provider'=>'6mm','status'=>'bound','appKey'=>''],
+    ['provider'=>'6mm','status'=>'bound','appKey'=>123],
+] as $invalid) {
+    $db->table('wl_channel_configs')->where('tenant_id',1)->update(['customer_service'=>json_encode($invalid)]);
+    $sync();
+    $check($latestPayload()['config']['channels']['support'] === ['provider'=>null,'publicWidgetId'=>null]);
+}
+$db->table('wl_channel_configs')->insert(['tenant_id'=>2,'customer_service'=>'{"provider":"6mm","status":"bound","appKey":"foreign-key"}']);
+$sync();
+$check(!str_contains(json_encode($latestPayload()),'foreign-key'));
 $db->table('wl_site_config_themes')->delete();
 $check($sync(1,null)['changed'] && $db->table('wl_site_config_themes')->sole()->site_id===10);
 $db->table('wl_site_config_themes')->update(['payload_sha256'=>str_repeat('0',64)]);
