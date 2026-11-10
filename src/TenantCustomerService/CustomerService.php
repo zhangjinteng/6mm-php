@@ -116,6 +116,7 @@ final class CustomerService
             if (!empty($config['provider']) && !self::isProvider($config['provider'])) $this->reject('已有其他客服配置，不能自动覆盖');
             if (($config['status'] ?? '') === 'bound') {
                 $normalized = $this->host->normalizeBinding($config);
+                if (!self::validAppKey($normalized['appKey'] ?? null)) $this->reject('客服绑定凭据缺失，请联系管理员修复');
                 if ($normalized !== $config) $this->persist($id, $row, $normalized, $operatorId, 'normalize_binding');
                 return ['bound' => true];
             }

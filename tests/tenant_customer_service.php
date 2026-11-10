@@ -38,7 +38,7 @@ $http->fake(function ($request) use ($db, &$calls) {
 });
 $audits = [];
 $context = new CustomerServiceContext($db, $http, new Validator(new Translator(new ArrayLoader(), 'en')),
-    new Encrypter(str_repeat('C', 32), 'AES-256-CBC'), 'private-api', 'fingerprint', 7, 'white_label',
+    null, 'private-api', 'fingerprint', 7, 'white_label',
     static function (array $change) use (&$audits): void { $audits[] = $change; }, static fn () => true, static fn () => true);
 $store = new BusinessConfigStore($context);
 $contract = $db->table('wl_site_modules')->where('site_id', 10)->where('module_code', 'contract');
@@ -57,9 +57,34 @@ $check(!$db->table('wl_site_modules')->where('site_id', 20)->where('module_code'
 $check($db->table('wl_channel_configs')->value('updated_by') === null);
 $check($db->table('wl_site_config_publications')->orderByDesc('publication_version')->value('published_by') === 'white-label-admin:7');
 $check((new CustomerService($context))->bound('1'));
+$stored = json_decode($db->table('wl_channel_configs')->value('customer_service'), true);
+$check($stored['provider'] === '6mm' && $stored['appKey'] === 'private-binding' && !array_key_exists('app_key_encrypted', $stored));
+$check($context->ready());
 $check(count($audits) === 3 && !str_contains(json_encode($audits), 'private-'));
 $public = CustomerService::publicConfig(json_decode($db->table('wl_channel_configs')->value('customer_service'), true), '1', true, true);
 $check(!str_contains(json_encode($public), 'private-') && !array_key_exists('app_key_encrypted', $public));
+$check($public['provider'] === '6mm' && $public['app_key_configured'] && !array_key_exists('appKey', $public));
+$legacyCrypto = new Encrypter(str_repeat('L', 32), 'AES-256-CBC');
+$legacy = ['provider'=>'sixmm','status'=>'bound','tenant_id'=>'123','merchant_id'=>'6mm_wl_1',
+    'app_key_encrypted'=>$legacyCrypto->encryptString('private-legacy')];
+$legacyContext = new CustomerServiceContext($db, $http, new Validator(new Translator(new ArrayLoader(), 'en')),
+    $legacyCrypto, 'private-api', 'fingerprint', 7, 'white_label', static function (): void {}, static fn()=>true, static fn()=>true);
+$converted = $legacyContext->normalizeBinding($legacy);
+$check($converted['provider'] === '6mm' && $converted['appKey'] === 'private-legacy' && !isset($converted['app_key_encrypted']));
+$check(CustomerService::publicConfig($legacy,'1')['provider'] === '6mm');
+$check(!str_contains(json_encode(CustomerService::publicConfig($converted,'1')), 'private-legacy'));
+$db->table('wl_channel_configs')->where('tenant_id',1)->update(['customer_service'=>json_encode($legacy)]);
+$check((new CustomerService($legacyContext))->bound('1'));
+$check(json_decode($db->table('wl_channel_configs')->where('tenant_id',1)->value('customer_service'),true)['provider']==='sixmm');
+$db->table('wl_channel_configs')->where('tenant_id',1)->update(['customer_service'=>json_encode($stored)]);
+try { $context->normalizeBinding($legacy); throw new RuntimeException('Undecryptable legacy accepted'); }
+catch (\Illuminate\Validation\ValidationException $e) { $check(true); }
+foreach ([null, '', [], str_repeat('x',4097)] as $bad) {
+    try { $context->normalizeBinding(['provider'=>'6mm','appKey'=>$bad]); throw new RuntimeException('Invalid key accepted'); }
+    catch (\Illuminate\Validation\ValidationException $e) { $check(true); }
+}
+$mixed = $context->normalizeBinding($legacy + ['appKey'=>'private-preferred']);
+$check($mixed['appKey'] === 'private-preferred' && !isset($mixed['app_key_encrypted']));
 try { $store->toggleCustomer(['tenant_id' => '1', 'site_id' => '10', 'expected_entitlement_version' => '3', 'expected_config_version' => '8', 'enabled' => true], 7); throw new RuntimeException('Stale write accepted'); }
 catch (\Illuminate\Validation\ValidationException $e) { $check($calls === 1); }
 try { $context->assertActor(8); throw new RuntimeException('Actor mismatch accepted'); }
