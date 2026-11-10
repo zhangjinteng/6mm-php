@@ -24,7 +24,7 @@ The existing physical table control_plane.wl_site_theme_redis_outbox is retained
 | theme | site_id | empty string | owning tenant and site | exact row in wl_site_config_themes |
 | agreement_template | wl_agreements.id | actual template locale, e.g. en | both NULL | published platform template only |
 
-Subjects stay inside themes: config.legal.entity.whiteLabelName is **wl_tenants.tenant_name**, entity.name is the company's legal name, and root name is the site's display name. Registration/address/effectiveDate stay in entity; agreement contact email remains config.supportEmail. Merchant profiles and profiles of other sites are never used. A missing white-label name is null, never replaced by a site name or example.
+Subjects stay inside themes as the exact agreement variable names in `config.legal.entity`: `WHITE_LABEL_NAME` is **wl_tenants.tenant_name**; `LEGAL_ENTITY_NAME`, `REGISTRATION_NO`, `REGISTERED_ADDRESS`, `EFFECTIVE_DATE`, and `SUPPORT_EMAIL` come from the site's non-merchant partner_account_profiles fields legal_entity_name, registration_number, registered_address, effective_date, and support_email respectively. Root name remains the site's display name, and config.supportEmail is retained. Merchant profiles and profiles of other sites are never used. Missing values are null, never replaced by a site name or example. The former camelCase entity keys are no longer emitted.
 
 ### Physical schema and migration
 
@@ -62,7 +62,7 @@ Deployment order (source only; no package release or business-data migration exe
 ~~~dotenv
 THEME_SNAPSHOT_REDIS_ENABLED=true
 THEME_SNAPSHOT_REDIS_KEY_PREFIX=wl:site:config:theme
-AGREEMENT_TEMPLATE_REDIS_KEY_PREFIX=wl:config:agreement-template
+AGREEMENT_TEMPLATE_REDIS_KEY_PREFIX=wl:config
 ~~~
 
 config/theme_snapshot_redis.php in each host directly reuses existing SHARED_REDIS_* then REDIS_* settings for URL, scheme, host, username, password, port, DB, connect timeout and read timeout. No theme-specific connection/credential variables are needed or read; old THEME_SNAPSHOT_REDIS_URL / _SCHEME / _HOST / _PORT / _USERNAME / _PASSWORD / _DB / _CONNECT_TIMEOUT / _READ_TIMEOUT overrides are ignored. Only the enabled switch and business Key prefixes remain theme/template-specific. URL components take precedence over corresponding individual connection fields. A dedicated, prefix-free connection is still used: app-specific prefixes do not alter these keys. TLS and ACLs are supported by the existing settings. Feature defaults to disabled. Disabling stops the binding/command/schedule, not removal of existing keys. Changing existing SHARED_REDIS_* / REDIS_* values also affects their other consumers; ensure both hosts resolve to the same Redis instance and DB.
@@ -72,7 +72,8 @@ Changing prefix or destination requires a rebuild of **each type**; previous ack
 ### JSON and Redis contracts
 
 - Theme key: wl:site:config:theme:910024; existing Hash fields remain site_id, config_version, schema_version, payload, payload_sha256, previous_config_version.
-- Template key: wl:config:agreement-template:123:en; Hash fields are template_id, locale, config_version, schema_version, payload, payload_sha256, previous_config_version. Payload contains templateId (numeric row ID as a string), code (e.g. TPL-LEGAL-001), agreementType (terms/privacy/risk/cookies/aml), locale, name, enabled, publishedVersion (business revision as a string), and ordered sections (key/title/body_html).
+- English template keys use the configured prefix plus the public agreement name: TPL-LEGAL-001 / terms → wl:config:agreement; TPL-LEGAL-002 / privacy → wl:config:privacy; TPL-LEGAL-003 / risk → wl:config:risk; TPL-LEGAL-004 / cookies → wl:config:cookies; TPL-LEGAL-005 / aml → wl:config:aml. Database IDs and `:en` are not appended. Additional locales retain isolation with a suffix, e.g. wl:config:agreement:zh-CN. Hash fields remain template_id, locale, config_version, schema_version, payload, payload_sha256, previous_config_version. Payload contains templateId (numeric row ID as a string), code (e.g. TPL-LEGAL-001), agreementType (terms/privacy/risk/cookies/aml), locale, name, enabled, publishedVersion (business revision as a string), and ordered sections (key/title/body_html).
+- When upgrading from ID/locale keys, republish each template or run the template rebuild command below to populate the named keys, even if the previous Outbox version was already acknowledged. Existing old keys are not deleted automatically.
 - Delivery config_version differs from business publishedVersion. Projection changes allocate a version from the existing wl_snapshot_version_seq; no-op republish retains the version. Lua compares full decimal strings, not floating-point numbers. Version gaps are expected.
 - Templates retain placeholders such as {{WHITE_LABEL_NAME}}. They contain **no substituted tenant data, no draft_sections, and no administrator credentials**. Consumers combine the published template with the authorized site's subject data and HTML-escape subject values before substitution into HTML.
 - A null previous version is the empty string in Redis. Hashes have no TTL, but eviction/flush is possible. SHA256 covers exact JSON bytes.
@@ -87,7 +88,7 @@ Changing prefix or destination requires a rebuild of **each type**; previous ack
 - After commit, delivery is best effort. Redis failure does not roll back committed PostgreSQL or falsely fail the save. Pending rows survive process exit before callback. Scheduled retry runs every minute with 5–300 second backoff.
 - Worker retries **the captured Outbox JSON**, never re-reads mutable draft/current source fields. Lua atomically checks/replaces one Hash, rejects equal-version conflicts and prevents old workers overwriting newer projections. Acknowledgments match type/ID/locale/version/checksum, so older workers cannot acknowledge newer targets.
 - Unchanged save/republish re-enqueues the same snapshot to repair cache loss. Existing frontend responses are not changed to promise Redis availability; synchronization status remains in Outbox metadata.
-- Subject saves create new themes with whiteLabelName. Immutable theme history is not rewritten. Rebuilding an old theme republishes that old JSON; save the site's current configuration to generate a new theme with the field.
+- Subject saves create new themes with the six uppercase agreement variables in legal.entity. Immutable theme history is not rewritten. Rebuilding an old theme republishes that old JSON; save the site's current configuration to generate a new theme with the current entity format, even if the source values are unchanged.
 
 ### Commands (from either enabled host's PHP directory)
 

@@ -57,11 +57,12 @@ $db->transaction(fn ()=>$writer->sync(1,10,7,'test:7','theme'));
 $db->transaction(function () use ($table,$redis,$check): void {
     AgreementTemplatePublication::sync($table,10); $check($redis->calls===1);
 });
-$theme='wl:site:config:theme:10'; $template='wl:config:agreement-template:10:en';
+$theme='wl:site:config:theme:10'; $template='wl:config:agreement';
 $check(isset($redis->hashes[$theme],$redis->hashes[$template]));
 $check($db->table(ThemeRedisOutbox::TABLE)->where('resource_id',10)->count()===2);
 $entity=json_decode($redis->hashes[$theme]['payload'],true)['config']['legal']['entity'];
-$check($entity['whiteLabelName']==='White label A' && $entity['name']==='Company A');
+$check($entity===['WHITE_LABEL_NAME'=>'White label A','LEGAL_ENTITY_NAME'=>'Company A',
+    'REGISTRATION_NO'=>null,'REGISTERED_ADDRESS'=>null,'EFFECTIVE_DATE'=>null,'SUPPORT_EMAIL'=>'a@example.com']);
 $check(!str_contains($redis->hashes[$theme]['payload'],'Company B') && !str_contains($redis->hashes[$theme]['payload'],'Merchant company'));
 $payload=json_decode($redis->hashes[$template]['payload'],true);
 $check($payload['templateId']==='10' && $payload['publishedVersion']==='1' && $payload['locale']==='en');
@@ -74,7 +75,7 @@ $check($first->payload===$redis->hashes[$template]['payload'] && hash('sha256',$
 $db->transaction(fn ()=>AgreementTemplatePublication::sync($table,10));
 $check($job()->config_version===$first->config_version && $job()->previous_config_version===null);
 $db->transaction(fn ()=>$outbox->enqueueTemplate($table,11));
-$check(isset($redis->hashes['wl:config:agreement-template:11:zh-CN']));
+$check(isset($redis->hashes['wl:config:agreement:zh-CN']));
 foreach ([12,13] as $invalid) {
     try { $db->transaction(fn ()=>$outbox->enqueueTemplate($table,$invalid)); throw new LogicException('Invalid template accepted'); }
     catch (RuntimeException $e) { $check(true); }
@@ -115,5 +116,10 @@ $check($outbox->rebuildTemplates($table,100,null,0,'en')===[10]);
 $check($outbox->drain($table,100,null,'agreement_template')['synced']===1);
 $check(!str_contains($redis->hashes[$template]['payload'],'NEWER-DRAFT'));
 $check($outbox->rebuildTemplates($table,100,null,10)===[11]);
-$check((new ThemeRedisPublisher(fn ()=>$redis,'custom:theme','custom:template'))->templateKey(10,'en')==='custom:template:10:en');
+$check((new ThemeRedisPublisher(fn ()=>$redis,'custom:theme','custom:template'))->templateKey('terms','en')==='custom:template:agreement');
+foreach (['terms'=>'agreement','privacy'=>'privacy','risk'=>'risk','cookies'=>'cookies','aml'=>'aml'] as $type=>$name) {
+    $check($publisher->templateKey($type,'en')==='wl:config:'.$name);
+}
+try { $publisher->templateKey('unknown','en'); throw new LogicException('Unknown template type accepted'); }
+catch (InvalidArgumentException $e) { $check(true); }
 echo "Generic configuration Redis: {$checks} checks passed\n";

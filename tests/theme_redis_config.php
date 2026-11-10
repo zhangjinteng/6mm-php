@@ -31,7 +31,7 @@ try {
     $defaults = $read([]);
     $check($defaults['enabled'] === false);
     $check($defaults['key_prefix'] === 'wl:site:config:theme');
-    $check($defaults['template_key_prefix'] === 'wl:config:agreement-template');
+    $check($defaults['template_key_prefix'] === 'wl:config');
     $check($defaults['redis'] === ['url'=>null,'scheme'=>'tls','host'=>'127.0.0.1','password'=>null,
         'username'=>null,'port'=>6379,'database'=>0,'timeout'=>1.0,'read_timeout'=>2.0,'prefix'=>'','options'=>['prefix'=>'']]);
 

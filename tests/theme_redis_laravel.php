@@ -55,7 +55,7 @@ $redis = new Redis(); $redis->connect($socket);
 $key = 'isolated:laravel:theme:910024'; $redis->del($key);
 $db->transaction(fn () => $writer->sync(1,910024,7,'test:7','host integration'));
 $check($redis->hGet($key,'config_version') === '1');
-$check(json_decode($redis->hGet($key,'payload'))->config->legal->entity->whiteLabelName==='White label, not site name');
+$check(json_decode($redis->hGet($key,'payload'))->config->legal->entity->WHITE_LABEL_NAME==='White label, not site name');
 $check($redis->hGet('wrong-app-prefix:'.$key,'payload') === false);
 $check($db->table(ThemeRedisOutbox::TABLE)->value('synced_version') === 1);
 $redis->del($key);
@@ -82,10 +82,11 @@ $db->table('wl_agreements')->insert(['id'=>910024,'scope_type'=>'platform','site
     'code'=>'TPL-LEGAL-001','name'=>'Terms','locale'=>'en','is_enabled'=>true,'published_version'=>2,
     'published_sections'=>'[{"key":"a","title":"Published","body_html":"<p>{{WHITE_LABEL_NAME}}</p>"}]',
     'draft_sections'=>'[{"key":"a","title":"Draft","body_html":"<p>DO-NOT-EXPOSE-DRAFT</p>"}]']);
-$templateKey='isolated:laravel:template:910024:en'; $redis->del($templateKey);
+$templateKey='isolated:laravel:template:agreement'; $redis->del($templateKey);
 $db->transaction(fn ()=>AgreementTemplatePublication::sync($table,910024));
 $check($redis->hGet($templateKey,'template_id')==='910024' && $redis->hGet($templateKey,'locale')==='en');
 $check($redis->hGet($templateKey,'site_id')===false);
+$check($redis->exists('wrong-app-prefix:'.$templateKey)===0);
 $check(!str_contains($redis->hGet($templateKey,'payload'),'DO-NOT-EXPOSE-DRAFT'));
 $check($db->table(ThemeRedisOutbox::TABLE)->count()===2);
 $redis->del($templateKey);

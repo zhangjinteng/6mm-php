@@ -32,7 +32,7 @@ final class ThemeRedisServiceProvider extends ServiceProvider
             $redis = new RedisManager($app, $driver,
                 ['options' => ['prefix' => ''], $name => $connection]);
             return new ThemeRedisOutbox(new ThemeRedisPublisher(static fn () => $redis->connection($name),
-                (string)$settings['key_prefix'], (string)($settings['template_key_prefix'] ?? 'wl:config:agreement-template')), (bool)$settings['enabled'],
+                (string)$settings['key_prefix'], (string)($settings['template_key_prefix'] ?? 'wl:config')), (bool)$settings['enabled'],
                 static fn (array $safe) => Log::warning('Configuration Redis delivery pending', $safe));
         });
         $this->app->bind(ThemeSnapshotReplication::class, static fn ($app) => $app->make(ThemeRedisOutbox::class));

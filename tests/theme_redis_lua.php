@@ -56,11 +56,11 @@ catch (RuntimeException $e) { $check(true); }
 $check($raw->hGet($key,'config_version') === 'corrupt');
 $raw->del($key, $writer->key(910025));
 $templateRow=static function (string $version, string $locale='en', string $title='Published'): object {
-    $payload=json_encode(['templateId'=>'910024','locale'=>$locale,'sections'=>[['title'=>$title]]]);
+    $payload=json_encode(['templateId'=>'910024','agreementType'=>'terms','locale'=>$locale,'sections'=>[['title'=>$title]]]);
     return (object)['resource_type'=>'agreement_template','resource_id'=>910024,'tenant_id'=>null,'site_id'=>null,
         'locale'=>$locale,'config_version'=>$version,'schema_version'=>1,'payload'=>$payload,'payload_sha256'=>hash('sha256',$payload),'previous_config_version'=>null];
 };
-$templateKey=$writer->templateKey(910024,'en'); $cnKey=$writer->templateKey(910024,'zh-CN');
+$templateKey=$writer->templateKey('terms','en'); $cnKey=$writer->templateKey('terms','zh-CN');
 $raw->del($templateKey,$cnKey);
 $writer->publish($row(910024,'1'));
 $writer->publish($templateRow('9007199254740993'));

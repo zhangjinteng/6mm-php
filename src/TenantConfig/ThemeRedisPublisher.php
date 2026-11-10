@@ -9,8 +9,10 @@ use Closure;
 /** Atomic Redis-only projection. Never called before the source database commits. */
 final class ThemeRedisPublisher
 {
+    private const TEMPLATE_NAMES = ['terms'=>'agreement', 'privacy'=>'privacy', 'risk'=>'risk', 'cookies'=>'cookies', 'aml'=>'aml'];
+
     public function __construct(private Closure $redis, private string $prefix = 'wl:site:config:theme',
-        private string $templatePrefix = 'wl:config:agreement-template')
+        private string $templatePrefix = 'wl:config')
     {
         foreach ([$prefix, $templatePrefix] as $value) {
             if (!preg_match('/^[A-Za-z0-9:_-]{1,160}$/D', $value) || str_ends_with($value, ':')) {
@@ -19,10 +21,14 @@ final class ThemeRedisPublisher
         }
     }
 
-    public function templateKey(int $id, string $locale): string
+    public function templateKey(string $agreementType, string $locale): string
     {
-        if ($id < 1 || !AgreementTemplateSnapshot::validLocale($locale)) throw new \InvalidArgumentException('Invalid template identity');
-        return $this->templatePrefix.':'.$id.':'.$locale;
+        if (!isset(self::TEMPLATE_NAMES[$agreementType]) || !AgreementTemplateSnapshot::validLocale($locale)) {
+            throw new \InvalidArgumentException('Invalid template identity');
+        }
+        // The five English platform templates use stable public names, independent of database IDs.
+        // Retain locale isolation for any additional translations without changing the English keys.
+        return $this->templatePrefix.':'.self::TEMPLATE_NAMES[$agreementType].($locale === 'en' ? '' : ':'.$locale);
     }
 
     public function key(int $site): string
@@ -52,7 +58,7 @@ final class ThemeRedisPublisher
             || !hash_equals((string)$row->payload_sha256, hash('sha256', $payload))) {
             throw new \UnexpectedValueException('Invalid committed configuration snapshot');
         }
-        $key = $type === 'theme' ? $this->key($id) : $this->templateKey($id, $locale);
+        $key = $type === 'theme' ? $this->key($id) : $this->templateKey((string)($document->agreementType ?? ''), $locale);
         $args = [(string)$id, $version, (string)$row->schema_version, $payload, (string)$row->payload_sha256,
             (string)($row->previous_config_version ?? '')];
         if ($type !== 'theme') array_push($args, $type, $locale);

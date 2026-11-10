@@ -130,9 +130,11 @@ final class ThemeSnapshotWriter
                 'features'=>$features,'channels'=>['support'=>$support,'social'=>$links,'downloads'=>['appStore'=>$downloads['app_store'] ?? null,
                     'googlePlay'=>$downloads['google_play'] ?? null,'apk'=>$downloads['apk'] ?? null]],
                 'supportEmail'=>$this->nullable($profile?->support_email ?? null),
-                'legal'=>['entity'=>['whiteLabelName'=>$this->nullable($tenant->tenant_name ?? null),
-                    'name'=>$this->nullable($profile?->legal_entity_name ?? null),
-                    'registrationNo'=>$this->nullable($profile?->registration_number ?? null),'address'=>$this->nullable($profile?->registered_address ?? null),
-                    'effectiveDate'=>$this->nullable($profile?->effective_date ?? null)],'documents'=>$documents]]];
+                'legal'=>['entity'=>['WHITE_LABEL_NAME'=>$this->nullable($tenant->tenant_name ?? null),
+                    'LEGAL_ENTITY_NAME'=>$this->nullable($profile?->legal_entity_name ?? null),
+                    'REGISTRATION_NO'=>$this->nullable($profile?->registration_number ?? null),
+                    'REGISTERED_ADDRESS'=>$this->nullable($profile?->registered_address ?? null),
+                    'EFFECTIVE_DATE'=>$this->nullable($profile?->effective_date ?? null),
+                    'SUPPORT_EMAIL'=>$this->nullable($profile?->support_email ?? null)],'documents'=>$documents]]];
     }
 }

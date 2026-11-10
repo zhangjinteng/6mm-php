@@ -26,7 +26,8 @@ $db->table('wl_site_seo_configs')->insert(['site_id'=>10,'indexing_enabled'=>tru
     'translations'=>'{"zh-CN":{"title":"标题","description":"描述"}}','google_verification_token'=>'token','verification_domain'=>'brand.example']);
 $db->table('wl_channel_configs')->insert(['tenant_id'=>1,'social_links'=>'{"x":"https://x.com/example","future":"private"}',
     'app_downloads'=>'{"apk":"https://download.example/app.apk"}','customer_service'=>'{"app_key_encrypted":"secret"}']);
-$db->table('partner_account_profiles')->insert(['home_site_id'=>10,'agent_id'=>null,'support_email'=>'support@example.com']);
+$db->table('partner_account_profiles')->insert(['home_site_id'=>10,'agent_id'=>null,'support_email'=>'support@example.com',
+    'legal_entity_name'=>'Company A','registration_number'=>'REG-123','registered_address'=>'Address A','effective_date'=>'2026-11-09']);
 $db->table('partner_account_profiles')->insert(['home_site_id'=>10,'agent_id'=>5,'support_email'=>'merchant@example.com']);
 $db->table('wl_agreements')->insert(['site_id'=>10,'scope_type'=>'site','locale'=>'en','agreement_type'=>'terms','source_mode'=>'custom',
     'custom_type'=>'url','is_enabled'=>true,'published_version'=>1,'published_url'=>'https://legal.example/terms']);
@@ -46,8 +47,9 @@ $check($p['config']['seo']['homeByLocale']['zh-CN']['title']==='标题' && $p['c
 $check(count($p['config']['channels']['social'])===1 && $p['config']['channels']['downloads']['apk']==='https://download.example/app.apk');
 $check($p['config']['supportEmail']==='support@example.com' && !str_contains($row->payload,'secret'));
 $check($p['config']['channels']['support'] === ['provider'=>null,'publicWidgetId'=>null]);
-$check($p['config']['legal']['entity']['whiteLabelName'] === 'Owning white label');
-$check($p['config']['legal']['entity']['whiteLabelName'] !== $p['name']);
+$check($p['config']['legal']['entity'] === ['WHITE_LABEL_NAME'=>'Owning white label','LEGAL_ENTITY_NAME'=>'Company A',
+    'REGISTRATION_NO'=>'REG-123','REGISTERED_ADDRESS'=>'Address A','EFFECTIVE_DATE'=>'2026-11-09','SUPPORT_EMAIL'=>'support@example.com']);
+$check($p['config']['legal']['entity']['WHITE_LABEL_NAME'] !== $p['name']);
 $check(!$p['config']['legal']['documents'][0]['usePlatformTemplate'] && $p['config']['legal']['documents'][0]['source']['url']==='https://legal.example/terms');
 $check($p['config']['legal']['documents'][1]['usePlatformTemplate'] && $p['config']['legal']['documents'][1]['source']['url']===null);
 $check(hash_equals($row->payload_sha256,hash('sha256',$row->payload)) && $row->previous_config_version===null);
