@@ -65,7 +65,7 @@ THEME_SNAPSHOT_REDIS_KEY_PREFIX=wl:site:config:theme
 AGREEMENT_TEMPLATE_REDIS_KEY_PREFIX=wl:config:agreement-template
 ~~~
 
-config/theme_snapshot_redis.php in each host also supports THEME_SNAPSHOT_REDIS_URL / _SCHEME / _HOST / _PORT / _USERNAME / _PASSWORD / _DB / _CONNECT_TIMEOUT / _READ_TIMEOUT. Endpoint values fall back to SHARED_REDIS_* then REDIS_* (see config for defaults). A dedicated, prefix-free connection is used: app-specific prefixes do not alter these keys. TLS and ACLs are supported by the connection configuration. Feature defaults to disabled. Disabling stops the binding/command/schedule, not removal of existing keys.
+config/theme_snapshot_redis.php in each host directly reuses existing SHARED_REDIS_* then REDIS_* settings for URL, scheme, host, username, password, port, DB, connect timeout and read timeout. No theme-specific connection/credential variables are needed or read; old THEME_SNAPSHOT_REDIS_URL / _SCHEME / _HOST / _PORT / _USERNAME / _PASSWORD / _DB / _CONNECT_TIMEOUT / _READ_TIMEOUT overrides are ignored. Only the enabled switch and business Key prefixes remain theme/template-specific. URL components take precedence over corresponding individual connection fields. A dedicated, prefix-free connection is still used: app-specific prefixes do not alter these keys. TLS and ACLs are supported by the existing settings. Feature defaults to disabled. Disabling stops the binding/command/schedule, not removal of existing keys. Changing existing SHARED_REDIS_* / REDIS_* values also affects their other consumers; ensure both hosts resolve to the same Redis instance and DB.
 
 Changing prefix or destination requires a rebuild of **each type**; previous acknowledgments refer to the old destination.
 
@@ -108,3 +108,5 @@ Normal runs select due pending rows only. Untyped --rebuild defaults to themes; 
 Rebuild repairs missing keys, not same-version conflicts or higher Redis versions; investigate before deleting the exact affected key. Reconciliation after Redis flush remains an operator rebuild/no-op-save operation, not an automatic scan of acknowledged resources.
 
 Tests: composer test covers shared regressions plus SQLite/fake-Redis checks. theme_redis_lua.php and theme_redis_laravel.php require an owned temporary Redis socket; the latter targets either host without booting a real Kernel/.env. config_redis_pg.php requires an owned temporary PostgreSQL socket and verifies a data-preserving, rollback-safe legacy ALTER with unchanged table names.
+
+Connection reuse regression (synthetic environment only, no database or Redis IO): run `THEME_REDIS_TEST_HOST=/absolute/path/to/agent_admin php tests/theme_redis_config.php`, then repeat with the local platform_admin path. It checks both configuration files, shared/default fallback, ACL credentials, timeouts, URL precedence, prefix isolation, and ignores obsolete theme-specific connection settings.

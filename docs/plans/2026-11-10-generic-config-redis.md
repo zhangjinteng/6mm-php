@@ -23,3 +23,7 @@
 - Outbox stores one latest snapshot per object; it is not a template history archive. Theme history stays in wl_site_config_themes.
 - Keep existing themes:sync-redis command; default retry covers both types. Explicit template rebuild uses --type=agreement_template, with optional --template/--locale. Legacy --site and untyped --rebuild remain theme-only.
 - PostgreSQL is authoritative; post-commit Redis failure remains pending, never pretends to roll back committed data. Full payload (including theme widget Key) is excluded from logs/CLI output.
+
+## Connection configuration simplification
+
+Per the user's follow-up, both host configuration files read existing SHARED_REDIS_* / REDIS_* directly, including ACL username and timeouts. Remove theme-specific connection overrides; keep the enabled switch and business Key prefixes. Retain the prefix-free transport and existing Outbox delivery behavior. Verify both actual host configuration files with synthetic environment variables (without loading application .env, connecting to Redis, clearing live caches or updating business data). No publication or dependency changes.
