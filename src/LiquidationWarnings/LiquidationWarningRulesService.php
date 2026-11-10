@@ -14,13 +14,16 @@ final class LiquidationWarningRulesService
     public function __construct(private ConnectionInterface $connection)
     {
     }
-    /** Exact merchant scope first; absent record falls back as a whole to platform rules. */
+    /** Exact merchant -> same-site white label -> platform; only absence triggers fallback. */
     public function get(int $homeSiteId = 0, int $agentId = 0): array
     {
         $this->assertScope($homeSiteId, $agentId);
         $schema = $this->connection->getSchemaBuilder();
         if ($schema->hasTable('source_config')) {
             $record = $this->query($homeSiteId, $agentId)->first();
+            if ($record === null && $homeSiteId > 0 && $agentId > 0) {
+                $record = $this->query($homeSiteId, 0)->first();
+            }
             if ($record === null && ($homeSiteId !== 0 || $agentId !== 0)) {
                 $record = $this->query(0, 0)->first();
             }
@@ -87,7 +90,7 @@ final class LiquidationWarningRulesService
     }
     private function assertScope(int $site, int $agent): void
     {
-        if ($site < 0 || $agent < 0) {
+        if ($site < 0 || $agent < 0 || ($site === 0 && $agent > 0)) {
             throw new InvalidArgumentException('Invalid warning rule scope.');
         }
     }

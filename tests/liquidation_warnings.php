@@ -61,6 +61,15 @@ $check($rules->get(9, 16)['min_large_position_value'] === 80.0, 'Absent rules us
 $put(0, 0, 0.2, 0.9);
 $put(8, 16, 0.3, 0.8);
 $check($rules->get(9, 16)['min_large_position_value'] === 20.0, 'Wrong site must not override platform defaults.');
+$put(9, 0, 0.25, 0.8);
+$c->table('source_config')->where('home_site_id', 9)->where('agent_id', 0)->update(['config_value'=>json_encode([
+    'min_large_position_value'=>0.25, 'liquidation_high_risk_threshold'=>0.8, 'liquidation_warning_notify_enabled'=>false,
+])]);
+$inherited = $rules->get(9, 16);
+$check($inherited['min_large_position_value'] === 25.0 && !$inherited['liquidation_warning_notify_enabled'], 'Merchant inherits the same-site white-label record including explicit false.');
+$check($rules->get(9, 0) === $inherited, 'White-label reads its own exact record.');
+$check($rules->get(10, 16)['min_large_position_value'] === 20.0, 'Other sites cannot inherit this white-label configuration.');
+$check($rules->get(8, 0)['min_large_position_value'] === 20.0, 'White-label scope must never use a merchant record.');
 $put(9, 16, 0.4, 0.7);
 $check($rules->get(9, 16)['min_large_position_value'] === 40.0, 'Exact merchant/site rules win.');
 $check($rules->get()['min_large_position_value'] === 20.0, 'Merchant rules do not change platform defaults.');
@@ -68,6 +77,23 @@ $saved = $rules->save(['min_large_position_value' => 35, 'liquidation_high_risk_
     $check($entry === '0.35' && $high === '0.85' && !$notify && $site === 9 && $agent === 16, 'RPC receives scoped fractional ratios.');
 });
 $check($saved['min_large_position_value'] === 35.0, 'Save returns percentages.');
+$whiteSaved = $rules->save(['min_large_position_value'=>45, 'liquidation_high_risk_threshold'=>75, 'liquidation_warning_notify_enabled'=>false], 9, 0,
+    static function ($entry, $high, $notify, $site, $agent) use ($check): void {
+        $check($entry === '0.45' && $high === '0.75' && $notify === false && $site === 9 && $agent === 0, 'White-label RPC writes exact site/zero-agent scope.');
+    });
+$check($whiteSaved['min_large_position_value'] === 45.0, 'White-label rules can be saved.');
+$check($rules->get(9, 16)['min_large_position_value'] === 35.0, 'A merchant override wins after its parent changes.');
+$check($rules->get(9, 17)['min_large_position_value'] === 45.0, 'Another merchant inherits the changed same-site parent.');
+$check($rules->get()['min_large_position_value'] === 20.0, 'White-label save cannot modify global rules.');
+foreach ([[0, 16], [-1, 0], [9, -1]] as [$invalidSite, $invalidAgent]) {
+    try { $rules->get($invalidSite, $invalidAgent); throw new LogicException('Invalid rule scope accepted'); }
+    catch (InvalidArgumentException $expected) {}
+    try {
+        $rules->save(['min_large_position_value'=>20, 'liquidation_high_risk_threshold'=>80, 'liquidation_warning_notify_enabled'=>false], $invalidSite, $invalidAgent,
+            static function (): void { throw new LogicException('Invalid scope reached RPC'); });
+        throw new LogicException('Invalid write scope accepted');
+    } catch (InvalidArgumentException $expected) {}
+}
 try {
     $rules->save(['min_large_position_value' => 30, 'liquidation_high_risk_threshold' => 80, 'liquidation_warning_notify_enabled' => true], 9, 16, static function () {
         throw new RuntimeException('rpc down');
