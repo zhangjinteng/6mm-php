@@ -83,7 +83,7 @@ final class ChannelConfigStore
                 if ($field === 'customer_service') {
                     // Preserve the Platform adapter's existing fallback-email-only capability.
                     if (array_diff(array_keys($links), ['fallback_email']) !== []) throw new ChannelConfigException($field, '客服配置字段不可修改');
-                    if (!empty($existing['provider']) && $existing['provider'] !== 'sixmm') throw new ChannelConfigException($field, '已有其他客服配置，不能自动覆盖');
+                    if (!empty($existing['provider']) && !\SixMm\Shared\TenantCustomerService\CustomerService::isProvider($existing['provider'])) throw new ChannelConfigException($field, '已有其他客服配置，不能自动覆盖');
                     $email = $links['fallback_email'] ?? '';
                     if (!is_string($email) || mb_strlen($email) > 254 || (trim($email) !== '' && !filter_var(trim($email), FILTER_VALIDATE_EMAIL))) throw new ChannelConfigException($field . '.fallback_email', '请输入有效邮箱');
                     $before[$field] = ['fallback_email' => $existing['fallback_email'] ?? ''];

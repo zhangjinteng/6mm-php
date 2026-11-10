@@ -11,7 +11,7 @@ use Throwable;
 
 final class CustomerService
 {
-    public const PROVIDER = 'sixmm';
+    public const PROVIDER = '6mm';
     public const MODULE = 'customer_service';
     public const ENDPOINT = 'https://cs.6mm.com/api/v1/integrations/exchange/tenants';
     public function __construct(private CustomerServiceContext $host) {}
@@ -20,17 +20,21 @@ final class CustomerService
 
     public function ready(): bool { return $this->host->ready(); }
 
+    public static function isProvider(mixed $provider): bool { return in_array($provider, [self::PROVIDER, 'sixmm'], true); }
+    public static function validAppKey(mixed $key): bool { return is_string($key) && trim($key) !== '' && strlen($key) <= 4096; }
+
     public static function publicConfig(array $config, string $tenantId, bool $enabled = false, bool $ready = false): array
     {
-        $isProvider = ($config['provider'] ?? '') === self::PROVIDER;
+        $isProvider = self::isProvider($config['provider'] ?? null);
         $status = $isProvider ? ($config['status'] ?? 'unconfigured') : (empty($config['provider']) ? 'unconfigured' : 'unsupported');
-        return ['provider' => $config['provider'] ?? '', 'status' => $status,
+        return ['provider' => $isProvider ? self::PROVIDER : ($config['provider'] ?? ''), 'status' => $status,
             'operation' => CustomerLifecycleService::publicOperation($config),
             'enabled' => $enabled,
             'fallback_email' => $config['fallback_email'] ?? '',
             'merchant_id' => $isProvider ? ($config['merchant_id'] ?? '6mm_wl_'.$tenantId) : '6mm_wl_'.$tenantId,
             'tenant_id' => $isProvider ? ($config['tenant_id'] ?? null) : null,
-            'app_key_configured' => $isProvider && !empty($config['app_key_encrypted']),
+            'app_key_configured' => $isProvider && (array_key_exists('appKey', $config)
+                ? self::validAppKey($config['appKey']) : !empty($config['app_key_encrypted'])),
             'provisioning_ready' => $ready,
             'requested' => $isProvider ? (object) array_intersect_key((array) ($config['requested'] ?? []), array_flip(['name', 'seatLimit', 'serviceEndAt', 'adminName', 'adminEmail'])) : (object) [],
             'created' => $isProvider ? ($config['created'] ?? null) : null];
@@ -53,10 +57,10 @@ final class CustomerService
         $json = $this->table('wl_channel_configs')->where('tenant_id', $tenantId)->value('customer_service');
         if (!$json) return false;
         $config = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
-        if (($config['provider'] ?? '') !== self::PROVIDER || ($config['status'] ?? '') !== 'bound'
-            || empty($config['tenant_id']) || empty($config['app_key_encrypted'])) return false;
-        try { return trim($this->host->decrypt($config['app_key_encrypted'])) !== ''; }
-        catch (Throwable $e) { $this->reject('客服绑定凭据异常，请联系管理员修复'); }
+        if (!self::isProvider($config['provider'] ?? null) || ($config['status'] ?? '') !== 'bound'
+            || empty($config['tenant_id'])) return false;
+        $config = $this->host->normalizeBinding($config);
+        return self::validAppKey($config['appKey'] ?? null);
     }
 
     private function table(string $name): Builder
@@ -87,6 +91,7 @@ final class CustomerService
         $now = \Carbon\CarbonImmutable::now();
         if ($row && $now->lessThanOrEqualTo(\Carbon\Carbon::parse($row->updated_at))) $now = \Carbon\Carbon::parse($row->updated_at)->addMicrosecond();
         $timestamp = $now->format('Y-m-d H:i:s.uP');
+        $config = $this->host->normalizeBinding($config);
         $data = ['customer_service' => json_encode((object) $config, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR),
             'updated_at' => $timestamp];
         $data += $this->host->operatorColumns($row === null);
@@ -108,8 +113,12 @@ final class CustomerService
                 $this->reject('客服业务操作尚未完成，请先在业务配置核验原操作');
             }
             $this->host->assertCanProvision();
-            if (!empty($config['provider']) && $config['provider'] !== self::PROVIDER) $this->reject('已有其他客服配置，不能自动覆盖');
-            if (($config['status'] ?? '') === 'bound') return ['bound' => true];
+            if (!empty($config['provider']) && !self::isProvider($config['provider'])) $this->reject('已有其他客服配置，不能自动覆盖');
+            if (($config['status'] ?? '') === 'bound') {
+                $normalized = $this->host->normalizeBinding($config);
+                if ($normalized !== $config) $this->persist($id, $row, $normalized, $operatorId, 'normalize_binding');
+                return ['bound' => true];
+            }
             if (!is_string($tenant->tenant_name) || trim($tenant->tenant_name) === '') $this->reject('请先完善白标名称再开通客服');
             if ($row?->updated_at !== $input['expected_updated_at']) $this->reject('配置已变化，请重新打开后再操作');
             if (($config['status'] ?? '') === 'provisioning' && \Carbon\Carbon::parse($config['started_at'])->greaterThan(\Carbon\CarbonImmutable::now()->subSeconds(40))) {
@@ -119,7 +128,7 @@ final class CustomerService
             $payload = ['merchantId' => $config['merchant_id'] ?? '6mm_wl_'.$id, 'name' => $uncertain ? $config['requested']['name'] : $tenant->tenant_name,
                 'seatLimit' => (int) $input['seat_limit'], 'serviceEndAt' => $input['service_end_at'],
                 'adminName' => $input['admin_name'], 'adminEmail' => $input['admin_email']];
-            $fingerprint = hash_hmac('sha256', json_encode($payload, JSON_THROW_ON_ERROR)."\0".$input['admin_password'], $this->host->fingerprintKey);
+            $fingerprint = hash_hmac('sha256', json_encode($payload, JSON_THROW_ON_ERROR)."\0".$input['admin_password'], $this->host->retryFingerprintKey());
             if (in_array($config['status'] ?? '', ['pending', 'provisioning'], true) && !hash_equals($config['request_fingerprint'] ?? '', $fingerprint)) {
                 $this->reject('上次开户结果待确认，请使用原开户资料和原密码重试，不能更换商户 ID');
             }
@@ -146,7 +155,7 @@ final class CustomerService
                     && (is_int($data['tenantId'] ?? null) || is_string($data['tenantId'] ?? null))
                     && preg_match('/^[1-9][0-9]{0,18}$/D', (string) $data['tenantId'])
                     && is_string($data['appKey'] ?? null) && trim($data['appKey']) !== '' && strlen($data['appKey']) <= 4096) {
-                    $binding = ['tenant_id' => (string) $data['tenantId'], 'app_key_encrypted' => $this->host->encrypt($data['appKey']), 'created' => $data['created']];
+                    $binding = ['tenant_id' => (string) $data['tenantId'], 'appKey' => $data['appKey'], 'created' => $data['created']];
                     $status = 'bound';
                     $message = $data['created'] ? '客服开户并绑定成功' : '已绑定既有客服租户；原名称、管理员、席位及到期时间未变更';
                 }

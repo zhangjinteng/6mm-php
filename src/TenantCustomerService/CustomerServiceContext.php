@@ -51,7 +51,7 @@ final class CustomerServiceContext
         $schema = $this->schema ?? ($this->db->getDriverName() === 'pgsql' ? 'control_plane' : '');
         return ($schema !== '' ? $schema.'.' : '').$name;
     }
-    public function ready(): bool { return trim($this->apiKey) !== '' && $this->encrypter !== null; }
+    public function ready(): bool { return trim($this->apiKey) !== ''; }
     public function reject(string $field, string $message): never
     {
         $validator = $this->validator->make([], []);
@@ -60,7 +60,7 @@ final class CustomerServiceContext
     }
     public function assertReady(): void
     {
-        if (!$this->ready()) $this->reject('customer_service', '客服服务未配置，请联系平台管理员配置客服 API 和共享凭据加密密钥');
+        if (!$this->ready()) $this->reject('customer_service', '客服服务未配置，请联系平台管理员配置客服 API 密钥');
     }
     public function assertActor(int $operatorId): void
     {
@@ -85,7 +85,29 @@ final class CustomerServiceContext
         // updated_by is a platform-admin foreign key. White-label actors belong only in their own audit log.
         return $this->actorType === 'platform' ? ['updated_by' => $this->actorId] : ($insert ? ['updated_by' => null] : []);
     }
-    public function encrypt(string $value): string { $this->assertReady(); return $this->encrypter->encryptString($value); }
+    /** Read legacy ciphertext without exposing it. Only writers persist the normalized result. */
+    public function normalizeBinding(array $config): array
+    {
+        if (!CustomerService::isProvider($config['provider'] ?? null)) return $config;
+        $config['provider'] = CustomerService::PROVIDER;
+        if (array_key_exists('appKey', $config)) {
+            if (!CustomerService::validAppKey($config['appKey'])) $this->reject('customer_service', '客服绑定凭据异常，请联系管理员修复');
+            unset($config['app_key_encrypted']);
+        } elseif (!empty($config['app_key_encrypted'])) {
+            try { $key = $this->decrypt($config['app_key_encrypted']); }
+            catch (\Throwable $e) { $this->reject('customer_service', '旧客服绑定凭据无法读取，请检查原加密密钥'); }
+            if (!CustomerService::validAppKey($key)) $this->reject('customer_service', '客服绑定凭据异常，请联系管理员修复');
+            $config['appKey'] = $key;
+            unset($config['app_key_encrypted']);
+        }
+        return $config;
+    }
+
+    public function retryFingerprintKey(): string
+    {
+        return trim($this->fingerprintKey) !== '' ? $this->fingerprintKey : $this->apiKey;
+    }
+
     public function decrypt(string $value): string
     {
         if ($this->encrypter === null) $this->reject('customer_service', '客服凭据加密密钥未配置');

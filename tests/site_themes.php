@@ -49,6 +49,11 @@ $check(!$p['config']['legal']['documents'][0]['usePlatformTemplate'] && $p['conf
 $check($p['config']['legal']['documents'][1]['usePlatformTemplate'] && $p['config']['legal']['documents'][1]['source']['url']===null);
 $check(hash_equals($row->payload_sha256,hash('sha256',$row->payload)) && $row->previous_config_version===null);
 $check(!$sync()['changed'] && $db->table('wl_site_config_themes')->count()===1);
+$db->table('wl_site_seo_configs')->where('site_id',10)->update([
+    'translations'=>'{"homeByLocale":{"zh-CN":{"title":"标题","description":"描述"}},"academyByLocale":{"en":{"title":"Academy","description":"Learn"}}}',
+]);
+$check(!$sync()['changed'] && $db->table('wl_site_config_themes')->count()===1);
+$check($db->table('wl_site_config_themes')->sole()->payload === $row->payload);
 $db->table('wl_site_modules')->where('module_code','news')->update(['enabled'=>false]);
 $second=$sync();
 $check($second['changed'] && $db->table('wl_site_config_themes')->orderByDesc('config_version')->first()->previous_config_version===$row->config_version);

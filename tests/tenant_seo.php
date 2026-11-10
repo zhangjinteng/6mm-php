@@ -40,6 +40,9 @@ $check($db->table('wl_site_seo_configs')->count() === 0);
 $input = $scope + ['expected_version' => 0, 'indexing_enabled' => true, 'default_locale' => 'zh-CN', 'translations' => ['zh-CN' => ['title' => 'Title', 'description' => 'Description']], 'google_verification_token' => '0', 'verification_domain' => 'site10.example'];
 $logs = []; $audit = static function ($data) use (&$logs) { $logs[] = $data; };
 $check($tenant->save($input, 7, 'tenant_admin', $audit)['version'] === 1);
+$check(json_decode($db->table('wl_site_seo_configs')->value('translations'), true) === ['homeByLocale' => $input['translations']]);
+$theme = json_decode($db->table('wl_site_config_themes')->orderByDesc('config_version')->value('payload'), true);
+$check($theme['config']['seo']['homeByLocale'] === $input['translations']);
 $check($tenant->detail($scope)['effective_indexing_enabled'] === true);
 $check($db->table('wl_site_seo_configs')->value('created_by_type') === 'tenant_admin');
 $check(!str_contains(json_encode($logs), 'Description') && !isset($logs[0]['google_verification_token']));
@@ -66,4 +69,33 @@ catch (ValidationException $e) { $check(true); }
 $check($db->table('wl_config_snapshots')->value('payload') === 'unchanged');
 $check($tenant->detail(['tenant_id' => 1, 'site_id' => 11])['version'] === 0);
 $check($platform->listing(['keyword' => '_%'])['count'] === 3);
+
+// Legacy records still populate the editor and upgrade even when the submitted copy is unchanged.
+$legacy = array_replace($input, ['site_id' => '11', 'google_verification_token' => null, 'verification_domain' => null]);
+$platform->save($legacy, 42, 'platform_admin', $audit);
+$db->table('wl_site_seo_configs')->where('site_id', 11)->update(['translations' => json_encode($legacy['translations'])]);
+$check((array) $platform->detail(['tenant_id' => 1, 'site_id' => 11])['translations'] === $legacy['translations']);
+$themeCount = $db->table('wl_site_config_themes')->count();
+$legacy['expected_version'] = 1;
+$check($platform->save($legacy, 42, 'platform_admin', $audit) === ['changed' => true, 'version' => 2]);
+$check($db->table('wl_site_config_themes')->count() === $themeCount);
+$legacy['expected_version'] = 2;
+$check(!$platform->save($legacy, 42, 'platform_admin', $audit)['changed']);
+
+// Editing homepage copy preserves future page sections and does not nest the theme payload twice.
+$document = json_decode($db->table('wl_site_seo_configs')->where('site_id', 11)->value('translations'));
+$document->academyByLocale = (object) ['en' => (object) ['title' => 'Academy', 'description' => 'Learn']];
+$document->futurePage = new stdClass();
+$db->table('wl_site_seo_configs')->where('site_id', 11)->update(['translations' => json_encode($document)]);
+$legacy['translations']['zh-CN']['title'] = 'Updated homepage';
+$platform->save($legacy, 42, 'platform_admin', $audit);
+$updated = json_decode($db->table('wl_site_seo_configs')->where('site_id', 11)->value('translations'));
+$check($updated->academyByLocale == $document->academyByLocale && $updated->futurePage instanceof stdClass);
+$theme = json_decode($db->table('wl_site_config_themes')->where('site_id', 11)->orderByDesc('config_version')->value('payload'), true);
+$check($theme['config']['seo']['homeByLocale'] === $legacy['translations']);
+$legacy = array_replace($legacy, ['expected_version' => 3, 'indexing_enabled' => false, 'translations' => []]);
+$platform->save($legacy, 42, 'platform_admin', $audit);
+$updated = json_decode($db->table('wl_site_seo_configs')->where('site_id', 11)->value('translations'));
+$check($updated->homeByLocale instanceof stdClass && (array) $updated->homeByLocale === []);
+$check($updated->academyByLocale == $document->academyByLocale);
 echo "Tenant SEO: {$checks} checks passed\n";

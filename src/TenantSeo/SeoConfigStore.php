@@ -44,7 +44,7 @@ final class SeoConfigStore
 
     private function normalized(object $row, bool $detail = false): array
     {
-        $translations = $row->translations ? json_decode($row->translations, true, 512, JSON_THROW_ON_ERROR) : [];
+        $translations = SeoTranslations::home($row->translations);
         $complete = array_filter($translations, fn ($copy) => trim($copy['title'] ?? '') !== '' && trim($copy['description'] ?? '') !== '');
         $enabled = (bool) $row->indexing_enabled;
         $defaultLocale = $row->default_locale ?? 'zh-CN';
@@ -173,6 +173,8 @@ final class SeoConfigStore
             if (!$tenant || !$site) $this->reject('白标站点不存在或不属于该白标');
             $before = $this->detail($input);
             if ($before['version'] !== (int) $input['expected_version']) $this->reject('配置已被其他操作员修改，请重新打开配置后再保存');
+            $storedTranslations = $this->table('wl_site_seo_configs')->where('site_id', $site->site_id)->value('translations');
+            $encodedTranslations = SeoTranslations::withHome($storedTranslations, $translations);
             $token = $input['google_verification_token'] === '' ? null : $input['google_verification_token'];
             $domain = $token !== null ? strtolower(trim($input['verification_domain'] ?? '')) : null;
             if ($token !== null && (!$before['primary_domain'] || $domain !== $before['primary_domain'])) {
@@ -182,7 +184,9 @@ final class SeoConfigStore
                 'translations' => (object) $translations, 'google_verification_token' => $token, 'verification_domain' => $domain];
             // Older clients do not send this site-wide setting; only an explicit null clears it.
             if (array_key_exists('og_image_url', $input)) $values['og_image_url'] = $input['og_image_url'] ?: null;
-            $same = true;
+            // An otherwise unchanged legacy row is upgraded on save, under the same version/audit rules.
+            $same = json_decode($storedTranslations ?: '{}', false, 512, JSON_THROW_ON_ERROR)
+                == json_decode($encodedTranslations, false, 512, JSON_THROW_ON_ERROR);
             foreach ($values as $key => $value) {
                 if ($before[$key] != $value) $same = false;
             }
@@ -192,7 +196,7 @@ final class SeoConfigStore
             }
             $now = \Carbon\CarbonImmutable::now()->format('Y-m-d H:i:s.uP');
             $version = $before['version'] + 1;
-            $values['translations'] = json_encode((object) $translations, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+            $values['translations'] = $encodedTranslations;
             $values += ['version' => $version, 'updated_by' => $operatorId, 'updated_by_type' => $actorType, 'updated_at' => $now];
             if ($before['version'] === 0) {
                 $this->table('wl_site_seo_configs')->insert($values + ['site_id' => $site->site_id,

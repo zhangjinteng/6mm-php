@@ -42,6 +42,7 @@ final class CustomerLifecycleService
         $time = \Carbon\CarbonImmutable::now();
         if ($row && $time->lessThanOrEqualTo(\Carbon\Carbon::parse($row->updated_at))) $time = \Carbon\Carbon::parse($row->updated_at)->addMicrosecond();
         $stamp = $time->format('Y-m-d H:i:s.uP');
+        $config = $this->host->normalizeBinding($config);
         $data = ['customer_service' => json_encode((object) $config, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR),
             'updated_at' => $stamp];
         $data += $this->host->operatorColumns($row === null);
@@ -86,7 +87,7 @@ final class CustomerLifecycleService
         $prepared = $this->host->db->transaction(function () use ($input, $id, $enabled, $operatorId, $preflight, $attemptId): array {
             $preflight();
             [$tenant, $row, $config] = $this->locked($id);
-            if (!empty($config['provider']) && $config['provider'] !== CustomerService::PROVIDER) $this->reject('已有其他客服配置，不能覆盖');
+            if (!empty($config['provider']) && !CustomerService::isProvider($config['provider'])) $this->reject('已有其他客服配置，不能覆盖');
             $old = $config['operation'] ?? null;
             $unresolved = $old && in_array($old['status'], ['inflight', 'pending', 'confirmed'], true);
             if ($unresolved) {
@@ -146,7 +147,7 @@ final class CustomerLifecycleService
                         && is_string($data['appKey'] ?? null) && trim($data['appKey']) !== '' && strlen($data['appKey']) <= 4096) {
                         $status = 'confirmed';
                         $binding = ['status' => 'bound', 'tenant_id' => (string) $data['tenantId'],
-                            'app_key_encrypted' => $this->host->encrypt($data['appKey']), 'created' => $data['created'], 'requested' => $op['payload']];
+                            'appKey' => $data['appKey'], 'created' => $data['created'], 'requested' => $op['payload']];
                     } elseif (!$enabled && ($data['status'] ?? '') === 'suspended' && is_bool($data['changed'] ?? null)
                         && ($data['merchantId'] ?? null) === $op['payload']['merchantId']
                         && $this->validTenantId($data['tenantId'] ?? null) && (string) $data['tenantId'] === (string) $op['payload']['tenantId']) {

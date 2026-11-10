@@ -7,6 +7,7 @@ namespace SixMm\Shared\TenantConfig;
 use Closure;
 use SixMm\Shared\TenantChannels\ChannelConfigValidator;
 use SixMm\Shared\TenantCompliance\ComplianceConfigStore;
+use SixMm\Shared\TenantSeo\SeoTranslations;
 
 /** One trusted, transactional writer for both hosts. Never accepts a browser-provided payload. */
 final class ThemeSnapshotWriter
@@ -72,7 +73,7 @@ final class ThemeSnapshotWriter
         foreach (['tradingRanking'=>'trade_ranking','news'=>'news','academy'=>'academy','help'=>'help_center',
             'announcements'=>'announcement','feedback'=>'feedback'] as $key=>$code) $features[$key] = $flag($code, 'feature');
         $seo = $this->siteRows('wl_site_seo_configs', $id)->first();
-        $copies = $this->object($seo?->translations ?? null);
+        $copies = SeoTranslations::home($seo?->translations ?? null);
         $home = [];
         ksort($copies, SORT_STRING);
         foreach ($copies as $locale=>$copy) $home[$locale] = ['title'=>(string)($copy['title'] ?? ''), 'description'=>(string)($copy['description'] ?? '')];
