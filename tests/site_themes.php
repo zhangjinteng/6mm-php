@@ -11,11 +11,11 @@ use SixMm\Shared\TenantConfig\ThemeSnapshotWriter;
 $capsule = new Capsule();
 $capsule->addConnection(['driver'=>'sqlite','database'=>':memory:']);
 $db = $capsule->getConnection();
-$db->statement("CREATE TABLE wl_tenants (tenant_id integer primary key, status text)");
+$db->statement("CREATE TABLE wl_tenants (tenant_id integer primary key, status text, tenant_name text)");
 $db->statement("CREATE TABLE wl_sites (site_id integer primary key, tenant_id integer, site_name text, status text)");
 themeFixture($db);
 $db->statement('PRAGMA foreign_keys=ON');
-$db->table('wl_tenants')->insert([['tenant_id'=>1,'status'=>'enabled'],['tenant_id'=>2,'status'=>'enabled']]);
+$db->table('wl_tenants')->insert([['tenant_id'=>1,'status'=>'enabled','tenant_name'=>'Owning white label'],['tenant_id'=>2,'status'=>'enabled','tenant_name'=>'Foreign white label']]);
 $db->table('wl_sites')->insert([['site_id'=>10,'tenant_id'=>1,'site_name'=>'交易所','status'=>'enabled'],
     ['site_id'=>11,'tenant_id'=>1,'site_name'=>'Second','status'=>'enabled'],['site_id'=>20,'tenant_id'=>2,'site_name'=>'Foreign','status'=>'enabled']]);
 $db->table('wl_site_domains')->insert(['site_id'=>10,'domain'=>'brand.example','is_primary'=>true,'template_id'=>'template-1','logo_url'=>'https://assets.example/logo.svg']);
@@ -46,6 +46,8 @@ $check($p['config']['seo']['homeByLocale']['zh-CN']['title']==='标题' && $p['c
 $check(count($p['config']['channels']['social'])===1 && $p['config']['channels']['downloads']['apk']==='https://download.example/app.apk');
 $check($p['config']['supportEmail']==='support@example.com' && !str_contains($row->payload,'secret'));
 $check($p['config']['channels']['support'] === ['provider'=>null,'publicWidgetId'=>null]);
+$check($p['config']['legal']['entity']['whiteLabelName'] === 'Owning white label');
+$check($p['config']['legal']['entity']['whiteLabelName'] !== $p['name']);
 $check(!$p['config']['legal']['documents'][0]['usePlatformTemplate'] && $p['config']['legal']['documents'][0]['source']['url']==='https://legal.example/terms');
 $check($p['config']['legal']['documents'][1]['usePlatformTemplate'] && $p['config']['legal']['documents'][1]['source']['url']===null);
 $check(hash_equals($row->payload_sha256,hash('sha256',$row->payload)) && $row->previous_config_version===null);

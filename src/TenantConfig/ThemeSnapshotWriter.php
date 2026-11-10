@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace SixMm\Shared\TenantConfig;
 
 use Closure;
+use Illuminate\Container\Container;
 use SixMm\Shared\TenantChannels\ChannelConfigValidator;
 use SixMm\Shared\TenantCompliance\ComplianceConfigStore;
 use SixMm\Shared\TenantCustomerService\CustomerService;
@@ -13,7 +14,17 @@ use SixMm\Shared\TenantSeo\SeoTranslations;
 /** One trusted, transactional writer for both hosts. Never accepts a browser-provided payload. */
 final class ThemeSnapshotWriter
 {
-    public function __construct(private Closure $table) {}
+    public function __construct(private Closure $table, private ?ThemeSnapshotReplication $replication = null) {}
+
+    private function replicate(int $site): void
+    {
+        $replication = $this->replication;
+        $container = Container::getInstance();
+        if (!$replication && $container->bound(ThemeSnapshotReplication::class)) {
+            $replication = $container->make(ThemeSnapshotReplication::class);
+        }
+        $replication?->enqueue($this->table, $site);
+    }
 
     private function rows(string $name) { return ($this->table)($name); }
     private function siteRows(string $name, int $site) { return $this->rows($name)->where('site_id', $site); }
@@ -46,7 +57,10 @@ final class ThemeSnapshotWriter
             $old = json_decode($latest->payload, false, 512, JSON_THROW_ON_ERROR);
             if ((int)$latest->schema_version !== 1 || !hash_equals($latest->payload_sha256, hash('sha256', $latest->payload))
                 || ($old->siteId ?? null) !== (string)$site) throw new \RuntimeException('站点主题快照校验失败');
-            if ($latest->payload === $payload) return ['changed' => false, 'site_id' => (string)$site, 'config_version' => (string)$latest->config_version];
+            if ($latest->payload === $payload) {
+                $this->replicate($site);
+                return ['changed' => false, 'site_id' => (string)$site, 'config_version' => (string)$latest->config_version];
+            }
         }
         $previous = (int)($latest->config_version ?? 0);
         $version = $publicationVersion ?? 0;
@@ -59,6 +73,7 @@ final class ThemeSnapshotWriter
         $this->rows('wl_site_config_themes')->insert(['site_id' => $site, 'config_version' => $version, 'schema_version' => 1,
             'payload' => $payload, 'payload_sha256' => $hash, 'previous_config_version' => $previous ?: null,
             'published_by' => $actor, 'publish_reason' => $reason, 'published_at' => \Carbon\CarbonImmutable::now()]);
+        $this->replicate($site);
         return ['changed' => true, 'site_id' => (string)$site, 'config_version' => (string)$version];
     }
 
@@ -115,7 +130,8 @@ final class ThemeSnapshotWriter
                 'features'=>$features,'channels'=>['support'=>$support,'social'=>$links,'downloads'=>['appStore'=>$downloads['app_store'] ?? null,
                     'googlePlay'=>$downloads['google_play'] ?? null,'apk'=>$downloads['apk'] ?? null]],
                 'supportEmail'=>$this->nullable($profile?->support_email ?? null),
-                'legal'=>['entity'=>['name'=>$this->nullable($profile?->legal_entity_name ?? null),
+                'legal'=>['entity'=>['whiteLabelName'=>$this->nullable($tenant->tenant_name ?? null),
+                    'name'=>$this->nullable($profile?->legal_entity_name ?? null),
                     'registrationNo'=>$this->nullable($profile?->registration_number ?? null),'address'=>$this->nullable($profile?->registered_address ?? null),
                     'effectiveDate'=>$this->nullable($profile?->effective_date ?? null)],'documents'=>$documents]]];
     }

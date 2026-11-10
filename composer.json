@@ -40,6 +40,8 @@
     },
     "scripts": {
         "test": [
+            "@php tests/config_redis.php",
+            "@php tests/theme_redis.php",
             "@php tests/site_themes.php",
             "@php tests/media_image.php",
             "@php tests/tenant_customer_service.php",
