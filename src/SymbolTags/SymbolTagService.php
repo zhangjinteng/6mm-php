@@ -17,7 +17,8 @@ final class SymbolTagService
         private string $relationTagColumn = 'symbol_tag_id',
         private string $relationSymbolColumn = 'symbol_config_id',
         private ?int $ownerId = null,
-        private string $ownerColumn = 'agent_id'
+        private string $ownerColumn = 'agent_id',
+        private array $scope = []
     ) {
     }
 
@@ -45,6 +46,9 @@ final class SymbolTagService
             ->selectRaw('COUNT(DISTINCT ' . $this->relationSymbolColumn . ') AS symbol_count')
             ->groupBy($this->relationTagColumn);
         $this->applyOwnerScope($relationCounts);
+        if ($this->relationTable === 'symbol_config_tag') {
+            $relationCounts->where('is_attached', true);
+        }
 
         $query = $this->connection->table($this->tagTable . ' as st')
             ->leftJoinSub($relationCounts, 'relations', static function ($join): void {
@@ -227,6 +231,7 @@ final class SymbolTagService
             $now = $this->timestamp();
             $values = $data + ['updated_at' => $now];
             if ($id === null) {
+                $values = array_merge($values, $this->scope);
                 if ($this->ownerId !== null) {
                     $values[$this->ownerColumn] = $this->ownerId;
                 }
@@ -345,6 +350,9 @@ final class SymbolTagService
 
     private function applyOwnerScope(Builder $query, ?string $alias = null): void
     {
+        foreach ($this->scope as $field => $value) {
+            $query->where(($alias !== null ? $alias . '.' : '') . $field, $value);
+        }
         if ($this->ownerId === null) {
             return;
         }

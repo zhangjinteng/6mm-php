@@ -42,6 +42,7 @@ $schema->create('symbol_tag', static function (Blueprint $table): void {
     $table->dateTime('deleted_at')->nullable();
 });
 $schema->create('symbol_config_tag', static function (Blueprint $table): void {
+    $table->boolean('is_attached')->default(true);
     $table->increments('id');
     $table->unsignedInteger('symbol_config_id');
     $table->unsignedInteger('symbol_tag_id');

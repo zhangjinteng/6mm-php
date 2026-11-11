@@ -153,6 +153,7 @@ SQL;
 
         // Include retired contracts: their historical fees still belong in reports.
         $symbols = DB::table('symbol_config')
+            ->where('home_site_id', 0)->where('agent_id', 0)
             ->whereRaw('UPPER(quote_asset) = ?', [self::SETTLE_ASSET])
             ->pluck('symbol')->all();
         if ($symbols === []) {

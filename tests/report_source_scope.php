@@ -176,7 +176,10 @@ CarbonImmutable::setTestNow();
 
 // Inspect generated collection queries without opening a ClickHouse connection.
 DB::swap($db);
-$schema->create('symbol_config', static function (Blueprint $t): void { $t->string('symbol'); $t->string('quote_asset'); });
+$schema->create('symbol_config', static function (Blueprint $t): void {
+    $t->string('symbol'); $t->string('quote_asset');
+    $t->bigInteger('home_site_id')->default(0); $t->bigInteger('agent_id')->default(0);
+});
 $db->table('symbol_config')->insert(['symbol' => 'BTCUSDT', 'quote_asset' => 'USDT']);
 $queries = [];
 $provider = new FuturesDailySourceProvider(static function (string $sql) use (&$queries): array { $queries[] = $sql; return []; }, 'freedex_history');
