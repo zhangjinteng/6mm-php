@@ -53,7 +53,7 @@ final class SeoTranslationService
         try {
             $result = (new \SixMm\Shared\Cms\PlainTextTranslator($google))->fields(
                 $input['fields'], ['title' => 200, 'description' => 1000], $from, $to,
-                max(1, min(60, (int) $settings['request_timeout_seconds'])));
+                max(1, min(120, (int) $settings['request_timeout_seconds'])), (int) ($settings['max_attempts'] ?? 1));
         } catch (\InvalidArgumentException) { $this->reject('翻译字段或原文不正确'); }
         return ['target_locale' => $to, 'values' => (object) $result['values'], 'errors' => (object) $result['errors']];
     }

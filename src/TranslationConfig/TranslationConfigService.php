@@ -29,7 +29,12 @@ final class TranslationConfigService
     /** @param array<string, mixed> $input @return array<string, mixed> */
     public function save(int $agentId, int $actorId, array $input): array
     {
-        $existing = $this->connection->table($this->table)->where('agent_id', $agentId)->first();
+        return $this->connection->transaction(fn (): array => $this->persist($agentId, $actorId, $input));
+    }
+
+    private function persist(int $agentId, int $actorId, array $input): array
+    {
+        $existing = $this->connection->table($this->table)->where('agent_id', $agentId)->lockForUpdate()->first();
         $version = (string) ($input['api_version'] ?? 'v2');
         $concurrency = filter_var($input['concurrency'] ?? null, FILTER_VALIDATE_INT);
         $enabled = filter_var($input['is_enabled'] ?? true, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
@@ -53,6 +58,10 @@ final class TranslationConfigService
             'updated_by' => $actorId,
             'updated_at' => $now,
         ];
+        // Compatibility callers must also invalidate a concurrently open unified settings form.
+        if ($this->connection->getSchemaBuilder()->hasColumn($this->table, 'revision')) {
+            $values['revision'] = (int) ($existing->revision ?? 0) + 1;
+        }
 
         if ($apiKey !== '') {
             $values += [

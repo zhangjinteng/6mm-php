@@ -66,7 +66,7 @@ class GoogleTranslationClient
         if (!$this->configured()) throw new RuntimeException('GOOGLE_CREDENTIAL_MISSING');
         if (strlen($source) > 90000 || count($targets) > 20) throw new RuntimeException('SOURCE_TOO_LONG');
         $translations = $failures = [];
-        foreach (array_chunk($targets, max(1, min(10, $concurrency)), true) as $batch) {
+        foreach (array_chunk($targets, max(1, min(20, $concurrency)), true) as $batch) {
             $pool = new \Illuminate\Http\Client\Pool(Http::getFacadeRoot());
             $pending = $responses = [];
             foreach ($batch as $locale => $to) {

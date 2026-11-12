@@ -57,4 +57,22 @@ $fields = (new PlainTextTranslator((new GoogleTranslationClient())->withApiKey('
 $check(count($fields['values']) === 2 && $fields['errors'] === []);
 $fields = (new PlainTextTranslator((new GoogleTranslationClient())->withApiKey('FAKE-SEO')))->fields(['name'=>'Name'], ['name'=>1], 'en','ja',10);
 $check(isset($fields['errors']['name']) && $fields['values'] === []);
+$check(array_column($platform->detail(0,1)['languages'], 'locale') === array_keys(\SixMm\Shared\Cms\TranslationCatalog::LOCALES));
+$db->table('symbol_tag_translation')->insert(['symbol_tag_id'=>1,'agent_symbol_tag_id'=>0,'locale'=>'ko','name'=>'Legacy Korean']);
+$platform->save(0,1,['zh-CN'=>'热门','en'=>'Hot']);
+$check($db->table('symbol_tag_translation')->where('symbol_tag_id',1)->where('locale','ko')->value('name') === 'Legacy Korean');
+$restricted = (new SymbolTagTranslations($db, fn () => ['api_key'=>'FAKE','concurrency'=>2,'target_locales'=>['ja']]))->forScope(0,0);
+$before = Http::recorded()->count();
+try { $restricted->translate(0,1,'zh-CN','热门',['de']); throw new RuntimeException('Disabled target accepted'); }
+catch (SymbolTagTranslationException) { $check(Http::recorded()->count() === $before); }
+
+Http::swap(new Factory());
+$attempts = 0;
+Http::fake(function () use (&$attempts) {
+    $attempts++;
+    return $attempts === 1 ? Http::response([],503)
+        : Http::response(['data'=>['translations'=>[['translatedText'=>'Success']]]],200);
+});
+$retried = (new PlainTextTranslator((new GoogleTranslationClient())->withApiKey('FAKE')))->fields(['title'=>'Title'],['title'=>200],'en','ja',8,2);
+$check($attempts === 2 && $retried['values']['title'] === 'Success');
 echo "Tag translations: $checks checks passed\n";

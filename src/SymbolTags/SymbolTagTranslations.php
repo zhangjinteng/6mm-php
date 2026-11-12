@@ -24,12 +24,12 @@ class SymbolTagTranslations
         'pl' => ['label' => '波兰语', 'label_en' => 'Polish', 'google' => 'pl'],
         'vi' => ['label' => '越南语', 'label_en' => 'Vietnamese', 'google' => 'vi'],
         'uk' => ['label' => '乌克兰语', 'label_en' => 'Ukrainian', 'google' => 'uk'],
-        'pt' => ['label' => '葡萄牙语（国际）', 'label_en' => 'Portuguese (International)', 'google' => 'pt'],
+        'pt-PT' => ['label' => '葡萄牙语（葡萄牙）', 'label_en' => 'Portuguese (Portugal)', 'google' => 'pt'],
         'es' => ['label' => '西班牙语（国际）', 'label_en' => 'Spanish (International)', 'google' => 'es'],
-        'ko' => ['label' => '韩语', 'label_en' => 'Korean', 'google' => 'ko'],
-        'th' => ['label' => '泰语', 'label_en' => 'Thai', 'google' => 'th'],
+        'uz' => ['label' => '乌兹别克语', 'label_en' => 'Uzbek', 'google' => 'uz'],
         'ar' => ['label' => '阿拉伯语', 'label_en' => 'Arabic', 'google' => 'ar'],
-        'tr' => ['label' => '土耳其语', 'label_en' => 'Turkish', 'google' => 'tr'],
+        'fil' => ['label' => '菲律宾语', 'label_en' => 'Filipino', 'google' => 'tl'],
+        'az' => ['label' => '阿塞拜疆语', 'label_en' => 'Azerbaijani', 'google' => 'az'],
     ];
 
     private ?array $symbolScope = null;
@@ -40,9 +40,9 @@ class SymbolTagTranslations
     public function __construct(private ConnectionInterface $connection, callable $runtime, ?callable $translateMany = null)
     {
         $this->runtime = \Closure::fromCallable($runtime);
-        $this->translateMany = \Closure::fromCallable($translateMany ?? static function (string $key, string $text, string $from, array $targets, int $concurrency): array {
+        $this->translateMany = \Closure::fromCallable($translateMany ?? static function (string $key, string $text, string $from, array $targets, int $concurrency, int $timeout = 30, int $attempts = 3): array {
             return (new \SixMm\Shared\Cms\PlainTextTranslator(new \SixMm\Shared\Cms\GoogleTranslationClient()))
-                ->many($key, $text, $from, $targets, $concurrency);
+                ->many($key, $text, $from, $targets, $concurrency, $timeout, $attempts);
         });
     }
 
@@ -189,14 +189,19 @@ class SymbolTagTranslations
             );
         }
 
-        $runtime = ($this->runtime)($agentId);
+        $runtime = ($this->runtime)($agentId, $this->symbolScope);
+        if (isset($runtime['target_locales']) && array_diff(array_keys($targets), $runtime['target_locales'])) {
+            throw $this->exception(SymbolTagTranslationException::INVALID_PARAMETERS);
+        }
 
         return ($this->translateMany)(
             $runtime['api_key'],
             $sourceText,
             self::LANGUAGES[$sourceLocale]['google'],
             $targets,
-            $runtime['concurrency']
+            $runtime['concurrency'],
+            $runtime['timeout'] ?? 30,
+            $runtime['max_attempts'] ?? 1
         );
     }
 

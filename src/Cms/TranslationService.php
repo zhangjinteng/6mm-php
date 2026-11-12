@@ -228,6 +228,7 @@ class TranslationService
         return [
             'space_id' => (string) $space->id,
             'space_revision' => (string) $space->revision,
+            'source_locale' => $space->source_locale,
             'target_locales' => $this->targets($space),
             'provider' => 'google',
             'api_version' => 'v2',
