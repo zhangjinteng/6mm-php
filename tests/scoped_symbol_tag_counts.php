@@ -33,7 +33,7 @@ foreach ([[10,20],[10,21],[11,30]] as [$site,$agent]) $configs->ensureScope($sit
 $before=$db->table('symbol_tag')->count();
 $configs->ensureScope(10,20);
 $check($db->table('symbol_tag')->count()===$before,'Initialization is idempotent');
-$check($db->table('symbol_config_tag')->where('home_site_id','>',0)->count()===0,'Initialization does not copy inherited assignments');
+$check($db->table('symbol_config_tag')->where('home_site_id','>',0)->count()===10,'Initialization creates local assignments for two sites and three merchants');
 foreach ([[0,0],[10,0],[10,20],[10,21],[11,30]] as [$site,$agent]) {
     $tags=$db->table('symbol_tag')->where('home_site_id',$site)->where('agent_id',$agent)->get()->keyBy('base_tag_id');
     $counts=$configs->tagCounts($site,$agent);

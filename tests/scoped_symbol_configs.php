@@ -30,12 +30,20 @@ $site=$service->query(10)->first(); $merchant=$service->query(10,20)->first();
 $check($site->base_config_id===1 && $merchant->base_config_id===1,'Both base references directly target platform');
 $check($merchant->sort===null && $merchant->is_active===null && $merchant->is_visible===null,'Initialization does not set preferences');
 $check($merchant->liquidation_fee===null && $merchant->min_quantity===null && $merchant->version===null,'Public fields stay NULL');
-$check($db->table('symbol_config_tag')->where('home_site_id','>',0)->count()===0,'No inherited tag rules are copied');
+$check($db->table('symbol_config_tag')->where('home_site_id','>',0)->count()===2,'New site and merchant receive local tag relations');
+foreach ([$site,$merchant] as $row) {
+    $rule=$db->table('symbol_config_tag')->where('symbol_config_id',$row->id)->sole();
+    $tag=$db->table('symbol_tag')->where('id',$rule->symbol_tag_id)->sole();
+    $check($rule->home_site_id===$row->home_site_id && $rule->agent_id===$row->agent_id
+        && $tag->home_site_id===$row->home_site_id && $tag->agent_id===$row->agent_id
+        && $tag->base_tag_id===1 && (bool)$rule->is_attached,'Initial relation uses config and tag IDs owned by the same scope');
+}
 $check($effective(10,20)->liquidation_fee==='0.005' && $effective(10,20)->version===4,'Public values resolve only from platform');
 $check((int)$effective(10,20)->is_visible===1 && (int)$effective(10,20)->is_active===1,'Field mapping is trading is_visible / listing is_active');
-$check(count($tags(10,20,$merchant))===1,'Absent local tag rules inherit platform');
+$check(count($tags(10,20,$merchant))===1,'Initial local associations resolve without duplicates');
 $service->ensureScope(10,20);
 $check($db->table('symbol_config')->count()===3,'Initialization is idempotent');
+$check($db->table('symbol_config_tag')->count()===3,'Repeated initialization does not duplicate relations');
 $service->update(10,0,$site->id,['sort'=>0,'is_visible'=>false,'is_active'=>0]);
 $resolved=$effective(10,20);
 $check($resolved->sort===0 && (int)$resolved->is_visible===0 && $resolved->is_active===0,'Site explicit zero and false inherit');
@@ -70,6 +78,14 @@ $service->update(10,0,$site->id,['tags'=>[$custom]]);
 $check(array_map(fn ($tag)=>$tag->tag_code,$tags(10,20,$merchant))===['site-only'],'Custom site tags inherit without copying assignment rules');
 $service->ensureScope(10,20);
 $check($db->table('symbol_tag')->where('home_site_id',10)->where('agent_id',0)->where('tag_code','site-only')->count()===1,'Initializing does not clone a local custom tag into its own scope');
+$check($db->table('symbol_config_tag')->where('symbol_config_id',$merchant->id)->count()===0,'Repeated initialization preserves an explicit inheritance reset');
+$service->ensureScope(10,22);
+$newMerchant=$service->query(10,22)->where('symbol','BTCUSDT')->sole();
+$initialCodes=$db->table('symbol_config_tag as r')->join('symbol_tag as t','t.id','=','r.symbol_tag_id')
+    ->where('r.symbol_config_id',$newMerchant->id)->where('r.is_attached',true)->pluck('t.tag_code')->all();
+$check($initialCodes===['site-only'],'New merchant copies the effective site selection, not removed platform associations');
+$newTag=$db->table('symbol_tag')->where('home_site_id',10)->where('agent_id',22)->where('tag_code','site-only')->sole();
+$check($db->table('symbol_config_tag')->where('symbol_config_id',$newMerchant->id)->value('symbol_tag_id')===$newTag->id,'Site custom tag maps to the new merchant local tag ID');
 $service->update(10,20,$merchant->id,['tags'=>[]]);
 $localCustom=$db->table('symbol_tag')->where('home_site_id',10)->where('agent_id',20)->where('base_tag_id',$custom)->first();
 $check($localCustom && $db->table('symbol_config_tag')->where('symbol_config_id',$merchant->id)->where('symbol_tag_id',$localCustom->id)->where('is_attached',false)->exists(),'Scoped tag IDs detach the same original identity');
@@ -81,6 +97,35 @@ $db->table('symbol_config_tag')->insert(['symbol_config_id'=>1,'symbol_tag_id'=>
 $check(in_array('hot',array_map(fn ($tag)=>$tag->tag_code,$tags(10,20,$merchant)),true),'Future unrelated parent tags still inherit under per-tag semantics');
 $service->update(10,20,$merchant->id,['tags'=>null]);
 $check(count($tags(10,20,$merchant))===2,'Tag reset removes all explicit local attach/detach rules');
+$service->ensureScope(14,32);
+foreach ([$service->query(14)->where('symbol','BTCUSDT')->sole(),$service->query(14,32)->where('symbol','BTCUSDT')->sole()] as $row) {
+    $localTags=$db->table('symbol_config_tag as r')->join('symbol_tag as t','t.id','=','r.symbol_tag_id')
+        ->where('r.symbol_config_id',$row->id)->where('r.is_attached',true)->get(['t.*']);
+    $check($localTags->count()===2,'Both parent and child tags are initialized as local associations');
+    $byCode=$localTags->keyBy('tag_code');
+    $check($byCode['hot']->parent_id===$byCode['crypto']->id,'Local tag hierarchy stays within the target scope');
+    foreach ($localTags as $localTag) $check($localTag->home_site_id===$row->home_site_id && $localTag->agent_id===$row->agent_id,'No association points to an ancestor or sibling tag');
+}
+$db->statement("CREATE TRIGGER fail_local_tag_insert BEFORE INSERT ON symbol_config_tag WHEN NEW.home_site_id=15 BEGIN SELECT RAISE(ABORT, 'test relation failure'); END");
+try { $service->ensureScope(15,33); throw new RuntimeException('Relation failure accepted'); }
+catch (\Illuminate\Database\QueryException $e) {
+    $check($db->table('symbol_config')->where('home_site_id',15)->count()===0
+        && $db->table('symbol_tag')->where('home_site_id',15)->count()===0,'Failed relation initialization rolls back site and merchant rows atomically');
+}
+$db->statement('DROP TRIGGER fail_local_tag_insert');
+$service->ensureScope(16,34);
+$db->table('symbol_config_tag')->where('home_site_id',16)->delete();
+$service->ensureScope(16,34);
+$check($db->table('symbol_config_tag')->where('home_site_id',16)->count()===0,'Ordinary initialization never silently backfills existing configs');
+$check($service->backfillTagRelations(16)===2,'Explicit backfill writes missing site associations');
+$check($service->backfillTagRelations(16,34)===2,'Explicit backfill writes missing merchant associations');
+$check($service->backfillTagRelations(16)===0 && $service->backfillTagRelations(16,34)===0,'Explicit backfill is idempotent');
+$backfilled=$service->query(16,34)->where('symbol','BTCUSDT')->sole();
+$service->update(16,34,$backfilled->id,['tags'=>[]]);
+$rulesBefore=json_encode($db->table('symbol_config_tag')->where('home_site_id',16)->orderBy('id')->get());
+$check($service->backfillTagRelations(16,34)===0 && $tags(16,34,$backfilled)===[],'Explicit detach rules are not overwritten by backfill');
+$check($rulesBefore===json_encode($db->table('symbol_config_tag')->where('home_site_id',16)->orderBy('id')->get()),'Backfill preserves existing rule IDs and values');
+$check($service->backfillTagRelations(0)===0,'Backfill does not modify platform relations');
 $foreignTag=$db->table('symbol_tag')->where('home_site_id',11)->where('agent_id',21)->value('id');
 try { $service->update(10,20,$merchant->id,['tags'=>[$foreignTag]]); throw new RuntimeException('Foreign tag accepted'); }
 catch (DomainException $e) { $check(true,'Foreign tags rejected'); }

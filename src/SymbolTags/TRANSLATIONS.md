@@ -1,0 +1,13 @@
+# Shared symbol-tag translations
+
+- `SymbolTagTranslations` owns language validation, draft metadata, scoped tag ownership and transactional writes to the existing `symbol_tag_translation` table. It keeps `tag_name`, `tag_name_zh` and `tag_name_en` synchronized. A full language draft replaces the existing translations; blank values remove those translations. No schema migration is required.
+- `forScope(site, agent)` selects `symbol_tag`; platform uses `(0,0)`, white label uses its authorized site and agent `0`, merchants use their authorized site/main agent. Scope comes from the host, never the request body. Legacy Agent callers without `forScope` still use `agent_symbol_tag` and `agent_symbol_tag_id`.
+- Reads and manual saves do not resolve Google credentials. Only automatic translation calls the host runtime loader after checking ownership. The returned translations are previews, not writes.
+- Agent retains `agent_translation_config` and its existing cipher. Platform's new tag adapter uses the same `cms.spaces` default template / `cms.translation_settings` credential as its existing CMS/SEO platform configuration. A corrupt encrypted credential never falls back to an environment key.
+- `Cms\PlainTextTranslator` and `Cms\GoogleTranslationClient` are shared by SEO and tags. Tag batches have bounded concurrency, individual failure reporting and safe errors; provider response bodies and keys are not returned. CMS HTML/job translation keeps its existing worker and uses the same underlying Google client.
+- Platform new routes require `symbol_tag:add` or `symbol_tag:edit` to load/preview, and `symbol_tag:edit` to save existing translations. Create/edit accept optional `translations`, saved in the same database transaction as the tag. Product category publication retains the existing safe-publication behavior after commit.
+- Shared UI adapters use `MmMultilingualFields`: one name field for tags, title/description for SEO. Credentials/settings remain host-specific. Editing/translation is draft-only until Apply, then the normal save action persists it. CMS full-page job management remains separate.
+
+Verification: `php tests/tag_translations.php`; Agent `AgentSymbolTagTranslationServiceTest`, `SymbolTagControllerTest`, `WhiteLabelSeoTest`; Platform `SymbolTagTranslationsTest`, `SymbolTagTranslationPersistenceTest`, `SharedSymbolTagManagerTest`, `TenantSeoConfigTest`; UI multilingual fields/tag adapters, symbol tag manager and SEO tests. All HTTP is faked and databases isolated during tests.
+
+Source-only: no dependency upgrade, vendor edits, migration, package release, or real Google/Redis requests.

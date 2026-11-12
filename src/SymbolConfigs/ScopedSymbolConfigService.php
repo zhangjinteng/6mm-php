@@ -27,7 +27,7 @@ final class ScopedSymbolConfigService
         return $this->db->table('symbol_config')->where('home_site_id', $siteId)->where('agent_id', $agentId);
     }
 
-    /** No inherited preference, public parameter or tag relation is copied into a new row. */
+    /** New rows inherit scalar values and receive their own initial tag relations. */
     public function ensureScope(int $siteId, int $agentId = 0): void
     {
         $this->validateScope($siteId, $agentId);
@@ -39,6 +39,7 @@ final class ScopedSymbolConfigService
             $this->ensureTags($siteId, $agentId);
             if ($emptyScope && $agentId > 0) $this->importLegacyTags($siteId, $agentId);
             $existing = $this->query($siteId, $agentId)->get()->keyBy('base_config_id');
+            $created = [];
             foreach ($this->query(0)->whereNull('deleted_at')->orderBy('id')->get(['id','symbol']) as $root) {
                 if ($existing->has($root->id)) continue;
                 // Do not silently rewrite an existing incompatible ownership/reference.
@@ -51,7 +52,58 @@ final class ScopedSymbolConfigService
                 ]);
                 $row = $this->query($siteId, $agentId)->where('id',$id)->first();
                 $this->importLegacyConfig($row, (int)$root->id);
+                $created[] = $row;
             }
+            $this->initializeTagRelations($siteId, $agentId, $created);
+        });
+    }
+
+    private function initializeTagRelations(int $siteId, int $agentId, array $rows): void
+    {
+        if ($rows === []) return;
+        $baseIds = array_map(static fn ($row) => (int)$row->base_config_id, $rows);
+        $parentRows = $agentId > 0
+            ? $this->query($siteId)->whereIn('base_config_id', $baseIds)->whereNull('deleted_at')->get()->all()
+            : $this->query(0)->whereIn('id', $baseIds)->whereNull('deleted_at')->get()->all();
+        $parentTags = $this->tagsFor($agentId > 0 ? $siteId : 0, 0, $parentRows);
+        $parents = [];
+        foreach ($parentRows as $parent) $parents[(int)($parent->base_config_id ?: $parent->id)] = $parent;
+        [, $catalog] = $this->tagCatalog($siteId, $agentId);
+        $assigned = $this->db->table('symbol_config_tag')->whereIn('symbol_config_id',
+            array_map(static fn ($row) => (int)$row->id, $rows))->pluck('symbol_config_id')->all();
+        $assigned = array_fill_keys($assigned, true);
+        foreach ($rows as $row) {
+            // Legacy migration has already preserved this merchant's explicit selection.
+            if (isset($assigned[(int)$row->id])) continue;
+            $parent = $parents[(int)$row->base_config_id] ?? null;
+            foreach ($parentTags[(int)($parent->id ?? 0)] ?? [] as $tag) {
+                $local = $catalog[(int)($tag->base_tag_id ?: $tag->id)] ?? null;
+                if (!$local || (int)$local->home_site_id !== $siteId || (int)$local->agent_id !== $agentId) {
+                    throw new DomainException('合约标签本层关联不存在，请核查后重试');
+                }
+                $this->insertRule($row, (int)$local->id, true);
+            }
+        }
+    }
+
+    /** Explicit backfill only; ordinary ensureScope must preserve a tags=NULL reset. */
+    public function backfillTagRelations(int $siteId, int $agentId = 0): int
+    {
+        $this->validateScope($siteId, $agentId);
+        if ($siteId === 0) return 0;
+        return $this->db->transaction(function () use ($siteId, $agentId): int {
+            $this->ensureScope($siteId, $agentId);
+            $rows = $this->query($siteId, $agentId)->whereNull('deleted_at')->whereNotNull('base_config_id')
+                ->whereNotExists(function ($query): void {
+                    $query->selectRaw('1')->from('symbol_config_tag as rule')
+                        ->whereColumn('rule.symbol_config_id', 'symbol_config.id')
+                        ->whereColumn('rule.home_site_id', 'symbol_config.home_site_id')
+                        ->whereColumn('rule.agent_id', 'symbol_config.agent_id');
+                })->get()->all();
+            $rules = fn () => $this->db->table('symbol_config_tag')->where('home_site_id', $siteId)->where('agent_id', $agentId)->count();
+            $before = $rules();
+            $this->initializeTagRelations($siteId, $agentId, $rows);
+            return $rules() - $before;
         });
     }
 

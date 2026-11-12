@@ -49,22 +49,13 @@ final class SeoTranslationService
             ? $this->db->table('cms.translation_settings')->where('id', $configuration->translation_setting_id)->first() : null;
         try { $google = $this->google->withApiKey((new TranslationCredential())->resolve($setting)); }
         catch (Throwable) { $this->reject('翻译密钥不可用，请联系管理员检查翻译配置'); }
-        $values = $errors = [];
-        // Preview only: the SEO save endpoint remains the sole writer of translated copy.
-        foreach ($input['fields'] as $field => $source) {
-            if (!in_array($field, ['title', 'description'], true) || trim($source) === '') $this->reject('翻译字段或原文不正确');
-            try {
-                $value = trim($google->translate($source, $from, $to, false, max(1, min(60, (int) $settings['request_timeout_seconds']))));
-                if ($value === '' || mb_strlen($value) > ($field === 'title' ? 200 : 1000)) {
-                    $errors[$field] = '译文为空或超出字段长度限制，请手动调整';
-                } else {
-                    $values[$field] = $value;
-                }
-            } catch (Throwable $e) {
-                $errors[$field] = 'Google 翻译失败，请重试或检查服务配置';
-            }
-        }
-        return ['target_locale' => $to, 'values' => (object) $values, 'errors' => (object) $errors];
+        // Preview only; the SEO save endpoint remains the sole writer.
+        try {
+            $result = (new \SixMm\Shared\Cms\PlainTextTranslator($google))->fields(
+                $input['fields'], ['title' => 200, 'description' => 1000], $from, $to,
+                max(1, min(60, (int) $settings['request_timeout_seconds'])));
+        } catch (\InvalidArgumentException) { $this->reject('翻译字段或原文不正确'); }
+        return ['target_locale' => $to, 'values' => (object) $result['values'], 'errors' => (object) $result['errors']];
     }
 
     private function reject(string $message): never

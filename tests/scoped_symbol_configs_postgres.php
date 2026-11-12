@@ -39,6 +39,14 @@ $db->table('symbol_config_tag')->insert(['symbol_config_id'=>$rootId,'symbol_tag
 $service=new ScopedSymbolConfigService($db);
 $service->ensureScope(10,20);
 $site=$service->query(10)->sole(); $merchant=$service->query(10,20)->sole();
+foreach ([$site,$merchant] as $row) {
+    $rule=$db->table('symbol_config_tag')->where('symbol_config_id',$row->id)->sole();
+    $tag=$db->table('symbol_tag')->where('id',$rule->symbol_tag_id)->sole();
+    if (!$rule->is_attached || $rule->home_site_id!==$row->home_site_id || $rule->agent_id!==$row->agent_id
+        || $tag->home_site_id!==$row->home_site_id || $tag->agent_id!==$row->agent_id || $tag->base_tag_id!==$tagId) {
+        throw new RuntimeException('Initial tag relation must use local config and tag IDs');
+    }
+}
 if ($merchant->is_visible!==null || $merchant->is_active!==null || $merchant->version!==null || $merchant->liquidation_fee!==null) {
     throw new RuntimeException('Initialization must keep preferences and public fields NULL');
 }
@@ -60,6 +68,14 @@ $service->update(10,20,$merchant->id,['tags'=>null,'is_visible'=>null,'is_active
 $effective=$service->effectiveQuery(10,20)->sole();
 if ($effective->is_visible!==true || $effective->is_active!==1 || count($service->tagsFor(10,20,[$merchant])[$merchant->id])!==1) {
     throw new RuntimeException('Resetting inheritance failed');
+}
+if ($service->backfillTagRelations(10,20)!==1 || $service->backfillTagRelations(10,20)!==0) {
+    throw new RuntimeException('Explicit tag backfill must write once with PostgreSQL scope matching');
+}
+$rule=$db->table('symbol_config_tag')->where('symbol_config_id',$merchant->id)->sole();
+$localTag=$db->table('symbol_tag')->where('id',$rule->symbol_tag_id)->sole();
+if (!$rule->is_attached || $localTag->home_site_id!==10 || $localTag->agent_id!==20) {
+    throw new RuntimeException('Backfill must point to local tags');
 }
 if ($schema!==$fingerprint()) throw new RuntimeException('Service modified upstream schema');
 echo "PostgreSQL sparse config: NULL storage, boolean inheritance, tag detach/reset, root-only public parameters and unchanged schema passed\n";
