@@ -17,7 +17,8 @@ final class FeeLevelBatch
             }
             return ['level'=>(int)$row['level'],'home_site_id'=>(int)$row['home_site_id'] === 0 ? '' : (string)$row['home_site_id'],
                 'agent_id'=>(string)$row['agent_id'],'maker_fee_rate'=>(string)$row['maker_fee_rate'],
-                'taker_fee_rate'=>(string)$row['taker_fee_rate'],'version'=>(string)$version];
+                'taker_fee_rate'=>(string)$row['taker_fee_rate'],'version'=>(string)($row['tk_version'] ?? $version),
+                'command_id'=>(string)($row['command_id'] ?? random_int(1_000_000_000_000_000_000,8_999_999_999_999_999_999))];
         },$rows)];
     }
 

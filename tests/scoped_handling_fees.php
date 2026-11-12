@@ -42,7 +42,7 @@ $service->ensureScope(11,21);
 $check($platform === $service->query(0)->get()->toJson(), 'Platform rows unchanged');
 $check($service->query(11,21)->where('level',0)->value('maker_fee_rate') === '0.0002', 'Other site isolated');
 $service->query(10,20)->where('level',1)->update(['deleted_at'=>'2026-11-12']);
-$check(count($service->ensureScope(10,20)) === 1, 'Soft-deleted tier can be repaired without touching remaining tiers');
+$check(count($service->ensureScope(10,20)) === 1, 'Legacy soft-deleted default without a confirmed CRUD deletion can be repaired');
 try { $service->ensureScope(0,20); throw new RuntimeException('Invalid scope accepted'); }
 catch (InvalidArgumentException $e) { $check(true, 'Invalid merchant scope rejected'); }
 

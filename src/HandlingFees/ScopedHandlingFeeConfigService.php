@@ -36,6 +36,12 @@ final class ScopedHandlingFeeConfigService
             if ($platform->isEmpty() || !$platform->has(0)) throw new DomainException('平台手续费配置不完整，请先配置普通会员及 VIP 费率');
             $parents = $agent > 0 ? $this->query($site)->lockForUpdate()->get()->keyBy('level') : collect();
             $existing = $this->query($site,$agent)->lockForUpdate()->pluck('level')->all();
+            // A confirmed CRUD deletion is intentional; legacy missing/default rows remain repairable.
+            if ($this->db->getSchemaBuilder()->hasTable(HandlingFeeOperationSchema::TABLE)) {
+                $deleted = $this->db->table(HandlingFeeOperationSchema::TABLE)->where('home_site_id',$site)
+                    ->where('agent_id',$agent)->where('action','delete')->where('status','applied')->pluck('level')->all();
+                $existing = array_merge($existing,$deleted);
+            }
             $created = [];
             foreach ($platform as $level => $base) {
                 if (in_array((int)$level,array_map('intval',$existing),true)) continue;
@@ -52,15 +58,22 @@ final class ScopedHandlingFeeConfigService
     }
 
     /** SQL rolls back on transport/rejection/incomplete confirmation; external TK writes cannot. */
-    public function initialize(int $site, int $agent, callable $publish): array
+    public function initialize(int $site, int $agent, callable $publish, ?callable $journal = null): array
     {
-        return $this->db->transaction(function () use ($site,$agent,$publish): array {
+        return $this->db->transaction(function () use ($site,$agent,$publish,$journal): array {
             $created = $this->ensureScope($site,$agent);
             if ($created !== []) {
-                $payload = FeeLevelBatch::payload($created);
+                $identity = array_map(static fn ($r) => array_intersect_key($r,array_flip([
+                    'home_site_id','agent_id','level','maker_fee_rate','taker_fee_rate'])),$created);
+                $factory = static fn () => FeeLevelBatch::payload($created);
+                $payload = $journal ? $journal(hash('sha256',json_encode($identity,JSON_THROW_ON_ERROR)),$factory) : $factory();
                 try { FeeLevelBatch::confirm($payload, $publish($payload)); }
                 catch (\Throwable $e) {
                     throw new DomainException('手续费同步失败，本地修改将回滚；TK 可能已部分生效，请核对后重试',0,$e);
+                }
+                if ($this->db->getSchemaBuilder()->hasColumn('handling_fee_level_config','tk_version')) {
+                    foreach ($payload['items'] as $item) $this->query($site,$agent)->where('level',$item['level'])
+                        ->update(['tk_version'=>$item['version']]);
                 }
             }
             return $created;

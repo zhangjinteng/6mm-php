@@ -40,6 +40,7 @@
     },
     "scripts": {
         "test": [
+            "@php tests/handling_fee_crud.php",
             "@php tests/scoped_handling_fees.php",
             "@php tests/config_redis.php",
             "@php tests/theme_redis.php",
