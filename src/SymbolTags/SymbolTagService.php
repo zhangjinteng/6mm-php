@@ -10,6 +10,8 @@ use Illuminate\Database\Query\Builder;
 
 final class SymbolTagService
 {
+    private ?\Closure $symbolCounts;
+
     public function __construct(
         private ConnectionInterface $connection,
         private string $tagTable = 'symbol_tag',
@@ -18,8 +20,10 @@ final class SymbolTagService
         private string $relationSymbolColumn = 'symbol_config_id',
         private ?int $ownerId = null,
         private string $ownerColumn = 'agent_id',
-        private array $scope = []
+        private array $scope = [],
+        ?callable $symbolCounts = null
     ) {
+        $this->symbolCounts = $symbolCounts === null ? null : \Closure::fromCallable($symbolCounts);
     }
 
     /** @return list<array<string, mixed>> */
@@ -107,6 +111,12 @@ final class SymbolTagService
             ->values()
             ->all();
 
+        if ($this->symbolCounts !== null) {
+            $counts = ($this->symbolCounts)();
+            foreach ($rows as &$row) $row['symbol_count'] = (int) ($counts[$row['id']] ?? 0);
+            unset($row);
+        }
+
         return [
             'lists' => $rows,
             'count' => count($rows),
@@ -125,7 +135,9 @@ final class SymbolTagService
             throw SymbolTagException::because(SymbolTagException::NOT_FOUND);
         }
 
-        return $this->serialize($row, true);
+        $data = $this->serialize($row, true);
+        if ($this->symbolCounts !== null) $data['symbol_count'] = (int) (($this->symbolCounts)()[$id] ?? 0);
+        return $data;
     }
 
     /** @param array<string, mixed> $input @return array<string, mixed> */
@@ -170,7 +182,7 @@ final class SymbolTagService
             $relations = $this->connection->table($this->relationTable)
                 ->where($this->relationTagColumn, $id);
             $this->applyOwnerScope($relations);
-            if ($relations->exists()) {
+            if ($relations->exists() || ($this->symbolCounts !== null && (($this->symbolCounts)()[$id] ?? 0) > 0)) {
                 throw SymbolTagException::because(SymbolTagException::IN_USE);
             }
 
@@ -278,7 +290,7 @@ final class SymbolTagService
 
         if ($parentId === false || $sort === false || !in_array($enabled, [0, 1], true)
             || $name === '' || $this->textLength($name) > 100
-            || !preg_match('/^[a-z0-9_]{1,64}$/', $code)
+            || !preg_match('/^[a-z0-9_][a-z0-9_-]{0,63}$/', $code)
             || $this->textLength($nameZh) > 100 || $this->textLength($nameEn) > 100) {
             throw SymbolTagException::because(SymbolTagException::INVALID_PARAMETERS);
         }

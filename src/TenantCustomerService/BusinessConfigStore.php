@@ -9,7 +9,7 @@ use SixMm\Shared\TenantConfig\ConfigSnapshotWriter;
 
 final class BusinessConfigStore
 {
-    public function __construct(private CustomerServiceContext $host) {}
+    public function __construct(private CustomerServiceContext $host, private ?\Closure $initializeContract = null) {}
 
     private const MODULES = ['contract', 'seconds', CustomerService::MODULE];
 
@@ -164,6 +164,14 @@ final class BusinessConfigStore
             if (array_key_exists(CustomerService::MODULE, $input['modules'])) $this->assertCustomerClassification((string) $site->site_id);
             if (($input['modules'][CustomerService::MODULE] ?? false) === true && !(new CustomerService($this->host))->bound((string) $input['tenant_id'])) $this->reject('客服账号尚未绑定，不能开启业务');
             if (array_key_exists(CustomerService::MODULE, $input['modules'])) $this->assertSingleCustomerSite((string)$input['tenant_id']);
+            foreach ($input['modules'] as $code => $enabled) {
+                if (!in_array($code, self::MODULES, true) || !is_bool($enabled)) $this->reject('模块参数无效');
+            }
+            if (($input['modules']['contract'] ?? false) === true && !in_array('contract', $target->entitlements, true)) {
+                if ($this->initializeContract === null) $this->reject('合约经营范围登记服务未配置');
+                try { ($this->initializeContract)((int) $site->site_id); }
+                catch (\Throwable $e) { $this->reject($e->getMessage()); }
+            }
             foreach ($input['modules'] as $code => $enabled) {
                 if (!in_array($code, self::MODULES, true) || !is_bool($enabled)) $this->reject('模块参数无效');
                 if (in_array($code, $target->entitlements, true) === $enabled) continue;

@@ -174,6 +174,21 @@ final class ScopedSymbolConfigService
         return $result;
     }
 
+    /** Count each non-deleted scoped contract once per effective tag, including inherited assignments. */
+    public function tagCounts(int $siteId, int $agentId = 0): array
+    {
+        $counts = [];
+        $baseIds = array_fill_keys($this->query(0)->whereNull('deleted_at')->pluck('id')->all(), true);
+        $this->query($siteId, $agentId)->whereNull('deleted_at')->orderBy('id')->chunkById(500,
+            function ($rows) use ($siteId, $agentId, $baseIds, &$counts): void {
+                $rows = $rows->filter(static fn ($row) => isset($baseIds[(int) ($row->base_config_id ?: $row->id)]));
+                foreach ($this->tagsFor($siteId, $agentId, $rows->all()) as $tags) {
+                    foreach ($tags as $tag) $counts[(int) $tag->id] = ($counts[(int) $tag->id] ?? 0) + 1;
+                }
+            });
+        return $counts;
+    }
+
     private function saveTagSelection(object $row, mixed $input): void
     {
         if (!is_array($input) || count($input)>100) throw new DomainException('标签参数有误');
