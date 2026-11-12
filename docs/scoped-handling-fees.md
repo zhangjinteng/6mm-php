@@ -1,6 +1,6 @@
 # 白标、主商户手续费初始化
 
-本变更只提供源码和迁移，不发布共享包、不升级宿主依赖、不修改配置中的数据库。
+初始化功能复用已有表结构，不再提供手续费归属改表迁移；不修改配置中的数据库。
 
 ## 归属与复制
 
@@ -16,11 +16,11 @@
 
 1. 审核并备份原表；核查旧记录的商户站点归属、有效重复等级、约束和引用依赖。
 2. 共享包应包含 `HandlingFeeScope`、`ScopedHandlingFeeConfigService`、`FeeLevelBatch` 和范围化的查询/修改服务，两个宿主使用同一实现。不要只部署宿主而遗漏共享包，否则会出现类不存在。
-3. 使用任一宿主的 `database/migrations/2026_11_12_180000_scope_handling_fee_levels.php`。两份迁移同名且 SQL 一致，共享数据库只需执行一次；SQL 自包含，不依赖尚未发布的共享迁移类。迁移只调整结构/旧归属，不批量创建白标或商户费率，也不调用 TK。
+3. 复用现有 `handling_fee_level_config`：`home_site_id`、`agent_id` 为非空且默认 0，未删除记录按 `(home_site_id, agent_id, level)` 唯一。已有归属约束和唯一索引保持不动，不因名称不同重复创建；上线前核对旧数据归属，本功能不自动回填归属或改表。
 4. 验证 TK 当前版本及 `admin`、`agent_admin` 服务身份可调用带范围的 `BatchUpdateFeeLevelConfig`；本次自动测试使用假传输，未连接实际 TK。
 5. 在测试环境验证开户、修改补缺、重复保存、跨站拒绝、TK 超时与部分失败后再部署。不要在旧结构上启用新查询（新查询依赖两个归属字段）。
 
-迁移为 PostgreSQL：缺少的归属字段补默认 0；旧商户记录从 `agents` 补所属站点；归属不明或有效等级重复会报错并回滚，不删除数据。旧全局/商户等级唯一约束替换为有效范围唯一索引；依赖外键导致无法替换时停止，不使用 CASCADE。`down()` 不自动删除租户归属数据，回滚需要专项方案。
+手续费归属迁移、配套 SQL 和迁移专用测试已移除。若其他环境缺少上述结构，需先单独核对，不要直接启用依赖这些字段的业务代码。
 
 ## 边界与风险
 
@@ -34,4 +34,3 @@
 - 共享：`php tests/scoped_handling_fees.php`、`php tests/run.php`。
 - Platform：`HandlingFeeBatchResultTest`、`HandlingFeeScopeInitializerTest`、`AgentAccountCreateTest`、`TenantAccountTest` 的 fee 测试及 VIP 查询回归。
 - Agent：`HandlingFeeAccountInitializationTest`。
-- PostgreSQL 迁移：在显式独占的 `scoped_fee_test` 临时库中运行 `ScopedHandlingFeeMigrationTest`（通过 `SCOPED_FEE_TEST_DSN` 提供 DSN）。测试不读取应用 `.env`，每例回滚。

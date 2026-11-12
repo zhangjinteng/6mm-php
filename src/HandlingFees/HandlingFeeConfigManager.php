@@ -15,12 +15,14 @@ final class HandlingFeeConfigManager
     private Closure $rpc;
     private Closure $commandId;
     private ScopedHandlingFeeConfigService $scoped;
+    private ?HandlingFeeOperationStore $store;
 
-    public function __construct(private ConnectionInterface $db, callable $rpc, ?callable $commandId = null)
+    public function __construct(private ConnectionInterface $db, callable $rpc, ?callable $commandId = null, ?HandlingFeeOperationStore $operations = null)
     {
         $this->rpc = Closure::fromCallable($rpc);
         $this->commandId = Closure::fromCallable($commandId ?? static fn (): string => (string) random_int(1_000_000_000_000_000_000, 8_999_999_999_999_999_999));
         $this->scoped = new ScopedHandlingFeeConfigService($db);
+        $this->store = $operations;
     }
 
     public function listing(int $site, int $agent, int $page = 1, int $size = 20): array
@@ -29,9 +31,9 @@ final class HandlingFeeConfigManager
         foreach ($rows as &$row) $row['volume_30d_min'] = $row['level'] === 0 ? '0' : $row['volume_30d'];
         unset($row);
         $page = max(1, $page); $size = min(100, max(1, $size));
-        $pending = $this->operations($site, $agent)->whereIn('status', ['prepared', 'unknown'])->first(['id', 'request_id', 'action', 'error']);
+        $pending = $this->journal()->pending($site, $agent);
         return ['lists' => array_slice($rows, ($page - 1) * $size, $size), 'count' => count($rows),
-            'page' => $page, 'limit' => $size, 'pending_operation' => $pending ? (array) $pending : null,
+            'page' => $page, 'limit' => $size, 'pending_operation' => $pending ? array_intersect_key($pending, array_flip(['id', 'request_id', 'action', 'error'])) : null,
             'scope' => ['home_site_id' => (string) $site, 'agent_id' => (string) $agent]];
     }
 
@@ -85,52 +87,82 @@ final class HandlingFeeConfigManager
         $this->scoped->query($site, $agent);
         if (!in_array($action, ['create', 'update', 'delete'], true)) throw new InvalidArgumentException('无效的手续费操作');
         $requestId = (string) ($input['request_id'] ?? '');
-        if (!preg_match('/^[A-Za-z0-9_-]{16,64}$/D', $requestId)) throw new InvalidArgumentException('缺少有效的操作编号，请重新打开弹窗');
+        if (!preg_match('/^[A-Za-z0-9_-]{16,80}$/D', $requestId)) throw new InvalidArgumentException('缺少有效的操作编号，请重新打开弹窗');
         $id = filter_var($input['id'] ?? 0, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]);
         if ($id === false || ($action !== 'create' && $id === 0)) throw new InvalidArgumentException('无效的手续费等级');
         $values = $action === 'delete' ? [] : $this->values($input);
         $intent = hash('sha256', json_encode([$action, $id, $values], JSON_THROW_ON_ERROR));
-        $op = $this->db->transaction(function () use ($site, $agent, $action, $requestId, $id, $values, $intent, $operator): array {
-            $this->scoped->lock();
-            $existing = $this->operations($site, $agent)->where('request_id', $requestId)->first();
+        return $this->journal()->withScopeLock($site, $agent, function () use ($site, $agent, $action, $requestId, $id, $values, $intent, $operator): array {
+            $existing = $this->journal()->byRequest($site, $agent, $requestId);
             if ($existing) {
-                if ($existing->intent_hash !== $intent) throw new DomainException('操作编号已用于其他请求，请勿修改原请求后重试');
-                return (array) $existing;
+                if ($existing['intent_hash'] !== $intent) throw new DomainException('操作编号已用于其他请求，请勿修改原请求后重试');
+                return $this->execute($existing);
             }
-            if ($this->operations($site, $agent)->whereIn('status', ['prepared', 'unknown'])->exists()) {
-                throw new DomainException('当前范围有结果待确认的手续费操作，请先重试原操作');
+            // A terminal receipt expires after seven days. Its old request must not become a new command.
+            if (!preg_match('/^fee-([0-9]{13})-[A-Za-z0-9_-]{16,44}$/D', $requestId, $match)
+                || (int) $match[1] < ($this->journal()->now() - HandlingFeeOperationStore::RETENTION_SECONDS) * 1000
+                || (int) $match[1] > ($this->journal()->now() + 300) * 1000) {
+                throw new InvalidArgumentException('操作编号已过期或无效，请重新打开弹窗');
             }
-            $before = $action === 'create' ? null : $this->detail($site, $agent, $id);
-            $level = $before['level'] ?? $this->nextLevel($site, $agent)['level'];
-            if ($action === 'delete' && $level === 0) throw new DomainException('普通会员等级不能删除');
-            if ($action !== 'delete') $this->validateThreshold($site, $agent, $level, $values['volume_30d']);
-            $version = (string) ($before['tk_version'] ?? '0');
-            if ($version === '0') $version = $this->remoteVersion($site, $agent, $level);
-            if ($action === 'delete' && bccomp($version, '0') <= 0) throw new DomainException('TK 中未找到当前层等级，请先核对同步状态');
-            $payload = ['level' => $level, 'home_site_id' => $site === 0 ? '' : (string) $site,
-                'agent_id' => (string) $agent, 'command_id' => (string) ($this->commandId)(),
-                'version' => $action === 'delete' ? $version : (string) max((int) $version + 1, (int) (microtime(true) * 1_000_000))];
-            if ($action !== 'delete') $payload += array_intersect_key($values, array_flip(['maker_fee_rate', 'taker_fee_rate']));
-            $method = $action === 'delete' ? 'DeleteFeeLevelConfig' : 'BatchUpdateFeeLevelConfig';
-            if ($action !== 'delete') $payload = ['items' => [$payload]];
-            $record = ['id' => bin2hex(random_bytes(16)), 'home_site_id' => $site, 'agent_id' => $agent,
-                'request_id' => $requestId, 'action' => $action, 'level' => $level, 'intent_hash' => $intent,
-                'method' => $method, 'payload' => json_encode($payload, JSON_THROW_ON_ERROR),
-                'values' => json_encode($values, JSON_THROW_ON_ERROR), 'before' => $before === null ? null : json_encode($before, JSON_THROW_ON_ERROR),
-                'status' => 'prepared', 'operator' => $operator, 'created_at' => $this->now(), 'updated_at' => $this->now()];
-            $this->db->table(HandlingFeeOperationSchema::TABLE)->insert($record);
-            return $record;
+            if ($this->journal()->pending($site, $agent)) throw new DomainException('当前范围有结果待确认的手续费操作，请先重试原操作');
+            $op = $this->db->transaction(function () use ($site, $agent, $action, $requestId, $id, $values, $intent, $operator): array {
+                $this->scoped->lock();
+                $before = $action === 'create' ? null : $this->detail($site, $agent, $id);
+                $level = $before['level'] ?? $this->nextLevel($site, $agent)['level'];
+                if ($action === 'delete' && $level === 0) throw new DomainException('普通会员等级不能删除');
+                if ($action !== 'delete') $this->validateThreshold($site, $agent, $level, $values['volume_30d']);
+                $version = (string) ($before['tk_version'] ?? '0');
+                if ($version === '0') $version = $this->remoteVersion($site, $agent, $level);
+                if ($action === 'delete' && bccomp($version, '0') <= 0) throw new DomainException('TK 中未找到当前层等级，请先核对同步状态');
+                $payload = ['level' => $level, 'home_site_id' => $site === 0 ? '' : (string) $site,
+                    'agent_id' => (string) $agent, 'command_id' => (string) ($this->commandId)(),
+                    'version' => $action === 'delete' ? $version : (string) max((int) $version + 1, (int) (microtime(true) * 1_000_000))];
+                if ($action !== 'delete') $payload += array_intersect_key($values, array_flip(['maker_fee_rate', 'taker_fee_rate']));
+                $method = $action === 'delete' ? 'DeleteFeeLevelConfig' : 'BatchUpdateFeeLevelConfig';
+                if ($action !== 'delete') $payload = ['items' => [$payload]];
+                return ['id' => bin2hex(random_bytes(16)), 'home_site_id' => $site, 'agent_id' => $agent,
+                    'request_id' => $requestId, 'action' => $action, 'level' => $level, 'intent_hash' => $intent,
+                    'method' => $method, 'payload' => json_encode($payload, JSON_THROW_ON_ERROR),
+                    'values' => json_encode($values, JSON_THROW_ON_ERROR), 'before' => $before === null ? null : json_encode($before, JSON_THROW_ON_ERROR),
+                    'status' => 'prepared', 'operator' => $operator, 'created_at' => $this->now(), 'updated_at' => $this->now()];
+            });
+            // This write must succeed before any TK mutation is sent.
+            return $this->execute($this->journal()->save($op));
         });
-        return $this->execute($op);
     }
 
-    /** Exact persisted retry; no new command, version or payload is generated. */
+    public function operation(int $site, int $agent, string $id): ?array
+    {
+        $this->scoped->query($site, $agent);
+        return $this->journal()->get($site, $agent, $id);
+    }
+
+    /** Exact persisted retry, including pending operations older than seven days. */
     public function retry(int $site, int $agent, string $operationId): array
     {
         $this->scoped->query($site, $agent);
-        $op = $this->operations($site, $agent)->where('id', $operationId)->first();
-        if (!$op) throw new DomainException('同步操作不存在或不属于当前账户');
-        return $this->execute((array) $op);
+        return $this->journal()->withScopeLock($site, $agent, function () use ($site, $agent, $operationId): array {
+            $op = $this->operation($site, $agent, $operationId);
+            if (!$op) throw new DomainException('同步操作不存在、已过期或不属于当前账户');
+            return $this->execute($op);
+        });
+    }
+
+    public function vipPendingOperations(): array { return $this->journal()->vipPending(); }
+
+    public function markVipRecalculated(array $operations): void
+    {
+        foreach ($operations as $snapshot) {
+            $site = (int) $snapshot['home_site_id']; $agent = (int) $snapshot['agent_id'];
+            $this->journal()->withScopeLock($site, $agent, function () use ($snapshot, $site, $agent): void {
+                $op = $this->journal()->get($site, $agent, $snapshot['id']);
+                if (!$op || $op['status'] !== 'applied') throw new DomainException('手续费重算操作记录缺失或状态异常');
+                if (empty($op['vip_recalculated_at'])) {
+                    $op['vip_recalculated_at'] = $this->now();
+                    $this->journal()->save($op);
+                }
+            });
+        }
     }
 
     private function execute(array $op): array
@@ -139,55 +171,89 @@ final class HandlingFeeConfigManager
         if ($op['status'] === 'rejected') throw new DomainException($op['error']);
         $payload = json_decode($op['payload'], true, 512, JSON_THROW_ON_ERROR);
         try {
-            $response = $this->normalize(($this->rpc)($op['method'], $payload));
-            $items = $op['action'] === 'delete' ? [$response] : ($response['results'] ?? []);
-            foreach ($items as $item) {
+            if ($op['status'] === 'confirmed') {
+                $response = json_decode($op['response'], true, 512, JSON_THROW_ON_ERROR);
+            } else {
+                $response = $this->normalize(($this->rpc)($op['method'], $payload));
+                if ($op['action'] !== 'delete') {
+                    $items = $response['results'] ?? [];
+                    $expected = $payload['items'][0];
+                    if (count($items) !== 1 || (int) ($items[0]['level'] ?? -1) !== $expected['level']
+                        || (string) ($items[0]['home_site_id'] ?? '') !== $expected['home_site_id']
+                        || (string) ($items[0]['agent_id'] ?? 0) !== $expected['agent_id']) {
+                        throw new DomainException('TK 手续费操作回执不完整或归属不符');
+                    }
+                    $item = $items[0];
+                } else $item = $response;
                 $code = (int) ($item['reject_code'] ?? 0);
                 if ($code !== 0 && $code !== -1) {
                     $message = 'TK 拒绝手续费操作（' . $code . '）：' . ($item['message'] ?? $response['message'] ?? '请核对配置');
-                    $this->updateOperation($op['id'], ['status' => 'rejected', 'error' => $message, 'response' => json_encode($response, JSON_THROW_ON_ERROR)]);
+                    $op = $this->journal()->save(array_replace($op, ['status' => 'rejected', 'error' => $message,
+                        'response' => json_encode($response, JSON_THROW_ON_ERROR)]));
                     throw new HandlingFeeRejected($message);
                 }
                 if ($code === -1) throw new DomainException('TK 返回系统错误，操作结果待确认');
+                if ($op['action'] !== 'delete') FeeLevelBatch::confirm($payload, $response);
+                // Keep the confirmed response before touching SQL. A retry can finish a failed SQL commit without another TK write.
+                $op = $this->journal()->save(array_replace($op, ['status' => 'confirmed', 'response' => json_encode($response, JSON_THROW_ON_ERROR)]));
             }
-            if ($op['action'] !== 'delete') FeeLevelBatch::confirm($payload, $response);
-            return $this->db->transaction(function () use ($op, $payload, $response): array {
-                $this->scoped->lock();
-                $latest = $this->db->table(HandlingFeeOperationSchema::TABLE)->where('id', $op['id'])->lockForUpdate()->first();
-                if ($latest->status === 'applied') return json_decode($latest->result, true, 512, JSON_THROW_ON_ERROR);
-                $values = json_decode($op['values'], true, 512, JSON_THROW_ON_ERROR);
-                $before = $op['before'] === null ? null : json_decode($op['before'], true, 512, JSON_THROW_ON_ERROR);
-                $query = $this->scoped->query((int) $op['home_site_id'], (int) $op['agent_id']);
-                $current = $query->where('level', $op['level'])->first();
-                if (($before === null && $current !== null) || ($before !== null && (!$current || (int) $current->id !== $before['id']
-                    || $this->fingerprint((array) $current) !== $this->fingerprint($before)))) {
-                    throw new DomainException('TK 已确认，但本地等级发生变化，需要核对后重试');
-                }
-                $version = (string) ($payload['items'][0]['version'] ?? $payload['version']);
-                if ($op['action'] === 'delete') {
-                    $this->scoped->query((int) $op['home_site_id'], (int) $op['agent_id'])->where('id', $before['id'])
-                        ->update(['deleted_at' => $this->now(), 'updated_at' => $this->now(), 'tk_version' => $version]);
-                    $result = ['id' => $before['id'], 'level' => (int) $op['level'], 'deleted' => true];
-                } else {
-                    $values += ['home_site_id' => $op['home_site_id'], 'agent_id' => $op['agent_id'], 'level' => $op['level'],
-                        'level_name' => $before['level_name'] ?? ('VIP' . $op['level']), 'tk_version' => $version, 'updated_at' => $this->now()];
-                    if ($before === null) {
-                        $id = $this->db->table('handling_fee_level_config')->insertGetId($values + ['created_at' => $this->now()]);
-                    } else {
-                        $id = $before['id'];
-                        $this->scoped->query((int) $op['home_site_id'], (int) $op['agent_id'])->where('id', $id)->update($values);
-                    }
-                    $result = $this->detail((int) $op['home_site_id'], (int) $op['agent_id'], (int) $id);
-                }
-                $this->updateOperation($op['id'], ['status' => 'applied', 'result' => json_encode($result, JSON_THROW_ON_ERROR),
-                    'response' => json_encode($response, JSON_THROW_ON_ERROR), 'error' => null]);
-                return $result;
-            });
+            $result = $this->applyLocal($op, $payload);
+            // Applied records stay without TTL while VIP recalculation is still outstanding.
+            $this->journal()->save(array_replace($op, ['status' => 'applied', 'result' => json_encode($result, JSON_THROW_ON_ERROR), 'error' => null]));
+            return $result;
         } catch (HandlingFeeRejected $e) { throw $e; }
         catch (Throwable $e) {
-            $this->updateOperation($op['id'], ['status' => 'unknown', 'error' => mb_substr($e->getMessage(), 0, 2000)]);
+            try {
+                $current = $this->journal()->get((int) $op['home_site_id'], (int) $op['agent_id'], $op['id']);
+                if ($current && !in_array($current['status'], ['applied', 'rejected'], true)) {
+                    $this->journal()->save(array_replace($current, ['status' => $current['status'] === 'confirmed' ? 'confirmed' : 'unknown',
+                        'error' => mb_substr($e->getMessage(), 0, 2000)]));
+                }
+            } catch (Throwable) { /* The already persisted original command must never be replaced. */ }
             throw new DomainException('手续费操作结果待确认，请使用原操作重试；不会生成新命令。' . $e->getMessage(), 0, $e);
         }
+    }
+
+    private function applyLocal(array $op, array $payload): array
+    {
+        return $this->db->transaction(function () use ($op, $payload): array {
+            $this->scoped->lock();
+            $values = json_decode($op['values'], true, 512, JSON_THROW_ON_ERROR);
+            $before = $op['before'] === null ? null : json_decode($op['before'], true, 512, JSON_THROW_ON_ERROR);
+            $site = (int) $op['home_site_id']; $agent = (int) $op['agent_id'];
+            $version = (string) ($payload['items'][0]['version'] ?? $payload['version']);
+            $current = $this->scoped->query($site, $agent)->where('level', $op['level'])->first();
+            if ($op['action'] === 'delete') {
+                $deleted = $this->db->table('handling_fee_level_config')->where('home_site_id', $site)->where('agent_id', $agent)
+                    ->where('id', $before['id'])->first();
+                if ($deleted && $deleted->deleted_at !== null && (string) $deleted->tk_version === $version
+                    && $this->fingerprint((array) $deleted) === $this->fingerprint($before)) {
+                    return ['id' => $before['id'], 'level' => (int) $op['level'], 'deleted' => true];
+                }
+            } elseif ($current && (string) ($current->tk_version ?? '') === $version
+                && ($before === null || (int) $current->id === $before['id'])
+                && $this->fingerprint((array) $current) === $this->fingerprint($values + ['level' => $op['level']])) {
+                return $this->detail($site, $agent, (int) $current->id);
+            }
+            if (($before === null && $current !== null) || ($before !== null && (!$current || (int) $current->id !== $before['id']
+                || (string) ($current->tk_version ?? '0') !== (string) ($before['tk_version'] ?? '0')
+                || $this->fingerprint((array) $current) !== $this->fingerprint($before)))) {
+                throw new DomainException('TK 已确认，但本地等级发生变化，需要核对后重试');
+            }
+            if ($op['action'] === 'delete') {
+                $this->scoped->query($site, $agent)->where('id', $before['id'])->update([
+                    'deleted_at' => $this->now(), 'updated_at' => $this->now(), 'tk_version' => $version]);
+                return ['id' => $before['id'], 'level' => (int) $op['level'], 'deleted' => true];
+            }
+            $values += ['home_site_id' => $site, 'agent_id' => $agent, 'level' => $op['level'],
+                'level_name' => $before['level_name'] ?? ('VIP' . $op['level']), 'tk_version' => $version, 'updated_at' => $this->now()];
+            if ($before === null) $id = $this->db->table('handling_fee_level_config')->insertGetId($values + ['created_at' => $this->now()]);
+            else {
+                $id = $before['id'];
+                $this->scoped->query($site, $agent)->where('id', $id)->update($values);
+            }
+            return $this->detail($site, $agent, (int) $id);
+        });
     }
 
     private function remoteVersion(int $site, int $agent, int $level): string
@@ -246,13 +312,9 @@ final class HandlingFeeConfigManager
         foreach (['home_site_id', 'agent_id', 'volume_30d', 'maker_fee_rate', 'taker_fee_rate'] as $key) $row[$key] = (string) $row[$key];
         return $row;
     }
-    private function operations(int $site, int $agent)
-    { return $this->db->table(HandlingFeeOperationSchema::TABLE)->where('home_site_id', $site)->where('agent_id', $agent); }
-    private function updateOperation(string $id, array $values): void
+    private function journal(): HandlingFeeOperationStore
     {
-        $query = $this->db->table(HandlingFeeOperationSchema::TABLE)->where('id', $id);
-        if (($values['status'] ?? '') !== 'applied') $query->where('status', '<>', 'applied');
-        $query->update($values + ['updated_at' => $this->now()]);
+        return $this->store ??= app(HandlingFeeOperationStore::class);
     }
     private function normalize(array $input): array
     {
@@ -263,7 +325,7 @@ final class HandlingFeeConfigManager
         }
         return $result;
     }
-    private function now(): string { return gmdate('Y-m-d H:i:s'); }
+    private function now(): string { return gmdate('Y-m-d H:i:s', $this->journal()->now()); }
 }
 
 final class HandlingFeeRejected extends DomainException {}

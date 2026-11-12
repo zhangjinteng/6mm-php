@@ -8,6 +8,7 @@ function scopedFeeFixture(ConnectionInterface $db): void
     $db->getSchemaBuilder()->create('handling_fee_level_config', static function (Blueprint $t): void {
         $t->id(); $t->bigInteger('home_site_id')->default(0); $t->bigInteger('agent_id')->default(0);
         $t->integer('level'); $t->string('level_name');
+        $t->bigInteger('tk_version')->nullable();
         $t->decimal('volume_30d',20,2);
         foreach (['maker_fee_rate','taker_fee_rate'] as $field) $t->string($field);
         $t->timestamps(); $t->softDeletes();

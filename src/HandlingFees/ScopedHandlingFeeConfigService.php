@@ -37,9 +37,10 @@ final class ScopedHandlingFeeConfigService
             $parents = $agent > 0 ? $this->query($site)->lockForUpdate()->get()->keyBy('level') : collect();
             $existing = $this->query($site,$agent)->lockForUpdate()->pluck('level')->all();
             // A confirmed CRUD deletion is intentional; legacy missing/default rows remain repairable.
-            if ($this->db->getSchemaBuilder()->hasTable(HandlingFeeOperationSchema::TABLE)) {
-                $deleted = $this->db->table(HandlingFeeOperationSchema::TABLE)->where('home_site_id',$site)
-                    ->where('agent_id',$agent)->where('action','delete')->where('status','applied')->pluck('level')->all();
+            if ($this->db->getSchemaBuilder()->hasColumn('handling_fee_level_config', 'tk_version')) {
+                // Confirmed delete tombstones live in the original business row, beyond Redis receipt expiry.
+                $deleted = $this->db->table('handling_fee_level_config')->where('home_site_id',$site)
+                    ->where('agent_id',$agent)->whereNotNull('deleted_at')->where('tk_version','>',0)->pluck('level')->all();
                 $existing = array_merge($existing,$deleted);
             }
             $created = [];
