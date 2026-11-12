@@ -9,7 +9,8 @@ final class HandlingFeeConfigListQuery
     public function __construct(
         private int $agentId = 0,
         private int $page = 1,
-        private int $pageSize = 20
+        private int $pageSize = 20,
+        private ?int $homeSiteId = null
     ) {
         $this->agentId = max(0, $this->agentId);
         $this->page = max(1, $this->page);
@@ -20,6 +21,8 @@ final class HandlingFeeConfigListQuery
     {
         return $this->agentId;
     }
+
+    public function homeSiteId(): ?int { return $this->homeSiteId; }
 
     public function page(): int
     {

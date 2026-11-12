@@ -17,7 +17,7 @@ final class HandlingFeeConfigQueryService
     /** @return PageResult<array<string, mixed>> */
     public function search(HandlingFeeConfigListQuery $criteria): PageResult
     {
-        $query = $this->activeQuery($criteria->agentId());
+        $query = $this->activeQuery($criteria->agentId(), $criteria->homeSiteId());
         $total = (int) (clone $query)->count('id');
 
         if ($total === 0) {
@@ -46,21 +46,21 @@ final class HandlingFeeConfigQueryService
     }
 
     /** @return array<string, mixed>|null */
-    public function detail(int $id, int $agentId = 0): ?array
+    public function detail(int $id, int $agentId = 0, ?int $homeSiteId = null): ?array
     {
         if ($id <= 0) {
             return null;
         }
 
-        $row = $this->activeQuery(max(0, $agentId))->where('id', $id)->first($this->columns());
+        $row = $this->activeQuery(max(0, $agentId), $homeSiteId)->where('id', $id)->first($this->columns());
 
         return $row === null ? null : $this->normalizeRow((array) $row);
     }
 
     /** @return array{level_name: string, volume_30d_min: string} */
-    public function nextLevel(int $agentId = 0): array
+    public function nextLevel(int $agentId = 0, ?int $homeSiteId = null): array
     {
-        $row = $this->activeQuery(max(0, $agentId))
+        $row = $this->activeQuery(max(0, $agentId), $homeSiteId)
             ->orderByDesc('level')
             ->orderByDesc('id')
             ->first(['level', 'volume_30d']);
@@ -75,10 +75,11 @@ final class HandlingFeeConfigQueryService
         ];
     }
 
-    private function activeQuery(int $agentId): Builder
+    private function activeQuery(int $agentId, ?int $homeSiteId = null): Builder
     {
         return $this->connection
             ->table('handling_fee_level_config')
+            ->where('home_site_id', HandlingFeeScope::site($this->connection, $homeSiteId, $agentId))
             ->where('agent_id', $agentId)
             ->whereNull('deleted_at');
     }
@@ -89,6 +90,7 @@ final class HandlingFeeConfigQueryService
         return [
             'id',
             'agent_id',
+            'home_site_id',
             'level',
             'level_name',
             'volume_30d',
@@ -106,7 +108,7 @@ final class HandlingFeeConfigQueryService
             return '0';
         }
 
-        $value = $this->activeQuery($criteria->agentId())
+        $value = $this->activeQuery($criteria->agentId(), $criteria->homeSiteId())
             ->orderBy('volume_30d')
             ->orderBy('id')
             ->offset($offset - 1)
@@ -118,7 +120,7 @@ final class HandlingFeeConfigQueryService
     /** @param array<string, mixed> $row @return array<string, mixed> */
     private function normalizeRow(array $row): array
     {
-        foreach (['id', 'agent_id', 'level'] as $field) {
+        foreach (['id', 'agent_id', 'home_site_id', 'level'] as $field) {
             if (array_key_exists($field, $row) && $row[$field] !== null) {
                 $row[$field] = (int) $row[$field];
             }

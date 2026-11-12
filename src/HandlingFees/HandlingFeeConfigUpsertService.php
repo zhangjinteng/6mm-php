@@ -28,11 +28,20 @@ final class HandlingFeeConfigUpsertService
         int $agentId,
         int $level,
         string $makerFeeRate,
-        string $takerFeeRate
+        string $takerFeeRate,
+        ?int $homeSiteId = null
     ): array {
         if ($agentId <= self::PLATFORM_AGENT_ID) {
             throw new InvalidArgumentException('The target agent ID must be greater than zero.');
         }
+        $site = HandlingFeeScope::site($this->connection, $homeSiteId, $agentId);
+        return $this->upsertScopeLevel($site, $agentId, $level, $makerFeeRate, $takerFeeRate);
+    }
+
+    public function upsertScopeLevel(int $site, int $agentId, int $level, string $makerFeeRate, string $takerFeeRate): array
+    {
+        HandlingFeeScope::site($this->connection, $site, $agentId);
+        if ($site === 0) throw new InvalidArgumentException('Use platform administration to edit platform fee tiers.');
         if ($level < 0) {
             throw new InvalidArgumentException('The handling-fee level must be non-negative.');
         }
@@ -42,11 +51,14 @@ final class HandlingFeeConfigUpsertService
 
         return $this->connection->transaction(function () use (
             $agentId,
+            $site,
             $level,
             $makerFeeRate,
             $takerFeeRate
         ): array {
-            $platformRows = $this->activeQuery(self::PLATFORM_AGENT_ID)
+            $scoped = new ScopedHandlingFeeConfigService($this->connection);
+            $scoped->lock();
+            $platformRows = $this->activeQuery(self::PLATFORM_AGENT_ID, 0)
                 ->lockForUpdate()
                 ->orderBy('level')
                 ->orderBy('id')
@@ -63,14 +75,9 @@ final class HandlingFeeConfigUpsertService
                 throw new DomainException('The platform handling-fee level does not exist.');
             }
 
-            $agentRows = $this->activeQuery($agentId)
-                ->lockForUpdate()
-                ->get($this->columns())
-                ->map(static fn (object $row): array => (array) $row)
-                ->all();
-            $this->cloneMissingPlatformLevels($agentId, $platformRows, $agentRows);
+            $scoped->ensureScope($site, $agentId);
 
-            $agentRows = $this->activeQuery($agentId)
+            $agentRows = $this->activeQuery($agentId, $site)
                 ->orderBy('level')
                 ->orderBy('id')
                 ->get($this->columns())
@@ -100,7 +107,7 @@ final class HandlingFeeConfigUpsertService
             );
 
             $target = $agentRows[$targetIndex];
-            $this->activeQuery($agentId)
+            $this->activeQuery($agentId, $site)
                 ->where('id', $target['id'])
                 ->update([
                     'maker_fee_rate' => $makerFeeRate,
@@ -108,7 +115,7 @@ final class HandlingFeeConfigUpsertService
                     'updated_at' => $this->now(),
                 ]);
 
-            $updated = $this->activeQuery($agentId)
+            $updated = $this->activeQuery($agentId, $site)
                 ->where('id', $target['id'])
                 ->first($this->columns());
 
@@ -118,35 +125,6 @@ final class HandlingFeeConfigUpsertService
 
             return $this->normalizeRow((array) $updated);
         });
-    }
-
-    /**
-     * @param array<int, array<string, mixed>> $platformRows
-     * @param array<int, array<string, mixed>> $agentRows
-     */
-    private function cloneMissingPlatformLevels(int $agentId, array $platformRows, array $agentRows): void
-    {
-        $existing = $this->rowsByLevel($agentRows);
-        $now = $this->now();
-
-        foreach ($platformRows as $platformRow) {
-            $level = (int) $platformRow['level'];
-            if (isset($existing[$level])) {
-                continue;
-            }
-
-            $this->connection->table('handling_fee_level_config')->insert([
-                'agent_id' => $agentId,
-                'level' => $level,
-                'level_name' => (string) $platformRow['level_name'],
-                'volume_30d' => (string) $platformRow['volume_30d'],
-                'maker_fee_rate' => (string) $platformRow['maker_fee_rate'],
-                'taker_fee_rate' => (string) $platformRow['taker_fee_rate'],
-                'created_at' => $now,
-                'updated_at' => $now,
-                'deleted_at' => null,
-            ]);
-        }
     }
 
     /**
@@ -229,10 +207,11 @@ final class HandlingFeeConfigUpsertService
         return null;
     }
 
-    private function activeQuery(int $agentId): Builder
+    private function activeQuery(int $agentId, int $site): Builder
     {
         return $this->connection
             ->table('handling_fee_level_config')
+            ->where('home_site_id', $site)
             ->where('agent_id', $agentId)
             ->whereNull('deleted_at');
     }
@@ -243,6 +222,7 @@ final class HandlingFeeConfigUpsertService
         return [
             'id',
             'agent_id',
+            'home_site_id',
             'level',
             'level_name',
             'volume_30d',
@@ -256,7 +236,7 @@ final class HandlingFeeConfigUpsertService
     /** @param array<string, mixed> $row @return array<string, mixed> */
     private function normalizeRow(array $row): array
     {
-        foreach (['id', 'agent_id', 'level'] as $field) {
+        foreach (['id', 'agent_id', 'home_site_id', 'level'] as $field) {
             if (array_key_exists($field, $row) && $row[$field] !== null) {
                 $row[$field] = (int) $row[$field];
             }

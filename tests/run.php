@@ -264,6 +264,7 @@ $schema->create('orders', static function (Blueprint $table): void {
 });
 $schema->create('handling_fee_level_config', static function (Blueprint $table): void {
     $table->increments('id');
+    $table->bigInteger('home_site_id')->default(0);
     $table->integer('agent_id')->default(0);
     $table->integer('level');
     $table->string('level_name');
@@ -1646,6 +1647,7 @@ $database->getConnection()->table('handling_fee_level_config')->insert([
     ['id' => 6, 'agent_id' => 14, 'level' => 2, 'level_name' => 'Deleted', 'volume_30d' => 15000000, 'maker_fee_rate' => 0.0002, 'taker_fee_rate' => 0.0005, 'deleted_at' => '2026-08-18 00:00:00'],
 ]);
 
+$database->getConnection()->table('handling_fee_level_config')->where('agent_id','>',0)->update(['home_site_id'=>10]);
 $handlingFeeCriteria = new HandlingFeeConfigListQuery(agentId: -1, page: -2, pageSize: 1000);
 assertSameValue(0, $handlingFeeCriteria->agentId(), 'Handling-fee agent IDs should default to the platform scope.');
 assertSameValue(1, $handlingFeeCriteria->page(), 'Handling-fee pages should fail back to the first page.');
@@ -1657,13 +1659,13 @@ assertSameValue(3, $platformFees->total(), 'Handling-fee queries should default 
 assertSameValue(['普通会员', 'VIP1', 'VIP2'], array_column($platformFees->items(), 'level_name'), 'Handling-fee rows should use stable threshold ordering.');
 assertSameValue(['0', '5000000', '10000000'], array_column($platformFees->items(), 'volume_30d_min'), 'Handling-fee rows should expose the previous threshold.');
 
-$agentFees = $handlingFeeService->search(new HandlingFeeConfigListQuery(agentId: 14, pageSize: 1));
+$agentFees = $handlingFeeService->search(new HandlingFeeConfigListQuery(agentId: 14, pageSize: 1, homeSiteId: 10));
 assertSameValue(2, $agentFees->total(), 'Handling-fee queries should remain scoped to the selected agent.');
 assertSameValue([14], array_column($agentFees->items(), 'agent_id'), 'Handling-fee rows must not leak another owner.');
-$agentFeesPageTwo = $handlingFeeService->search(new HandlingFeeConfigListQuery(agentId: 14, page: 2, pageSize: 1));
+$agentFeesPageTwo = $handlingFeeService->search(new HandlingFeeConfigListQuery(agentId: 14, page: 2, pageSize: 1, homeSiteId: 10));
 assertSameValue('7000000', $agentFeesPageTwo->items()[0]['volume_30d_min'], 'Handling-fee threshold projection should remain correct across pages.');
 assertSameValue('VIP3', $handlingFeeService->nextLevel()['level_name'], 'Handling-fee create defaults should advance the platform VIP level.');
-assertSameValue(14, $handlingFeeService->detail(4, 14)['agent_id'] ?? null, 'Handling-fee detail reads should enforce the supplied owner.');
+assertSameValue(14, $handlingFeeService->detail(4, 14, 10)['agent_id'] ?? null, 'Handling-fee detail reads should enforce the supplied owner.');
 assertSameValue(null, $handlingFeeService->detail(4, 0), 'Handling-fee detail reads must not cross owner boundaries.');
 
 $handlingFeeWriteGuard = new HandlingFeeConfigWriteGuard();
@@ -1678,13 +1680,13 @@ try {
 assertSameValue(true, $guardRejectedAgent, 'The handling-fee write guard should reject agent-owned rows.');
 
 $handlingFeeUpsert = new HandlingFeeConfigUpsertService($database->getConnection());
-$updatedAgentFee = $handlingFeeUpsert->upsertAgentLevel(14, 1, '0.00024', '0.00055');
+$updatedAgentFee = $handlingFeeUpsert->upsertAgentLevel(14, 1, '0.00024', '0.00055', 10);
 assertSameValue(14, $updatedAgentFee['agent_id'], 'Agent upserts should preserve the target owner.');
 assertSameValue(1, $updatedAgentFee['level'], 'Agent upserts should target tiers by stable level.');
 assertSameValue(0, bccomp('0.00024', $updatedAgentFee['maker_fee_rate'], 10), 'Agent upserts should persist the Maker rate.');
 assertSameValue(3, $database->getConnection()->table('handling_fee_level_config')->where('agent_id', 14)->whereNull('deleted_at')->count(), 'Agent upserts should restore missing platform tiers.');
 
-$newAgentFee = $handlingFeeUpsert->upsertAgentLevel(15, 1, '0.00019', '0.0005');
+$newAgentFee = $handlingFeeUpsert->upsertAgentLevel(15, 1, '0.00019', '0.0005', 10);
 assertSameValue(15, $newAgentFee['agent_id'], 'First edits should create agent-owned data.');
 assertSameValue(3, $database->getConnection()->table('handling_fee_level_config')->where('agent_id', 15)->whereNull('deleted_at')->count(), 'First edits should clone the complete platform tier set.');
 assertSameValue(
@@ -1695,7 +1697,7 @@ assertSameValue(
 
 $platformFloorViolation = null;
 try {
-    $handlingFeeUpsert->upsertAgentLevel(16, 1, '0.00017', '0.0005');
+    $handlingFeeUpsert->upsertAgentLevel(16, 1, '0.00017', '0.0005', 10);
 } catch (HandlingFeeConfigRateConstraintViolation $exception) {
     $platformFloorViolation = $exception;
 }
@@ -1705,7 +1707,7 @@ assertSameValue(0, $database->getConnection()->table('handling_fee_level_config'
 
 $takerFloorViolation = null;
 try {
-    $handlingFeeUpsert->upsertAgentLevel(17, 1, '0.00018', '0.00049');
+    $handlingFeeUpsert->upsertAgentLevel(17, 1, '0.00018', '0.00049', 10);
 } catch (HandlingFeeConfigRateConstraintViolation $exception) {
     $takerFloorViolation = $exception;
 }
@@ -1719,7 +1721,7 @@ $database->getConnection()->table('handling_fee_level_config')
     ->update(['maker_fee_rate' => '0.00023']);
 $lowerTierViolation = null;
 try {
-    $handlingFeeUpsert->upsertAgentLevel(14, 1, '0.00022', '0.00055');
+    $handlingFeeUpsert->upsertAgentLevel(14, 1, '0.00022', '0.00055', 10);
 } catch (HandlingFeeConfigRateConstraintViolation $exception) {
     $lowerTierViolation = $exception;
 }
@@ -1727,7 +1729,7 @@ assertSameValue(HandlingFeeConfigRateConstraintViolation::LOWER_TIER_FLOOR, $low
 
 $upperTierViolation = null;
 try {
-    $handlingFeeUpsert->upsertAgentLevel(14, 1, '0.00031', '0.00055');
+    $handlingFeeUpsert->upsertAgentLevel(14, 1, '0.00031', '0.00055', 10);
 } catch (HandlingFeeConfigRateConstraintViolation $exception) {
     $upperTierViolation = $exception;
 }
