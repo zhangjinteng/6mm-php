@@ -38,11 +38,11 @@ final class MerchantTranslationSettings
     {
         $key = TranslationSettingsStore::merchantKey($agentId);
         $row = $this->store->row($key);
-        if ((!$row || $row->api_key_ciphertext === null) && $p['is_enabled'] && trim((string) ($p['api_key'] ?? '')) === '') {
+        if ((!$row || (($row->api_key ?? null) === null && ($row->api_key_ciphertext ?? null) === null)) && $p['is_enabled'] && trim((string) ($p['api_key'] ?? '')) === '') {
             throw new \RuntimeException('GOOGLE_CREDENTIAL_MISSING');
         }
         $values = $this->store->prepare($row, $p, 'zh-CN', $google);
-        if ($values['api_key_ciphertext'] === null) $values['credential_ref'] = 'merchant-unconfigured';
+        if ($values['api_key'] === null) $values['credential_ref'] = 'merchant-unconfigured';
         $this->store->persist($key, $values, $p['space_revision'], ['type'=>'agent', 'id'=>$actorId]);
         return $this->settings($agentId);
     }

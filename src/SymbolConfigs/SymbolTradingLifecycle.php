@@ -56,12 +56,15 @@ final class SymbolTradingLifecycle
             if ($action === 'resume' && $state !== 2) throw new DomainException('只有已暂停的交易对才能恢复交易');
             if ($action === 'list' && $state !== 4 && !$reselect) throw new DomainException('该交易对尚未下架，请使用恢复交易');
 
-            $method = $action === 'delist' && $site === 0 ? 'DelistAndSettleSymbol' : $methods[$action];
-            $key = hash('sha256', json_encode([$scope, $symbol, $version, $action], JSON_THROW_ON_ERROR));
+            $method = $methods[$action];
+            $identity = [$scope, $symbol, $version, $action];
+            // Do not reuse a cached command ID from the former global delist RPC.
+            if ($action === 'delist' && $site === 0) $identity[] = $method;
+            $key = hash('sha256', json_encode($identity, JSON_THROW_ON_ERROR));
             $command = (string) ($this->command)($key);
             if (!ctype_digit($command) || $command === '0') throw new DomainException('操作编号生成失败，请稍后重试');
             $request = ['command_id'=>$command, 'symbol'=>$symbol, 'reason'=>'后台交易对操作：'.$action];
-            if ($method !== 'DelistAndSettleSymbol') $request += ['scope'=>$scope, 'expected_version'=>$version];
+            $request += ['scope'=>$scope, 'expected_version'=>$version];
             // Price evidence is intentionally omitted under the updated upstream contract.
             $response = $this->call($method, $request);
             $this->receipt($response, $request, $action, $method);

@@ -27,7 +27,6 @@ $fixture=static function (): array {
     return [$db,$configs];
 };
 $response=static function (string $method,array $request): array {
-    if ($method==='DelistAndSettleSymbol') return ['command_id'=>$request['command_id'],'symbol'=>$request['symbol'],'status'=>'ACCEPTED'];
     return ['operation'=>['command_id'=>$request['command_id'],'scope'=>$request['scope'],'symbol'=>$request['symbol'],
         'action'=>['ListSymbolForTrading'=>2,'PauseSymbolTrading'=>3,'ResumeSymbolTrading'=>4,'DelistSymbolTrading'=>5][$method],
         'state'=>$method==='DelistSymbolTrading'?1:2]];
@@ -50,9 +49,8 @@ foreach ([[0,0],[10,0],[10,20]] as [$site,$agent]) {
         $check(count($calls)===2 && $calls[0][0]==='ListSymbolTradingConfigs','Exactly one preflight precedes the operation');
         $write=$calls[1][1];
         $check(!array_key_exists('mark_price',$write) && !array_key_exists('mark_price_time',$write),'Price fields are absent');
-        $check(($calls[1][0]==='DelistAndSettleSymbol')===($action==='delist' && $site===0),'Only platform delisting uses the legacy global RPC');
-        if ($calls[1][0]==='DelistAndSettleSymbol') $check(!isset($write['scope'],$write['expected_version']),'Legacy RPC has no scope/version');
-        else $check($write['scope']===SymbolTradingLifecycle::scope($site,$agent) && $write['expected_version']==='8','Exact scope and queried version');
+        $check($calls[1][0]===['list'=>'ListSymbolForTrading','pause'=>'PauseSymbolTrading','resume'=>'ResumeSymbolTrading','delist'=>'DelistSymbolTrading'][$action],'Every scope uses the scoped operation RPC');
+        $check($write['scope']===SymbolTradingLifecycle::scope($site,$agent) && $write['expected_version']==='8','Exact scope and queried version');
         foreach ($db->table('symbol_config')->get() as $row) {
             $affected=$row->symbol==='BTCUSDT' && ($site===0 || (int)$row->home_site_id===$site)
                 && ($agent===0 || (int)$row->agent_id===$agent);
@@ -102,6 +100,39 @@ foreach (['busy','parent_busy','query_error','empty','unknown_state','missing_ac
         if (in_array($failure,['query_error','empty','unknown_state','missing_access'],true)) $check($e->getMessage()===SymbolTradingLifecycle::UNCONFIRMED && $writes===0,'Unconfirmed query fails closed');
         if ($failure==='not_paused') $check($writes===0,'Delist never auto-pauses or bypasses prerequisite');
     }
+}
+
+// Platform delisting must never fall back to the global archive RPC.
+foreach (['in_progress','completed','write_error','rejected','legacy_receipt','wrong_scope'] as $case) {
+    [$db,$configs]=$fixture();
+    $before=$db->table('symbol_config')->orderBy('id')->get()->toJson();
+    $calls=[];
+    $keys=[];
+    $rpc=static function ($method,$request) use ($case,&$calls,$check): array {
+        $calls[]=$method;
+        $check($request['scope']===['kind'=>1],'Platform delist uses PLATFORM without site or agent IDs');
+        if ($method==='ListSymbolTradingConfigs') return ['mode'=>1,'scope_version'=>'8','configs'=>[
+            ['symbol'=>'BTCUSDT','state'=>2,'trading_access'=>['effective_state'=>2]]]];
+        $check($method==='DelistSymbolTrading' && $request['expected_version']==='8','Platform delist uses scoped RPC and current version');
+        if ($case==='write_error') throw new RuntimeException('network');
+        if ($case==='rejected') return ['reject_code'=>6003,'message'=>'version conflict'];
+        if ($case==='legacy_receipt') return ['status'=>'ACCEPTED','command_id'=>$request['command_id'],'symbol'=>'BTCUSDT'];
+        return ['operation'=>['commandId'=>$request['command_id'],
+            'scope'=>['kind'=>$case==='wrong_scope'?'SYMBOL_TRADING_SCOPE_SITE':'SYMBOL_TRADING_SCOPE_PLATFORM'],
+            'symbol'=>'BTCUSDT','action'=>'SYMBOL_TRADING_ACTION_DELIST',
+            'state'=>$case==='completed'?'SYMBOL_TRADING_OPERATION_COMPLETED':'SYMBOL_TRADING_OPERATION_IN_PROGRESS']];
+    };
+    $command=static function ($key) use (&$keys): string { $keys[]=$key; return '123'; };
+    $error=null;
+    try {
+        (new SymbolTradingLifecycle($db,$rpc,$command))->execute(0,0,1,'delist');
+    } catch (DomainException|RuntimeException $e) {
+        $error=$e;
+    }
+    $check(($error===null)===in_array($case,['in_progress','completed'],true),'Only confirmed scoped delist receipts succeed: '.$case);
+    $check($calls===['ListSymbolTradingConfigs','DelistSymbolTrading'],'No global RPC fallback: '.$case);
+    $check($keys===[hash('sha256',json_encode([['kind'=>1],'BTCUSDT','8','delist','DelistSymbolTrading'],JSON_THROW_ON_ERROR))],'New scoped command identity is stable and separate from legacy delisting');
+    if ($error!==null) $check($db->table('symbol_config')->orderBy('id')->get()->toJson()===$before,'Failed platform delist preserves DB: '.$case);
 }
 
 // SDK responses use camelCase and symbolic enums, and omit zero reject codes.

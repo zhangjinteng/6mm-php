@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace SixMm\Shared\Cms;
 
 use Illuminate\Database\ConnectionInterface;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\ValidationException;
 use RuntimeException;
@@ -47,7 +48,7 @@ final class TranslationSettingsStore
     public function settings(#[\SensitiveParameter] ?object $row, string $identity, string $scope, string $source = 'zh-CN', array $targets = []): array
     {
         // Merchant keys must never silently borrow the deployment-wide Google credential.
-        $status = $scope === 'merchant' && (!$row || $row->api_key_ciphertext === null)
+        $status = $scope === 'merchant' && (!$row || (($row->api_key ?? null) === null && ($row->api_key_ciphertext ?? null) === null))
             ? ['credential_configured'=>false, 'api_key_mask'=>null, 'credential_source'=>'database', 'credential_error'=>'GOOGLE_CREDENTIAL_MISSING']
             : (new TranslationCredential())->status($row);
         return ['space_id'=>$identity, 'space_revision'=>(string) ($row->revision ?? 0),
@@ -76,7 +77,7 @@ final class TranslationSettingsStore
     {
         $candidate = trim((string) ($p['api_key'] ?? ''));
         if ($candidate !== '') return $candidate;
-        if ($row && str_starts_with((string) ($row->config_key ?? ''), 'merchant:') && $row->api_key_ciphertext === null) {
+        if ($row && str_starts_with((string) ($row->config_key ?? ''), 'merchant:') && ($row->api_key ?? null) === null && ($row->api_key_ciphertext ?? null) === null) {
             throw new RuntimeException('GOOGLE_CREDENTIAL_MISSING');
         }
         return (new TranslationCredential())->resolve($row);
@@ -87,21 +88,23 @@ final class TranslationSettingsStore
         if ((string) ($row->revision ?? 0) !== (string) $revision) $this->fail('翻译配置已变化，请重新加载配置');
     }
 
-    /** Prepare/encrypt/verify outside write locks. persist() rechecks the revision in the transaction. */
+    /** Prepare/verify outside write locks. persist() rechecks the revision in the transaction. */
     public function prepare(#[\SensitiveParameter] ?object $row, #[\SensitiveParameter] array $p, string $source, ?GoogleTranslationClient $google = null): array
     {
         $p = Validator::make($p, TranslationSettingsInput::rules())->validate();
         $this->checkRevision($row, $p['space_revision']);
         if (!isset(TranslationCatalog::LOCALES[$source]) || in_array($source, $p['target_locales'], true)) $this->fail('目标语言不能包含源语言');
-        $credential = new TranslationCredential();
         $candidate = trim((string) ($p['api_key'] ?? ''));
-        $encrypted = $candidate !== '' ? $credential->encrypt($candidate) : ($row->api_key_ciphertext ?? null);
+        if ($candidate === '' && ($row->api_key ?? null) === null && ($row->api_key_ciphertext ?? null) !== null) {
+            throw new RuntimeException('GOOGLE_CREDENTIAL_MIGRATION_REQUIRED');
+        }
+        $key = $candidate !== '' ? $candidate : ($row->api_key ?? null);
         if ($google && ($candidate !== '' || $p['is_enabled'])) {
             $google->withApiKey($this->key($row, $p))->translate('连接测试', 'zh-CN', 'en', false, (int) $p['request_timeout_seconds']);
         }
         return ['provider'=>'google', 'api_version'=>'v2',
-            'credential_ref'=>$encrypted !== null ? 'database' : config('cms_translation.credential_ref'),
-            'api_key_ciphertext'=>$encrypted, 'project_id'=>null, 'is_enabled'=>$p['is_enabled'],
+            'credential_ref'=>$key !== null ? 'database' : config('cms_translation.credential_ref'),
+            'api_key'=>$key, 'api_key_ciphertext'=>null, 'project_id'=>null, 'is_enabled'=>$p['is_enabled'],
             'concurrency_limit'=>$p['concurrency_limit'], 'request_timeout_seconds'=>$p['request_timeout_seconds'],
             'max_attempts'=>$p['max_attempts'], 'source_locale'=>$source,
             'target_locales'=>json_encode(array_values($p['target_locales']), JSON_THROW_ON_ERROR),
@@ -113,21 +116,26 @@ final class TranslationSettingsStore
     /** Unique insertion + row lock also serializes concurrent first saves; no external calls here. */
     public function persist(string $key, #[\SensitiveParameter] array $values, mixed $expectedRevision, array $actor): object
     {
-        return $this->db->transaction(function () use ($key, $values, $expectedRevision, $actor): object {
-            $now = date(DATE_ATOM);
-            $audit = ['updated_at'=>$now, 'updated_by_type'=>$actor['type'] ?? 'platform',
-                'updated_by_id'=>$actor['id'] ?? null, 'updated_by_name'=>$actor['name'] ?? null];
-            $this->db->table('cms.translation_settings')->insertOrIgnore([
-                'config_key'=>$key, 'provider'=>'google', 'api_version'=>'v2', 'credential_ref'=>'database',
-                'is_enabled'=>false, 'created_at'=>$now, 'created_by_type'=>$audit['updated_by_type'],
-                'created_by_id'=>$audit['updated_by_id']] + $audit);
-            $row = $this->row($key, true);
-            if (!$row) throw new RuntimeException('TRANSLATION_SETTINGS_INSERT_FAILED');
-            $this->checkRevision($row, $expectedRevision);
-            $this->db->table('cms.translation_settings')->where('id', $row->id)
-                ->update($values + $audit + ['revision'=>(int) ($row->revision ?? 0) + 1]);
-            return $this->row($key);
-        });
+        try {
+            return $this->db->transaction(function () use ($key, $values, $expectedRevision, $actor): object {
+                $now = date(DATE_ATOM);
+                $audit = ['updated_at'=>$now, 'updated_by_type'=>$actor['type'] ?? 'platform',
+                    'updated_by_id'=>$actor['id'] ?? null, 'updated_by_name'=>$actor['name'] ?? null];
+                $this->db->table('cms.translation_settings')->insertOrIgnore([
+                    'config_key'=>$key, 'provider'=>'google', 'api_version'=>'v2', 'credential_ref'=>'database',
+                    'is_enabled'=>false, 'created_at'=>$now, 'created_by_type'=>$audit['updated_by_type'],
+                    'created_by_id'=>$audit['updated_by_id']] + $audit);
+                $row = $this->row($key, true);
+                if (!$row) throw new RuntimeException('TRANSLATION_SETTINGS_INSERT_FAILED');
+                $this->checkRevision($row, $expectedRevision);
+                $this->db->table('cms.translation_settings')->where('id', $row->id)
+                    ->update($values + $audit + ['revision'=>(int) ($row->revision ?? 0) + 1]);
+                return $this->row($key);
+            });
+        } catch (QueryException) {
+            // SQL exception bindings contain the plaintext key. Never chain/report that exception.
+            throw new RuntimeException('TRANSLATION_SETTINGS_WRITE_FAILED');
+        }
     }
 
     private function fail(string $message): never { throw ValidationException::withMessages(['translation'=>$message]); }

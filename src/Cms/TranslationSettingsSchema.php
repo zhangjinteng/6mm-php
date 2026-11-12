@@ -13,7 +13,7 @@ final class TranslationSettingsSchema
     {
         $db->transaction(function () use ($db): void {
             $pg = $db->getDriverName() === 'pgsql';
-            $columns = ['source_locale'=>"varchar(16) NOT NULL DEFAULT 'zh-CN'",
+            $columns = ['api_key'=>'text NULL', 'source_locale'=>"varchar(16) NOT NULL DEFAULT 'zh-CN'",
                 'target_locales'=>($pg ? 'jsonb' : 'text').' NULL', 'revision'=>'bigint NOT NULL DEFAULT 0',
                 'verify_status'=>"varchar(20) NOT NULL DEFAULT 'pending'",
                 'verified_at'=>($pg ? 'timestamptz(6)' : 'text').' NULL', 'last_error'=>'text NULL'];
@@ -33,7 +33,7 @@ DO $$ BEGIN
     END IF;
 END $$
 SQL);
-                foreach (['source_locale'=>'翻译源语言', 'target_locales'=>'目标语言 JSON 数组；NULL 仅用于迁移期间沿用内容空间',
+                foreach (['api_key'=>'Google API Key 明文；仅服务端使用，不通过配置接口回显', 'source_locale'=>'翻译源语言', 'target_locales'=>'目标语言 JSON 数组；NULL 仅用于迁移期间沿用内容空间',
                     'revision'=>'翻译配置乐观锁版本', 'verify_status'=>'密钥验证状态', 'verified_at'=>'密钥验证时间', 'last_error'=>'脱敏后的连接测试错误'] as $column=>$comment) {
                     $db->statement("COMMENT ON COLUMN cms.translation_settings.$column IS '$comment'");
                 }

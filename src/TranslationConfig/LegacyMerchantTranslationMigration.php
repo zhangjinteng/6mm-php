@@ -5,16 +5,18 @@ declare(strict_types=1);
 namespace SixMm\Shared\TranslationConfig;
 
 use Illuminate\Database\ConnectionInterface;
-use SixMm\Shared\Cms\{TranslationCatalog, TranslationCredential, TranslationSettingsSchema, TranslationSettingsStore};
+use Illuminate\Database\QueryException;
+use SixMm\Shared\Cms\{TranslationCatalog, TranslationCredential, TranslationSettingsStore};
 use RuntimeException;
 
-/** Deployment-only. Re-encrypt, verify every row, then drop legacy storage atomically. */
+/** Deployment-only. Decode old merchant keys, verify every row, then drop legacy storage atomically. */
 final class LegacyMerchantTranslationMigration
 {
     public static function run(ConnectionInterface $db, TranslationConfigCipher $legacyCipher): int
     {
-        return $db->transaction(function () use ($db, $legacyCipher): int {
-            TranslationSettingsSchema::upgrade($db);
+        try {
+            return $db->transaction(function () use ($db, $legacyCipher): int {
+            PlaintextTranslationKeyMigration::run($db);
             if (!$db->getSchemaBuilder()->hasTable('agent_translation_config')) return 0;
             if ($db->getDriverName() === 'pgsql') {
                 // Prevent old processes from inserting/updating rows while verifying and dropping.
@@ -29,17 +31,16 @@ final class LegacyMerchantTranslationMigration
                 try {
                     $plain = trim($raw) !== '' ? $legacyCipher->decrypt($raw) : null;
                     if ($plain !== null && trim($plain) === '') throw new RuntimeException();
-                    $encrypted = $plain !== null ? $credential->encrypt($plain) : null;
                 } catch (\Throwable) {
-                    throw new RuntimeException('商户 '.$old->agent_id.' 翻译密钥迁移失败，旧表未删除；请检查旧 APP_KEY 和 CMS_TRANSLATION_ENCRYPTION_KEY');
+                    throw new RuntimeException('商户 '.$old->agent_id.' 翻译密钥迁移失败，旧表未删除；请检查旧 APP_KEY');
                 }
                 $targets = ($old->target_locales ?? null) === null
                     ? array_values(array_diff(array_keys(TranslationCatalog::LOCALES), ['zh-CN']))
                     : TranslationSettingsStore::locales($old->target_locales);
                 $type = ($old->updated_by ?? $old->created_by ?? null) ? 'agent' : 'system';
                 $values = ['provider'=>$old->provider, 'api_version'=>$old->api_version,
-                    'credential_ref'=>$encrypted !== null ? 'database' : 'merchant-unconfigured',
-                    'api_key_ciphertext'=>$encrypted, 'is_enabled'=>$old->is_enabled,
+                    'credential_ref'=>$plain !== null ? 'database' : 'merchant-unconfigured',
+                    'api_key'=>$plain, 'api_key_ciphertext'=>null, 'is_enabled'=>$old->is_enabled,
                     'concurrency_limit'=>$old->concurrency, 'source_locale'=>'zh-CN',
                     'target_locales'=>json_encode($targets, JSON_THROW_ON_ERROR),
                     'request_timeout_seconds'=>$old->request_timeout_seconds ?? 30,
@@ -61,14 +62,17 @@ final class LegacyMerchantTranslationMigration
                 }
                 if ($store->targets($row) !== $targets) throw new RuntimeException('商户 '.$old->agent_id.' 翻译语言校验失败，旧表未删除');
                 try {
-                    $same = $plain === null ? $row->api_key_ciphertext === null : hash_equals($plain, $credential->resolve($row));
+                    $same = $plain === null ? $row->api_key === null : hash_equals($plain, $credential->resolve($row));
                 } catch (\Throwable) { $same = false; }
                 if (!$same) throw new RuntimeException('商户 '.$old->agent_id.' 翻译密钥校验失败，旧表未删除');
-                unset($plain, $encrypted, $raw);
+                unset($plain, $raw);
                 ++$count;
             }
             $db->getSchemaBuilder()->drop('agent_translation_config');
             return $count;
-        });
+            });
+        } catch (QueryException) {
+            throw new RuntimeException('商户翻译配置迁移写入失败，事务已回滚，旧表未删除；请检查数据库结构和权限');
+        }
     }
 }

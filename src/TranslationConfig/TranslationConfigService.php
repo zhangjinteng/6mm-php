@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace SixMm\Shared\TranslationConfig;
 
 use Illuminate\Database\ConnectionInterface;
+use Illuminate\Database\QueryException;
 use SixMm\Shared\Cms\{TranslationCredential, TranslationSettingsStore};
 
 /** Legacy HTTP contract adapter. All reads/writes use the same CMS store as the unified UI. */
@@ -15,7 +16,7 @@ final class TranslationConfigService
     public function __construct(private ConnectionInterface $connection, TranslationConfigCipher $legacyCipher,
         private TranslationConfigVerifier $verifier)
     {
-        // Parameter retained for constructor compatibility, never used to encrypt new settings.
+        // Parameter retained for constructor compatibility; runtime storage is plaintext.
         $this->store = new TranslationSettingsStore($connection);
     }
 
@@ -40,7 +41,7 @@ final class TranslationConfigService
             throw TranslationConfigException::because(TranslationConfigException::INVALID_PARAMETERS);
         }
         $candidate = trim((string) ($input['api_key'] ?? ''));
-        if ((!$row || $row->api_key_ciphertext === null) && $candidate === '') {
+        if ((!$row || (($row->api_key ?? null) === null && ($row->api_key_ciphertext ?? null) === null)) && $candidate === '') {
             throw TranslationConfigException::because(TranslationConfigException::API_KEY_REQUIRED);
         }
         $settings = (new MerchantTranslationSettings($this->connection))->settings($agentId);
@@ -64,7 +65,7 @@ final class TranslationConfigService
         $saved = $candidate === '';
         $row = $saved ? $this->store->row($key) : null;
         if ($saved) {
-            if (!$row || $row->api_key_ciphertext === null) throw TranslationConfigException::because(TranslationConfigException::API_KEY_REQUIRED);
+            if (!$row || (($row->api_key ?? null) === null && ($row->api_key_ciphertext ?? null) === null)) throw TranslationConfigException::because(TranslationConfigException::API_KEY_REQUIRED);
             try { $candidate = (new TranslationCredential())->resolve($row); }
             catch (\Throwable) { throw TranslationConfigException::because(TranslationConfigException::DECRYPT_FAILED); }
         }
@@ -74,9 +75,13 @@ final class TranslationConfigService
             'verified_at'=>$valid ? date(DATE_ATOM) : null, 'last_error'=>$valid ? null : 'GOOGLE_TRANSLATION_TEST_FAILED'];
         if ($saved) {
             // A test of an old key must not mark a concurrently replaced key as valid.
-            $this->connection->table('cms.translation_settings')->where('id', $row->id)
-                ->where('revision', $row->revision)->where('api_key_ciphertext', $row->api_key_ciphertext)
-                ->update(['verify_status'=>$result['verify_status'], 'verified_at'=>$result['verified_at'], 'last_error'=>$result['last_error']]);
+            try {
+                $this->connection->table('cms.translation_settings')->where('id', $row->id)
+                    ->where('revision', $row->revision)->where('api_key', $row->api_key)
+                    ->update(['verify_status'=>$result['verify_status'], 'verified_at'=>$result['verified_at'], 'last_error'=>$result['last_error']]);
+            } catch (QueryException) {
+                throw new \RuntimeException('TRANSLATION_SETTINGS_WRITE_FAILED');
+            }
         }
         return $result;
     }
