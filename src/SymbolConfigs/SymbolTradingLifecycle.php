@@ -38,7 +38,8 @@ final class SymbolTradingLifecycle
             if (!$row) throw new DomainException('合约不存在或不属于当前账户');
             $symbol = (string) $row->symbol;
             $scope = self::scope($site, $agent);
-            [$current, $version] = $this->snapshot($scope, $symbol);
+            [$current, $version] = $this->snapshot($scope, $symbol, $action === 'list');
+            $reselect = $action === 'list' && self::expiredSelection($scope, $current);
 
             if ($site > 0) {
                 $root = $configs->query(0)->where('symbol', $symbol)->whereNull('deleted_at')->first();
@@ -53,7 +54,7 @@ final class SymbolTradingLifecycle
             if ($action === 'delist' && $state !== 2) throw new DomainException('请先暂停交易，再下架交易对');
             if ($action === 'pause' && $state !== 1) throw new DomainException('只有允许交易的交易对才能暂停');
             if ($action === 'resume' && $state !== 2) throw new DomainException('只有已暂停的交易对才能恢复交易');
-            if ($action === 'list' && $state !== 4) throw new DomainException('该交易对尚未下架，请使用恢复交易');
+            if ($action === 'list' && $state !== 4 && !$reselect) throw new DomainException('该交易对尚未下架，请使用恢复交易');
 
             $method = $action === 'delist' && $site === 0 ? 'DelistAndSettleSymbol' : $methods[$action];
             $key = hash('sha256', json_encode([$scope, $symbol, $version, $action], JSON_THROW_ON_ERROR));
@@ -80,7 +81,7 @@ final class SymbolTradingLifecycle
         });
     }
 
-    private function snapshot(array $scope, string $symbol): array
+    private function snapshot(array $scope, string $symbol, bool $allowReselection = false): array
     {
         try {
             $result = $this->call('ListSymbolTradingConfigs', ['scope'=>$scope, 'symbols'=>[$symbol], 'limit'=>1]);
@@ -93,12 +94,28 @@ final class SymbolTradingLifecycle
             $state = self::enum($config['state'] ?? null, 'SYMBOL_TRADING_STATE_', ['LISTED'=>1,'PAUSED'=>2,'DELISTING'=>3,'DELISTED'=>4]);
             $effective = self::enum($config['trading_access']['effective_state'] ?? null, 'SYMBOL_TRADING_STATE_', ['LISTED'=>1,'PAUSED'=>2,'DELISTING'=>3,'DELISTED'=>4]);
             $version = (string) ($result['scope_version'] ?? '0');
-            if ($state === 0 || $effective === 0 || !ctype_digit($version)) throw new DomainException(self::UNCONFIRMED);
+            // An expired parent binding is a known re-selection case, not permission to trade.
+            $reselect = $allowReselection && self::expiredSelection($scope, $config);
+            $unspecified = in_array($config['trading_access']['effective_state'] ?? null,
+                [null, 0, '0', 'SYMBOL_TRADING_STATE_UNSPECIFIED'], true);
+            if ($state === 0 || ($effective === 0 && !($reselect && $unspecified))
+                || !preg_match('/^[1-9][0-9]*$/D', $version)) throw new DomainException(self::UNCONFIRMED);
         } catch (Throwable $e) {
             throw new DomainException(self::UNCONFIRMED, 0, $e);
         }
         if ($state === 3 || $effective === 3) throw new DomainException(self::BUSY);
         return [$config, $version];
+    }
+
+    private static function expiredSelection(array $scope, array $config): bool
+    {
+        $blocking = $config['trading_access']['blocking_scope'] ?? [];
+        return in_array($scope['kind'], [2, 3], true)
+            && ($config['selected'] ?? false) === true
+            && ($config['trading_access']['reason'] ?? '') === 'PARENT_GENERATION_EXPIRED'
+            && self::enum($blocking['kind'] ?? null, 'SYMBOL_TRADING_SCOPE_', ['SITE'=>2,'AGENT'=>3]) === $scope['kind']
+            && (string) ($blocking['home_site_id'] ?? '') === $scope['home_site_id']
+            && (string) ($blocking['agent_id'] ?? '0') === ($scope['agent_id'] ?? '0');
     }
 
     private function receipt(array $response, array $request, string $action, string $method): void

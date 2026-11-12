@@ -115,4 +115,57 @@ $rpc=static function ($method,$request): array {
 };
 (new SymbolTradingLifecycle($db,$rpc,fn ()=>'123'))->execute(10,0,$id,'pause');
 $check(!(bool)$configs->query(10)->where('id',$id)->value('is_visible'),'Native SDK enum/field normalization');
+foreach ([[10,0],[10,20]] as [$site,$agent]) {
+    foreach (['paused','listed','delisted','busy','effective_busy','unselected','wrong_scope','ancestor_block','other_reason',
+        'unknown_effective','unknown_state','missing_access','parent_disabled','write_reject','pending','wrong_command','resume'] as $case) {
+        [$db,$configs]=$fixture();
+        $id=(int)$configs->query($site,$agent)->where('symbol','BTCUSDT')->value('id');
+        if ($case==='parent_disabled') $configs->query(0)->where('symbol','BTCUSDT')->update(['is_visible'=>false]);
+        $before=$db->table('symbol_config')->orderBy('id')->get()->toJson();
+        $writes=[];
+        $rpc=static function ($method,$request) use ($case,$site,$agent,$response,$db,$before,$check,&$writes): array {
+            $check($db->table('symbol_config')->orderBy('id')->get()->toJson()===$before,'Reselection never changes DB before acknowledgement');
+            if ($method==='ListSymbolTradingConfigs') {
+                $check($request['scope']===SymbolTradingLifecycle::scope($site,$agent),'No broader unauthorized scope queries');
+                $config=['symbol'=>'BTCUSDT','state'=>'SYMBOL_TRADING_STATE_'.match($case) {
+                    'listed'=>'LISTED','delisted'=>'DELISTED','busy'=>'DELISTING','unknown_state'=>'UNSPECIFIED',default=>'PAUSED',
+                },'selected'=>true,'platformGeneration'=>'4','tradingAccess'=>[
+                    'blockingScope'=>$request['scope'],'reason'=>'PARENT_GENERATION_EXPIRED','canReduce'=>true,'canCancel'=>true,
+                ]];
+                if ($case==='unselected') unset($config['selected']);
+                if ($case==='wrong_scope') $config['tradingAccess']['blockingScope']['home_site_id']='999';
+                if ($case==='ancestor_block') $config['tradingAccess']['blockingScope']=['kind'=>1];
+                if ($case==='other_reason') $config['tradingAccess']['reason']='UNKNOWN';
+                if ($case==='unknown_effective') $config['tradingAccess']['effectiveState']=999;
+                if ($case==='effective_busy') $config['tradingAccess']['effectiveState']='SYMBOL_TRADING_STATE_DELISTING';
+                if ($case==='missing_access') unset($config['tradingAccess']);
+                return ['mode'=>'SYMBOL_TRADING_MODE_WHITELIST','scopeVersion'=>'2','configs'=>[$config]];
+            }
+            $writes[]=[$method,$request];
+            $check($method==='ListSymbolForTrading','Expired bindings only reselect through List, never Initialize or Resume');
+            $check($request['expected_version']==='2','Reselection uses current target scope version');
+            if ($case==='write_reject') return ['reject_code'=>6003,'message'=>'parent unavailable'];
+            $result=$response($method,$request);
+            if ($case==='pending') $result['operation']['state']=1;
+            if ($case==='wrong_command') $result['operation']['command_id']='456';
+            return $result;
+        };
+        try {
+            (new SymbolTradingLifecycle($db,$rpc,fn ()=>'123'))->execute($site,$agent,$id,$case==='resume'?'resume':'list');
+            $check(in_array($case,['paused','listed','delisted'],true),'Invalid expiry case accepted: '.$case);
+            $check(count($writes)===1,'One re-selection RPC');
+            $saved=$configs->query($site,$agent)->where('id',$id)->first();
+            $check((int)$saved->is_active===1 && (bool)$saved->is_visible,'Both switches open after confirmed reselection');
+            foreach (json_decode($before,true,512,JSON_THROW_ON_ERROR) as $old) {
+                if ((int)$old['id']===$id) continue;
+                $check((array)$db->table('symbol_config')->where('id',$old['id'])->first()===$old,'Reselection changes only exact scope');
+            }
+        } catch (DomainException $e) {
+            $check(!in_array($case,['paused','listed','delisted'],true),'Valid expiry rejected: '.$e->getMessage());
+            $check($db->table('symbol_config')->orderBy('id')->get()->toJson()===$before,'Rejected reselection preserves DB');
+            if (!in_array($case,['write_reject','pending','wrong_command'],true)) $check($writes===[],'Failed preflight cannot send List');
+            if (in_array($case,['busy','effective_busy'],true)) $check($e->getMessage()===SymbolTradingLifecycle::BUSY,'Delisting stays blocked');
+        }
+    }
+}
 echo "Symbol trading lifecycle: {$checks} checks passed\n";
