@@ -24,10 +24,7 @@ final class TranslationRuntime
                 : json_decode((string) ($space->enabled_locales ?? 'null'), true);
             if (!is_array($locales)) $locales = str_getcsv(trim((string) ($space->enabled_locales ?? ''), '{}'));
         }
-        return ['api_key' => (new TranslationCredential())->resolve($setting),
-            'concurrency' => max(1, min(20, (int) $setting->concurrency_limit)),
-            'timeout' => max(1, min(120, (int) ($setting->request_timeout_seconds ?? 30))),
-            'max_attempts' => max(1, min(10, (int) ($setting->max_attempts ?? 3))),
-            'target_locales' => array_values(array_diff($locales, [$space->source_locale ?? 'zh-CN']))];
+        return (new TranslationSettingsStore($db))->runtime($setting,
+            array_values(array_diff($locales, [$space->source_locale ?? 'zh-CN'])));
     }
 }

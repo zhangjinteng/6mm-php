@@ -224,21 +224,12 @@ class TranslationService
     public function settings(int $spaceId): array
     {
         $space = $this->space($spaceId);
-        $setting = $space->translation_setting_id ? $this->db->table('cms.translation_settings')->where('id', $space->translation_setting_id)->first() : null;
-        return [
-            'space_id' => (string) $space->id,
-            'space_revision' => (string) $space->revision,
-            'source_locale' => $space->source_locale,
-            'target_locales' => $this->targets($space),
-            'provider' => 'google',
-            'api_version' => 'v2',
-            'credential_ref' => ($setting->api_key_ciphertext ?? null) !== null ? 'database' : config('cms_translation.credential_ref'),
-            'supported' => !$setting || $setting->provider === 'google' && $setting->api_version === 'v2',
-            'is_enabled' => (bool) ($setting->is_enabled ?? false) && $setting->provider === 'google' && $setting->api_version === 'v2',
-            'concurrency_limit' => (int) ($setting->concurrency_limit ?? 3),
-            'request_timeout_seconds' => (int) ($setting->request_timeout_seconds ?? 30),
-            'max_attempts' => (int) ($setting->max_attempts ?? 3),
-        ] + (new TranslationCredential())->status($setting);
+        $store = new TranslationSettingsStore($this->db);
+        $result = $store->settings($store->byId($space->translation_setting_id ? (int) $space->translation_setting_id : null),
+            (string) $space->id, 'site', $space->source_locale, $this->targets($space));
+        // The external CMS form also protects changes to the containing content space.
+        $result['space_revision'] = (string) $space->revision;
+        return $result;
     }
 
     public function testConnection(#[\SensitiveParameter] array $p, GoogleTranslationClient $google): array
@@ -259,7 +250,7 @@ class TranslationService
 
     private function settingForSpace(object $space): ?object
     {
-        return $space->translation_setting_id ? $this->db->table('cms.translation_settings')->where('id', $space->translation_setting_id)->first() : null;
+        return (new TranslationSettingsStore($this->db))->byId($space->translation_setting_id ? (int) $space->translation_setting_id : null);
     }
 
     /** Worker scope is resolved from the job, not from the operator's current UI selection. */
@@ -278,17 +269,12 @@ class TranslationService
         if (in_array($before->source_locale, $p['target_locales'], true)) {
             $this->fail('目标语言不能包含源语言');
         }
-        $credential = new TranslationCredential();
+        $store = new TranslationSettingsStore($this->db);
         $existingSetting = $this->settingForSpace($before);
-        $candidate = trim((string) ($p['api_key'] ?? ''));
-        // Encrypt first to fail before a provider request if the dedicated master key is missing.
-        $ciphertext = $candidate !== '' ? $credential->encrypt($candidate) : ($existingSetting->api_key_ciphertext ?? null);
-        if ($candidate !== '' || $p['is_enabled']) {
-            $google->withApiKey($candidate !== '' ? $candidate : $credential->resolve($existingSetting))
-                ->translate('连接测试', 'zh-CN', 'en', false, (int) $p['request_timeout_seconds']);
-        }
-        unset($p['api_key'], $candidate);
-        return $this->db->transaction(function () use ($p, $actor, $ciphertext): array {
+        $settingRevision = (int) ($existingSetting->revision ?? 0);
+        $values = $store->prepare($existingSetting, array_replace($p, ['space_revision'=>$settingRevision]), $before->source_locale, $google);
+        unset($p['api_key']);
+        return $this->db->transaction(function () use ($p, $actor, $store, $values, $settingRevision): array {
             $space = $this->space((int) $p['space_id'], true);
             $this->writable($space);
             if ((string) $space->revision !== (string) $p['space_revision']) {
@@ -299,24 +285,10 @@ class TranslationService
             }
             // Each space owns its settings; do not silently mutate another space's shared config.
             $key = 'content-space-' . $space->id;
-            $old = $this->db->table('cms.translation_settings')->where('config_key', $key)->lockForUpdate()->first();
-            $data = [
-                'provider' => 'google',
-                'api_version' => 'v2',
-                'credential_ref' => $ciphertext !== null ? 'database' : config('cms_translation.credential_ref'),
-                'api_key_ciphertext' => $ciphertext,
-                'project_id' => null,
-                'is_enabled' => $p['is_enabled'],
-                'concurrency_limit' => $p['concurrency_limit'],
-                'request_timeout_seconds' => $p['request_timeout_seconds'],
-                'max_attempts' => $p['max_attempts'],
-            ] + $this->audit($actor);
-            if ($old) {
-                $id = $old->id;
-                $this->db->table('cms.translation_settings')->where('id', $id)->update($data);
-            } else {
-                $id = $this->db->table('cms.translation_settings')->insertGetId($data + ['config_key' => $key] + $this->audit($actor, true));
-            }
+            $old = $store->row($key);
+            // Old shared configurations are copied on first save, never mutated across spaces.
+            $revision = $old ? $settingRevision : 0;
+            $id = $store->persist($key, $values, $revision, $actor)->id;
             $this->db->table('cms.spaces')->where('id', $space->id)->update([
                 'enabled_locales' => $this->pgArray(array_merge([$space->source_locale], $p['target_locales'])),
                 'translation_setting_id' => $id,
@@ -343,7 +315,10 @@ class TranslationService
 
     public function targets(object $space): array
     {
-        return array_values(array_filter(json_decode($space->locales_json, true) ?: [], static fn (string $locale): bool => $locale !== $space->source_locale && isset(TranslationCatalog::LOCALES[$locale])));
+        $store = new TranslationSettingsStore($this->db);
+        $fallback = array_values(array_filter(json_decode($space->locales_json, true) ?: [], static fn (string $locale): bool => $locale !== $space->source_locale && isset(TranslationCatalog::LOCALES[$locale])));
+        return array_values(array_filter($store->targets($this->settingForSpace($space), $fallback),
+            static fn (string $locale): bool => $locale !== $space->source_locale && isset(TranslationCatalog::LOCALES[$locale])));
     }
 
     public function entities(array $spec, int $space, string $module): Builder
