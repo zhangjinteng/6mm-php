@@ -158,6 +158,10 @@ final class HandlingFeeConfigManager
                 $op = $this->journal()->get($site, $agent, $snapshot['id']);
                 if (!$op || $op['status'] !== 'applied') throw new DomainException('手续费重算操作记录缺失或状态异常');
                 if (empty($op['vip_recalculated_at'])) {
+                    // Complete linked RPC receipts only after the business/VIP work actually succeeded.
+                    if (function_exists('app') && app()->bound(\SixMm\Shared\RpcTickets\WriteJournal::class)) {
+                        app(\SixMm\Shared\RpcTickets\WriteJournal::class)->completeOperation($op['id']);
+                    }
                     $op['vip_recalculated_at'] = $this->now();
                     $this->journal()->save($op);
                 }
@@ -174,7 +178,8 @@ final class HandlingFeeConfigManager
             if ($op['status'] === 'confirmed') {
                 $response = json_decode($op['response'], true, 512, JSON_THROW_ON_ERROR);
             } else {
-                $response = $this->normalize(($this->rpc)($op['method'], $payload));
+                $response = $this->normalize(\SixMm\Shared\RpcTickets\OperationContext::run($op['id'],
+                    fn()=>($this->rpc)($op['method'], $payload)));
                 if ($op['action'] !== 'delete') {
                     $items = $response['results'] ?? [];
                     $expected = $payload['items'][0];
