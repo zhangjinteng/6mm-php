@@ -33,9 +33,11 @@ RPC 请求、metadata、响应和重试策略不变，不新增通用重发或�
 
 ## Redis
 
-复用两端 `handling_fee_operations` 独立连接，默认同一 Redis 服务 2 号库。通用小票前缀 `rpc-write:{tickets}:v1`，可用 `RPC_WRITE_TICKET_PREFIX` 配置，两端应一致。
+复用两端 `handling_fee_operations` 专用连接，固定使用 **DB0**，兼容正式服仅支持 DB0 的 Redis。连接配置最终覆盖 URL 中的库号，旧 `HANDLING_FEE_REDIS_DB` 不再生效。通用小票前缀 `rpc-write:{tickets}:v1`，可用 `RPC_WRITE_TICKET_PREFIX` 配置，两端应一致。
 
-键：`:ticket:<id>` 保存小票；`:operation:<hash>:tickets` 与 `:count` 保存尝试关联；`:pending` 索引待确认记录。不得将本库配置为普通缓存库、执行 FLUSHDB/FLUSHALL 或启用淘汰；应持久化并备份。不新增数据库表。
+键：`:ticket:<id>` 保存小票；`:operation:<hash>:tickets` 与 `:count` 保存尝试关联；`:pending` 索引待确认记录。可以与普通缓存同在 DB0，但缓存清理必须仅清理实际 `laravel_` 开头的缓存 key，不能执行 FLUSHDB/FLUSHALL；小票前缀不得设为 `laravel_`。应持久化、备份并避免淘汰。不新增数据库表。
+
+切换只影响新连接的读写，原 DB2 的记录不自动迁移或删除；如有未收尾操作，应先核对旧记录再切换业务流量。更新代码后需清除旧的 Laravel 配置缓存并重启长驻进程。
 
 没有新增面向用户的小票查询接口。以后开放查询时必须按可信登录身份校验 application、站点、商户与用户归属，不能把全局 pending 索引直接返回给商户。
 

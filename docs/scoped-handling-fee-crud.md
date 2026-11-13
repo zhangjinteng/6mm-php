@@ -17,7 +17,7 @@
 2. 复用已有 `handling_fee_level_config` 的归属字段、`tk_version` 及未删除记录的 `(home_site_id, agent_id, level)` 唯一索引。不再包含操作日志建表代码；Agent 的 `2026_11_12_200000_enable_scoped_handling_fee_crud` 只更新白标、商户菜单及增删改权限项，不自动给普通角色授权。已执行过的旧日志表不自动删除，历史待确认记录应先核对再切换。
 3. 生产需验证 TK 的 `admin` 与 `agent_admin` 身份具备查询与变更费率的 ACL：`GetFeeLevelConfig`、`BatchUpdateFeeLevelConfig`、`DeleteFeeLevelConfig`。不得以管理员身份代替商户身份绕过上游权限。
 4. 当前本地打包用于联调，不等于已向共享包仓库发布。发布流水线应替换为对应正式版本。
-5. 两端必须使用相同的 `HANDLING_FEE_REDIS_*` 连接参数及 `HANDLING_FEE_REDIS_PREFIX`（默认 `handling-fee:{operations}:v1`）。默认复用 Redis 服务的独立 **2 号库**，`HANDLING_FEE_REDIS_DB` 优先于 URL 内的普通缓存库号；不要与任何应用缓存使用同一库，`cache:clear` 可能清空整个库而不只是一个前缀。宿主会拒绝已知的同库配置。仅支持 0 号库的服务须用独立 Redis 实例。应持久化、备份并使用 `noeviction`；未确认记录不能当普通缓存清理。Redis 不可用时手续费写操作失败关闭，不会先发送 TK 写请求。
+5. 两端必须使用相同的 `HANDLING_FEE_REDIS_*` 连接地址和鉴权参数及 `HANDLING_FEE_REDIS_PREFIX`（默认 `handling-fee:{operations}:v1`）。小票及恢复记录固定使用 **DB0**，不再使用 `HANDLING_FEE_REDIS_DB`，允许与普通缓存同库。缓存清理必须只清理实际 `laravel_` 开头的缓存 key，不得执行 FLUSHDB/FLUSHALL；手续费和 RPC 小票前缀不得设为 `laravel_`。应持久化、备份并使用 `noeviction`；未确认记录不能当普通缓存清理。Redis 不可用时手续费写操作失败关闭，不会先发送 TK 写请求。原 DB2 记录不自动搬动或删除，有未完成操作时需先核对。
 
 ## 验证
 
