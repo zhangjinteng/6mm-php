@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-require dirname(__DIR__).'/vendor/autoload.php';
+require (getenv('SIXMM_TEST_AUTOLOAD') ?: dirname(__DIR__).'/vendor/autoload.php');
 require __DIR__.'/fixtures/scoped_symbol_configs.php';
 
 use Illuminate\Database\Capsule\Manager as Capsule;
@@ -66,6 +66,7 @@ foreach ([[0,0],[10,0],[10,20]] as [$site,$agent]) {
         $check($result['message']===($action==='delist'?'下架申请已提交':['list'=>'上架成功','pause'=>'暂停交易成功','resume'=>'恢复交易成功'][$action]),'No false completion message');
     }
 }
+
 
 foreach (['busy','parent_busy','query_error','empty','unknown_state','missing_access','write_error','rejected','wrong_command','pending_pause','wrong_scope','not_paused'] as $failure) {
     [$db,$configs]=$fixture();
@@ -196,6 +197,42 @@ foreach ([[10,0],[10,20]] as [$site,$agent]) {
             $check($db->table('symbol_config')->orderBy('id')->get()->toJson()===$before,'Rejected reselection preserves DB');
             if (!in_array($case,['write_reject','pending','wrong_command'],true)) $check($writes===[],'Failed preflight cannot send List');
             if (in_array($case,['busy','effective_busy'],true)) $check($e->getMessage()===SymbolTradingLifecycle::BUSY,'Delisting stays blocked');
+        }
+    }
+}
+
+// Strict policy: unselected zero states and any closed local ancestor block writes.
+foreach ([[0,0],[10,0],[10,20]] as [$site,$agent]) {
+    foreach (['zero','symbolic_zero','unknown','parent_paused','parent_delisted','site_paused','site_delisted'] as $case) {
+        if ($site===0 && str_starts_with($case,'parent_')) continue;
+        if ($agent===0 && str_starts_with($case,'site_')) continue;
+        foreach (['list'=>4,'pause'=>1,'resume'=>2,'delist'=>2] as $action=>$state) {
+            [$db,$configs]=$fixture();
+            $id=(int)$configs->query($site,$agent)->where('symbol','BTCUSDT')->value('id');
+            if (str_starts_with($case,'parent_')) $configs->query(0)->where('symbol','BTCUSDT')->update([
+                'is_active'=>$case==='parent_delisted'?0:1,'is_visible'=>$case==='parent_paused'?false:true,
+            ]);
+            if (str_starts_with($case,'site_')) $configs->query($site)->where('symbol','BTCUSDT')->update([
+                'is_active'=>$case==='site_delisted'?0:1,'is_visible'=>$case==='site_paused'?false:true,
+            ]);
+            $before=$db->table('symbol_config')->orderBy('id')->get()->toJson();
+            $calls=[];
+            $rpc=static function ($method,$request) use ($case,$state,&$calls,$check): array {
+                $calls[]=$method;
+                $check($method==='ListSymbolTradingConfigs','Strict preflight must not send writes');
+                $value=match($case) {'zero'=>0,'symbolic_zero'=>'SYMBOL_TRADING_STATE_UNSPECIFIED','unknown'=>'SYMBOL_TRADING_STATE_NEW',default=>$state};
+                return ['mode'=>1,'scopeVersion'=>'8','configs'=>[
+                    ['symbol'=>'BTCUSDT','selected'=>!in_array($case,['zero','symbolic_zero'],true),'state'=>$value,
+                        'tradingAccess'=>['effectiveState'=>in_array($case,['zero','symbolic_zero'],true)?0:$state,
+                            'reason'=>in_array($case,['zero','symbolic_zero'],true)?'NOT_SELECTED':'']],
+                ]];
+            };
+            $error=null;
+            try {(new SymbolTradingLifecycle($db,$rpc,fn ()=>'123'))->execute($site,$agent,$id,$action);}
+            catch (DomainException $e) {$error=$e;}
+            $check($error!==null,'Strict policy blocks '.$case.' / '.$action);
+            $check($calls===['ListSymbolTradingConfigs'],'No initialization, List, Resume or other writes after blocked preflight');
+            $check($db->table('symbol_config')->orderBy('id')->get()->toJson()===$before,'Blocked operation preserves all local rows');
         }
     }
 }
