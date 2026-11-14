@@ -201,7 +201,7 @@ foreach ([[10,0],[10,20]] as [$site,$agent]) {
     }
 }
 
-// Strict policy: unselected zero states and any closed local ancestor block writes.
+// Strict policy: malformed zero states and any closed local ancestor block writes.
 foreach ([[0,0],[10,0],[10,20]] as [$site,$agent]) {
     foreach (['zero','symbolic_zero','unknown','parent_paused','parent_delisted','site_paused','site_delisted'] as $case) {
         if ($site===0 && str_starts_with($case,'parent_')) continue;
@@ -233,6 +233,72 @@ foreach ([[0,0],[10,0],[10,20]] as [$site,$agent]) {
             $check($error!==null,'Strict policy blocks '.$case.' / '.$action);
             $check($calls===['ListSymbolTradingConfigs'],'No initialization, List, Resume or other writes after blocked preflight');
             $check($db->table('symbol_config')->orderBy('id')->get()->toJson()===$before,'Blocked operation preserves all local rows');
+        }
+    }
+}
+
+// A precise local NOT_SELECTED state permits List, subject to every ancestor gate.
+foreach ([[0,0],[10,0],[10,20]] as [$site,$agent]) {
+    foreach (['first','numeric_zero','root_paused','root_delisted','site_paused','site_delisted',
+        'unknown_state','unknown_effective','missing_access','wrong_scope','selected_true','bad_selected',
+        'can_open','unknown_mode','zero_version','query_reject','query_error','write_reject','wrong_receipt'] as $case) {
+        if ($site===0 && str_starts_with($case,'root_')) continue;
+        if ($agent===0 && str_starts_with($case,'site_')) continue;
+        [$db,$configs]=$fixture();
+        $id=(int)$configs->query($site,$agent)->where('symbol','BTCUSDT')->value('id');
+        $configs->query($site,$agent)->where('id',$id)->update(['is_active'=>0,'is_visible'=>false]);
+        if (str_starts_with($case,'root_')) $configs->query(0)->where('symbol','BTCUSDT')->update([
+            'is_active'=>$case==='root_delisted'?0:1,'is_visible'=>$case==='root_paused'?false:true,
+        ]);
+        if (str_starts_with($case,'site_')) $configs->query($site)->where('symbol','BTCUSDT')->update([
+            'is_active'=>$case==='site_delisted'?0:1,'is_visible'=>$case==='site_paused'?false:true,
+        ]);
+        $before=$db->table('symbol_config')->orderBy('id')->get()->toJson();
+        $calls=[];
+        $rpc=static function ($method,$request) use ($case,$response,$check,$db,$before,&$calls): array {
+            $calls[]=$method;
+            $check($db->table('symbol_config')->orderBy('id')->get()->toJson()===$before,'No SQL changes before confirmed first selection');
+            if ($method==='ListSymbolTradingConfigs') {
+                $check(!isset($request['state']),'Do not filter out unselected rows');
+                if ($case==='query_error') throw new RuntimeException('offline');
+                if ($case==='query_reject') return ['rejectCode'=>6002,'message'=>'invalid scope'];
+                $row=['symbol'=>'BTCUSDT','selected'=>false,'state'=>'SYMBOL_TRADING_STATE_UNSPECIFIED',
+                    'tradingAccess'=>['effectiveState'=>'SYMBOL_TRADING_STATE_UNSPECIFIED','canOpen'=>false,
+                        'reason'=>'NOT_SELECTED','blockingScope'=>$request['scope']]];
+                if ($case==='numeric_zero') {$row['state']=0;$row['tradingAccess']['effectiveState']='0';}
+                if ($case==='unknown_state') $row['state']='SYMBOL_TRADING_STATE_NEW';
+                if ($case==='unknown_effective') $row['tradingAccess']['effectiveState']=99;
+                if ($case==='missing_access') unset($row['tradingAccess']);
+                if ($case==='wrong_scope') $row['tradingAccess']['blockingScope']=['kind'=>2,'home_site_id'=>'999'];
+                if ($case==='selected_true') $row['selected']=true;
+                if ($case==='bad_selected') $row['selected']='false';
+                if ($case==='can_open') $row['tradingAccess']['canOpen']=true;
+                return ['rejectCode'=>0,'mode'=>$case==='unknown_mode'?'NEW_MODE':'SYMBOL_TRADING_MODE_WHITELIST',
+                    'scopeVersion'=>$case==='zero_version'?'0':'9007199254740993','configs'=>[$row]];
+            }
+            $check($method==='ListSymbolForTrading','First selection only sends List, never Initialize or Resume');
+            $check($request['expected_version']==='9007199254740993' && $request['command_id']==='9007199254740995','Preserve exact version and stable command');
+            if ($case==='write_reject') return ['rejectCode'=>6003,'message'=>'version conflict'];
+            $r=$response($method,$request);
+            if ($case==='wrong_receipt') $r['operation']['symbol']='ETHUSDT';
+            return $r;
+        };
+        $error=null;
+        try {(new SymbolTradingLifecycle($db,$rpc,fn ()=>'9007199254740995'))->execute($site,$agent,$id,'list');}
+        catch (DomainException|RuntimeException $e) {$error=$e;}
+        $ok=in_array($case,['first','numeric_zero'],true);
+        $check(($error===null)===$ok,'Strict parent / first selection outcome: '.$case);
+        if ($ok) {
+            $check($calls===['ListSymbolTradingConfigs','ListSymbolForTrading'],'Exactly one preflight and one scoped write');
+            $saved=$configs->query($site,$agent)->where('id',$id)->first();
+            $check((int)$saved->is_active===1 && (bool)$saved->is_visible,'Confirmed List opens both local switches');
+            foreach (json_decode($before,true) as $old) if ((int)$old['id']!==$id) {
+                $check((array)$db->table('symbol_config')->where('id',$old['id'])->first()===$old,'No ancestor or unrelated row is changed');
+            }
+        } else {
+            $check($db->table('symbol_config')->orderBy('id')->get()->toJson()===$before,'Rejected first selection preserves SQL');
+            if (!in_array($case,['write_reject','wrong_receipt'],true)) $check($calls===['ListSymbolTradingConfigs'],'Blocked preflight cannot send writes');
+            if (str_starts_with($case,'root_') || str_starts_with($case,'site_')) $check(str_contains($error->getMessage(),'上级配置已关闭'),'Strict local ancestor gate is retained');
         }
     }
 }
