@@ -30,8 +30,11 @@ final class FeeLevelBatch
         $seen = [];
         foreach ($response['results'] ?? [] as $result) {
             $key = self::key($result);
-            if (!isset($expected[$key]) || isset($seen[$key]) || (int)($result['reject_code'] ?? 0) !== 0) {
+            if (!isset($expected[$key]) || isset($seen[$key])) {
                 throw new DomainException('手续费同步结果归属不符、重复或被拒绝');
+            }
+            if ((int) ($result['reject_code'] ?? 0) !== 0) {
+                throw \SixMm\Shared\RpcErrors\TkRpcException::business((int) $result['reject_code'], 'BatchUpdateFeeLevelConfig', [], (string) ($result['message'] ?? ''));
             }
             $seen[$key] = true;
         }

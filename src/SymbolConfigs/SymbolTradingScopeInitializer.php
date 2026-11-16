@@ -116,13 +116,13 @@ final class SymbolTradingScopeInitializer
 
     private function call(string $method, array $request): array
     {
-        $response = $this->normalize(($this->rpc)($method, $request));
+        $response = $this->normalize(\SixMm\Shared\RpcErrors\TkRpcException::call($method, fn () => ($this->rpc)($method, $request)));
         $this->accepted($response);
         return $response;
     }
     private function accepted(array $response): void
     {
-        if ((int) ($response['reject_code'] ?? 0) !== 0) throw new DomainException((string) ($response['message'] ?? 'TK 拒绝经营范围初始化'));
+        if ((int) ($response['reject_code'] ?? 0) !== 0) throw \SixMm\Shared\RpcErrors\TkRpcException::business((int) $response['reject_code'], 'InitializeSymbolTradingScope', [], (string) ($response['message'] ?? ''));
     }
     private function state($value): int { return $this->enum($value, 'SYMBOL_TRADING_STATE_', ['UNSPECIFIED'=>0,'LISTED'=>1,'PAUSED'=>2,'DELISTING'=>3,'DELISTED'=>4]); }
     private function enum($value, string $prefix, array $values): int

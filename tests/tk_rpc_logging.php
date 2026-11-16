@@ -21,7 +21,7 @@ $check = static function (bool $ok, string $why) use (&$checks): void {
 };
 $events = [];
 $writer = static function (string $level, string $message, array $context) use (&$events): void {
-    $events[] = ['level' => $level, 'message' => $message] + $context;
+    $events[] = ['level' => $level, 'log_message' => $message] + $context;
 };
 $makeLogger = static fn(string $method = 'DelistSymbolTrading', string $identity = 'admin', ?callable $sink = null) =>
     new TkRpcLogger($identity, '/trade_kernel.TradeKernel/'.$method, 'offline:9090', ['timeout' => 8000000], $sink ?? $writer);

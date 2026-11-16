@@ -109,6 +109,7 @@ final class SymbolTradingLifecycle
                 || $effective < 0 || ($effective === 0 && !$firstSelection && !$reselect)
                 || !preg_match('/^[1-9][0-9]*$/D', $version)) throw new DomainException(self::UNCONFIRMED);
         } catch (Throwable $e) {
+            if ($tk = \SixMm\Shared\RpcErrors\TkRpcException::find($e)) throw $tk;
             throw new DomainException(self::UNCONFIRMED, 0, $e);
         }
         if ($state === 3 || $effective === 3) throw new DomainException(self::BUSY);
@@ -162,9 +163,9 @@ final class SymbolTradingLifecycle
 
     private function call(string $method, array $request): array
     {
-        $response = self::normalize(($this->rpc)($method, $request));
+        $response = self::normalize(\SixMm\Shared\RpcErrors\TkRpcException::call($method, fn () => ($this->rpc)($method, $request)));
         // Protobuf omits the successful zero reject_code in JSON.
-        if ((int) ($response['reject_code'] ?? 0) !== 0) throw new DomainException((string) ($response['message'] ?? '交易服务拒绝操作'));
+        if ((int) ($response['reject_code'] ?? 0) !== 0) throw \SixMm\Shared\RpcErrors\TkRpcException::business((int) $response['reject_code'], $method, $request, (string) ($response['message'] ?? ''));
         return $response;
     }
 

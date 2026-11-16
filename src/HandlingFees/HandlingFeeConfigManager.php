@@ -192,12 +192,12 @@ final class HandlingFeeConfigManager
                 } else $item = $response;
                 $code = (int) ($item['reject_code'] ?? 0);
                 if ($code !== 0 && $code !== -1) {
-                    $message = 'TK 拒绝手续费操作（' . $code . '）：' . ($item['message'] ?? $response['message'] ?? '请核对配置');
+                    $message = \SixMm\Shared\RpcErrors\TkErrorMessages::business($code, $op['method'], $payload);
                     $op = $this->journal()->save(array_replace($op, ['status' => 'rejected', 'error' => $message,
                         'response' => json_encode($response, JSON_THROW_ON_ERROR)]));
                     throw new HandlingFeeRejected($message);
                 }
-                if ($code === -1) throw new DomainException('TK 返回系统错误，操作结果待确认');
+                if ($code === -1) throw new DomainException(\SixMm\Shared\RpcErrors\TkErrorMessages::business(-1));
                 if ($op['action'] !== 'delete') FeeLevelBatch::confirm($payload, $response);
                 // Keep the confirmed response before touching SQL. A retry can finish a failed SQL commit without another TK write.
                 $op = $this->journal()->save(array_replace($op, ['status' => 'confirmed', 'response' => json_encode($response, JSON_THROW_ON_ERROR)]));

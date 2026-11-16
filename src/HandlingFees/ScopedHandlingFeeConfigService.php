@@ -70,7 +70,8 @@ final class ScopedHandlingFeeConfigService
                 $payload = $journal ? $journal(hash('sha256',json_encode($identity,JSON_THROW_ON_ERROR)),$factory) : $factory();
                 try { FeeLevelBatch::confirm($payload, $publish($payload)); }
                 catch (\Throwable $e) {
-                    throw new DomainException('手续费同步失败，本地修改将回滚；TK 可能已部分生效，请核对后重试',0,$e);
+                    $tk = \SixMm\Shared\RpcErrors\TkRpcException::find($e);
+                    throw new DomainException(($tk ? $tk->getMessage().'；' : '手续费同步失败，').'本地修改将回滚；TK 可能已部分生效，请核对后重试',0,$e);
                 }
                 if ($this->db->getSchemaBuilder()->hasColumn('handling_fee_level_config','tk_version')) {
                     foreach ($payload['items'] as $item) $this->query($site,$agent)->where('level',$item['level'])
