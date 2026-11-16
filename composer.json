@@ -40,6 +40,7 @@
     },
     "scripts": {
         "test": [
+            "@php tests/tk_rpc_logging.php",
             "@php tests/rpc_write_tickets.php",
             "@php tests/rpc_ticket_redis.php",
             "@php tests/rpc_ticket_native.php",
