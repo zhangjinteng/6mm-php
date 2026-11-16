@@ -142,7 +142,7 @@ final class TkRpcLogger
     private function write(string $level, string $event, array $data): void
     {
         try {
-            ($this->writer)($level, 'TK RPC '.$event, $this->context + [
+            ($this->writer)($level, 'TK RPC '.basename($this->method).' '.$event, $this->context + [
                 'event' => $event,
                 'duration_ms' => $this->started > 0 ? round((hrtime(true) - $this->started) / 1000000, 3) : null,
             ] + $data);

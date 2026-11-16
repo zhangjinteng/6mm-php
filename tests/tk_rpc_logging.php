@@ -35,6 +35,7 @@ $log->start($request);
 $log->response(['rejectCode' => 7004, 'message' => 'invalid settlement_price'], (object) ['code' => 0, 'details' => '']);
 $log->response([], (object) ['code' => 0]);
 $check(count($events) === 2, 'One request and response, without duplicate finish');
+$check(array_column($events, 'log_message') === ['TK RPC DelistSymbolTrading request', 'TK RPC DelistSymbolTrading response'], 'Delisting method appears in log titles');
 $check($events[0]['call_id'] === $events[1]['call_id'] && strlen($events[0]['call_id']) === 32, 'Correlated physical call ID');
 $check($events[0]['application'] === 'platform' && $events[0]['method'] === 'DelistSymbolTrading', 'Stable application and method');
 $check($events[0]['endpoint'] === 'offline:9090' && $events[0]['timeout_ms'] === 8000, 'Actual node and timeout');
@@ -49,6 +50,7 @@ $batch = $makeLogger('BatchUpdateFeeLevelConfig', 'agent_admin');
 $batch->start(['items' => [['command_id' => '12']]]);
 $batch->response(['results' => [[], ['rejectCode' => 7004]]], ['code' => 0]);
 $check($events[0]['application'] === 'agent' && $events[1]['result'] === 'batch_rejected', 'Agent and partial batch rejection visible');
+$check(array_column($events, 'log_message') === ['TK RPC BatchUpdateFeeLevelConfig request', 'TK RPC BatchUpdateFeeLevelConfig response'], 'Batch method appears in log titles');
 $check($events[1]['batch_failures'] === [['index' => 1, 'reject_code' => 7004]], 'Failed result indices and codes recorded');
 
 $events = [];
@@ -56,6 +58,7 @@ $log = $makeLogger();
 $log->start([]);
 $error = new RuntimeException('Authorization: Bearer hidden-token; password=hidden-password');
 $log->exception($error, 'wait');
+$check($events[1]['log_message'] === 'TK RPC DelistSymbolTrading exception', 'Thrown error title includes method');
 $check($events[1]['event'] === 'exception' && $events[1]['stage'] === 'wait', 'Thrown error has dedicated event');
 $check(!str_contains(json_encode($events), 'hidden-token') && !str_contains(json_encode($events), 'hidden-password'), 'Exception credentials redacted');
 
@@ -64,6 +67,7 @@ $log = $makeLogger('ListSymbolTradingConfigs');
 $log->start([]);
 $log->response(null, ['code' => 4, 'details' => 'deadline exceeded']);
 $check(array_column($events, 'event') === ['request', 'response', 'exception'], 'Nonzero gRPC status recorded as transport error');
+$check(array_column($events, 'log_message') === ['TK RPC ListSymbolTradingConfigs request', 'TK RPC ListSymbolTradingConfigs response', 'TK RPC ListSymbolTradingConfigs exception'], 'Transport failure titles include method');
 $check($events[1]['status_code'] === 4 && $events[1]['result'] === 'transport_error', 'Transport and business errors remain distinct');
 
 $events = [];

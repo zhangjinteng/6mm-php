@@ -11,10 +11,10 @@ and SDK response-contract failures without changing the SDK call or retry policy
 
 ## Events
 
-- `TK RPC request`: emitted before the write-ticket check and native send.
-- `TK RPC response`: emitted when native `wait()` returns, including business
+- `TK RPC {method} request`: emitted before the write-ticket check and native send.
+- `TK RPC {method} response`: emitted when native `wait()` returns, including business
   rejection or a nonzero transport status.
-- `TK RPC exception`: emitted for thrown start/wait errors, a blocked pre-send
+- `TK RPC {method} exception`: emitted for thrown start/wait errors, a blocked pre-send
   write-ticket check, or a nonzero/absent gRPC status.
 
 Each actual attempt has a separate `call_id`. SDK retries are not changed and
