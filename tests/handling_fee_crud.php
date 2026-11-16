@@ -13,18 +13,29 @@ $scoped = new ScopedHandlingFeeConfigService($db); $scoped->ensureScope(10); $sc
 $remote = []; $calls = []; $mode = 'ok'; $receipts = [];
 $rpc = static function (string $method, array $payload) use (&$remote, &$calls, &$mode, &$receipts): array {
     $calls[] = [$method, $payload];
-    $item = $payload['items'][0] ?? $payload;
-    $key = ($item['home_site_id'] ?: '0') . ':' . $item['agent_id'] . ':' . $item['level'];
-    if ($method === 'GetFeeLevelConfig') return ['configs' => isset($remote[$key]) ? [$remote[$key]] : [], 'total_count' => isset($remote[$key]) ? 1 : 0];
-    if ($mode === 'reject') return $method === 'DeleteFeeLevelConfig' ? ['reject_code' => 6003] : ['total_count' => 1, 'failed_count' => 1, 'success_count' => 0,
-        'results' => [$item + ['reject_code' => 6003]]];
-    if (!isset($receipts[$item['command_id']])) {
-        if ($method === 'DeleteFeeLevelConfig') { unset($remote[$key]); $receipts[$item['command_id']] = []; }
-        else { $remote[$key] = $item; $receipts[$item['command_id']] = ['total_count' => 1, 'success_count' => 1, 'failed_count' => 0,
-            'results' => [['home_site_id' => $item['home_site_id'], 'agent_id' => $item['agent_id'], 'level' => $item['level'], 'reject_code' => 0]]]; }
+    if ($method === 'GetFeeLevelConfig') {
+        $key = ($payload['home_site_id'] ?: '0').':'.$payload['agent_id'].':'.$payload['level'];
+        return ['configs' => isset($remote[$key]) ? [$remote[$key]] : [], 'total_count' => isset($remote[$key]) ? 1 : 0];
+    }
+    if ($method === 'DeleteFeeLevelConfig') {
+        if ($mode === 'reject') return ['reject_code' => 6003];
+        $key = ($payload['home_site_id'] ?: '0').':'.$payload['agent_id'].':'.$payload['level'];
+        unset($remote[$key]);
+        return [];
+    }
+    $results = [];
+    foreach ($payload['items'] as $item) {
+        if ($mode === 'reject') $results[] = $item + ['reject_code' => 6003];
+        else {
+            $key = ($item['home_site_id'] ?: '0').':'.$item['agent_id'].':'.$item['level'];
+            $remote[$key] = $item;
+            $receipts[$item['command_id']] ??= ['home_site_id' => $item['home_site_id'], 'agent_id' => $item['agent_id'], 'level' => $item['level'], 'reject_code' => 0];
+            $results[] = $receipts[$item['command_id']];
+        }
     }
     if ($mode === 'unknown') throw new RuntimeException('reply lost after commit');
-    return $receipts[$item['command_id']];
+    return ['total_count' => count($results), 'success_count' => $mode === 'reject' ? 0 : count($results),
+        'failed_count' => $mode === 'reject' ? count($results) : 0, 'results' => $results];
 };
 $manager = new HandlingFeeConfigManager($db, $rpc, operations: $journal);
 $checks = 0;
@@ -100,7 +111,7 @@ $journal->failPrepared = true;
 $callCount = count($calls);
 try { $manager->mutate(13,23,'create',array_replace($input,['request_id'=>feeRequestId('redis-before-write')])); throw new LogicException('Missing journal accepted'); }
 catch (RuntimeException $e) {}
-$check(count($calls) === $callCount + 1 && end($calls)[0] === 'GetFeeLevelConfig' && $scoped->query(13,23)->count() === 2,
+$check(count($calls) > $callCount && count(array_filter(array_slice($calls, $callCount), static fn ($call) => $call[0] !== 'GetFeeLevelConfig')) === 0 && end($calls)[0] === 'GetFeeLevelConfig' && $scoped->query(13,23)->count() === 2,
     'Redis failure prevents any TK mutation or local fee write');
 $journal->failPrepared = false;
 $mode = 'unknown';

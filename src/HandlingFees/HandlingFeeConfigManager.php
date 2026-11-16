@@ -111,19 +111,23 @@ final class HandlingFeeConfigManager
                 $level = $before['level'] ?? $this->nextLevel($site, $agent)['level'];
                 if ($action === 'delete' && $level === 0) throw new DomainException('普通会员等级不能删除');
                 if ($action !== 'delete') $this->validateThreshold($site, $agent, $level, $values['volume_30d']);
-                $version = (string) ($before['tk_version'] ?? '0');
-                if ($version === '0') $version = $this->remoteVersion($site, $agent, $level);
-                if ($action === 'delete' && bccomp($version, '0') <= 0) throw new DomainException('TK 中未找到当前层等级，请先核对同步状态');
-                $payload = ['level' => $level, 'home_site_id' => $site === 0 ? '' : (string) $site,
-                    'agent_id' => (string) $agent, 'command_id' => (string) ($this->commandId)(),
-                    'version' => $action === 'delete' ? $version : (string) max((int) $version + 1, (int) (microtime(true) * 1_000_000))];
-                if ($action !== 'delete') $payload += array_intersect_key($values, array_flip(['maker_fee_rate', 'taker_fee_rate']));
+                $scopeBefore = $action === 'delete' ? null : $this->scoped->query($site, $agent)->orderBy('level')->lockForUpdate()
+                    ->get()->map(fn ($row) => $this->row((array) $row))->all();
                 $method = $action === 'delete' ? 'DeleteFeeLevelConfig' : 'BatchUpdateFeeLevelConfig';
-                if ($action !== 'delete') $payload = ['items' => [$payload]];
+                if ($action === 'delete') {
+                    $version = (string) ($before['tk_version'] ?? '0');
+                    if ($version === '0') $version = $this->remoteVersion($site, $agent, $level);
+                    if (bccomp($version, '0') <= 0) throw new DomainException('TK 中未找到当前层等级，请先核对同步状态');
+                    $payload = ['level' => $level, 'home_site_id' => $site === 0 ? '' : (string) $site,
+                        'agent_id' => (string) $agent, 'command_id' => (string) ($this->commandId)(), 'version' => $version];
+                } else {
+                    $payload = $this->scopePayload($site, $agent, $scopeBefore, $level, $values);
+                }
                 return ['id' => bin2hex(random_bytes(16)), 'home_site_id' => $site, 'agent_id' => $agent,
                     'request_id' => $requestId, 'action' => $action, 'level' => $level, 'intent_hash' => $intent,
                     'method' => $method, 'payload' => json_encode($payload, JSON_THROW_ON_ERROR),
                     'values' => json_encode($values, JSON_THROW_ON_ERROR), 'before' => $before === null ? null : json_encode($before, JSON_THROW_ON_ERROR),
+                    'scope_before' => $scopeBefore === null ? null : json_encode($scopeBefore, JSON_THROW_ON_ERROR),
                     'status' => 'prepared', 'operator' => $operator, 'created_at' => $this->now(), 'updated_at' => $this->now()];
             });
             // This write must succeed before any TK mutation is sent.
@@ -181,24 +185,30 @@ final class HandlingFeeConfigManager
                 $response = $this->normalize(\SixMm\Shared\RpcTickets\OperationContext::run($op['id'],
                     fn()=>($this->rpc)($op['method'], $payload)));
                 if ($op['action'] !== 'delete') {
-                    $items = $response['results'] ?? [];
-                    $expected = $payload['items'][0];
-                    if (count($items) !== 1 || (int) ($items[0]['level'] ?? -1) !== $expected['level']
-                        || (string) ($items[0]['home_site_id'] ?? '') !== $expected['home_site_id']
-                        || (string) ($items[0]['agent_id'] ?? 0) !== $expected['agent_id']) {
-                        throw new DomainException('TK 手续费操作回执不完整或归属不符');
+                    $items = FeeLevelBatch::results($payload, $response);
+                    $failed = array_values(array_filter($items, static fn ($item) => (int) ($item['reject_code'] ?? 0) !== 0));
+                    if ($failed !== []) {
+                        $messages = array_map(static fn ($item) => 'VIP'.($item['level'] ?? 0).'：'.
+                            \SixMm\Shared\RpcErrors\TkErrorMessages::business((int) $item['reject_code']), $failed);
+                        $message = implode('；', $messages);
+                        // A batch may already have applied other tiers. Keep its original commands pending.
+                        if (count($failed) !== count($items) || in_array(-1, array_column($failed, 'reject_code'), true)) {
+                            throw new DomainException('部分等级已成功或结果不明确，请核对原操作；'.$message);
+                        }
+                        $this->journal()->save(array_replace($op, ['status' => 'rejected', 'error' => $message,
+                            'response' => json_encode($response, JSON_THROW_ON_ERROR)]));
+                        throw new HandlingFeeRejected($message);
                     }
-                    $item = $items[0];
-                } else $item = $response;
-                $code = (int) ($item['reject_code'] ?? 0);
-                if ($code !== 0 && $code !== -1) {
-                    $message = \SixMm\Shared\RpcErrors\TkErrorMessages::business($code, $op['method'], $payload);
-                    $op = $this->journal()->save(array_replace($op, ['status' => 'rejected', 'error' => $message,
-                        'response' => json_encode($response, JSON_THROW_ON_ERROR)]));
-                    throw new HandlingFeeRejected($message);
+                } else {
+                    $code = (int) ($response['reject_code'] ?? 0);
+                    if ($code !== 0 && $code !== -1) {
+                        $message = \SixMm\Shared\RpcErrors\TkErrorMessages::business($code, $op['method'], $payload);
+                        $this->journal()->save(array_replace($op, ['status' => 'rejected', 'error' => $message,
+                            'response' => json_encode($response, JSON_THROW_ON_ERROR)]));
+                        throw new HandlingFeeRejected($message);
+                    }
+                    if ($code === -1) throw new DomainException(\SixMm\Shared\RpcErrors\TkErrorMessages::business(-1));
                 }
-                if ($code === -1) throw new DomainException(\SixMm\Shared\RpcErrors\TkErrorMessages::business(-1));
-                if ($op['action'] !== 'delete') FeeLevelBatch::confirm($payload, $response);
                 // Keep the confirmed response before touching SQL. A retry can finish a failed SQL commit without another TK write.
                 $op = $this->journal()->save(array_replace($op, ['status' => 'confirmed', 'response' => json_encode($response, JSON_THROW_ON_ERROR)]));
             }
@@ -221,6 +231,7 @@ final class HandlingFeeConfigManager
 
     private function applyLocal(array $op, array $payload): array
     {
+        if ($op['action'] !== 'delete' && isset($op['scope_before'])) return $this->applyScopeLocal($op, $payload);
         return $this->db->transaction(function () use ($op, $payload): array {
             $this->scoped->lock();
             $values = json_decode($op['values'], true, 512, JSON_THROW_ON_ERROR);
@@ -258,6 +269,66 @@ final class HandlingFeeConfigManager
                 $this->scoped->query($site, $agent)->where('id', $id)->update($values);
             }
             return $this->detail($site, $agent, (int) $id);
+        });
+    }
+
+    /** Snapshot only active tiers owned by this exact scope; inherited or deleted tiers are not materialized. */
+    private function scopePayload(int $site, int $agent, array $before, int $level, array $values): array
+    {
+        $rows = array_column($before, null, 'level');
+        $rows[$level] = array_replace($rows[$level] ?? ['level' => $level], $values);
+        ksort($rows, SORT_NUMERIC);
+        $items = [];
+        foreach ($rows as $tier => $row) {
+            $version = (string) ($row['tk_version'] ?? '0');
+            if ($version === '0') $version = $this->remoteVersion($site, $agent, (int) $tier);
+            $items[] = ['level' => (int) $tier, 'home_site_id' => (string) $site, 'agent_id' => (string) $agent,
+                'command_id' => (string) ($this->commandId)(),
+                'version' => (string) max((int) $version + 1, (int) (microtime(true) * 1_000_000)),
+                'maker_fee_rate' => FeeLevelBatch::normalizeRate((string) $row['maker_fee_rate']),
+                'taker_fee_rate' => FeeLevelBatch::normalizeRate((string) $row['taker_fee_rate'])];
+        }
+        return ['items' => $items];
+    }
+
+    /** Apply the full confirmed snapshot atomically, including versions of otherwise unchanged tiers. */
+    private function applyScopeLocal(array $op, array $payload): array
+    {
+        return $this->db->transaction(function () use ($op, $payload): array {
+            $this->scoped->lock();
+            $site = (int) $op['home_site_id']; $agent = (int) $op['agent_id']; $level = (int) $op['level'];
+            $before = array_column(json_decode($op['scope_before'], true, 512, JSON_THROW_ON_ERROR), null, 'level');
+            $values = json_decode($op['values'], true, 512, JSON_THROW_ON_ERROR);
+            $desired = $before;
+            $desired[$level] = array_replace($before[$level] ?? ['level' => $level, 'level_name' => 'VIP'.$level], $values);
+            $versions = array_column($payload['items'], 'version', 'level');
+            $current = $this->scoped->query($site, $agent)->lockForUpdate()->get()->keyBy('level');
+            foreach ($current as $tier => $row) {
+                if (!isset($desired[$tier])) throw new DomainException('TK 已确认，但本地等级发生变化，需要核对后重试');
+            }
+            foreach ($desired as $tier => $row) {
+                $actual = $current->get($tier); $old = $before[$tier] ?? null;
+                if ($actual === null && $old === null) continue;
+                $sameId = $actual !== null && ($old === null || (int) $actual->id === (int) $old['id']);
+                $isBefore = $sameId && $old !== null && (string) ($actual->tk_version ?? '0') === (string) ($old['tk_version'] ?? '0')
+                    && $this->fingerprint((array) $actual) === $this->fingerprint($old);
+                $isApplied = $sameId && (string) ($actual->tk_version ?? '0') === (string) $versions[$tier]
+                    && $this->fingerprint((array) $actual) === $this->fingerprint($row);
+                if (!$isBefore && !$isApplied) throw new DomainException('TK 已确认，但本地等级发生变化，需要核对后重试');
+            }
+            foreach ($desired as $tier => $row) {
+                $data = ['tk_version' => $versions[$tier], 'updated_at' => $this->now()];
+                if ($tier === $level) $data += $values;
+                if ($actual = $current->get($tier)) {
+                    $this->scoped->query($site, $agent)->where('id', $actual->id)->update($data);
+                } else {
+                    $this->db->table('handling_fee_level_config')->insert($data + [
+                        'home_site_id' => $site, 'agent_id' => $agent, 'level' => $tier,
+                        'level_name' => $row['level_name'], 'created_at' => $this->now()]);
+                }
+            }
+            $id = (int) $this->scoped->query($site, $agent)->where('level', $level)->value('id');
+            return $this->detail($site, $agent, $id);
         });
     }
 

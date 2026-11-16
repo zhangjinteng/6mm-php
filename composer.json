@@ -40,6 +40,7 @@
     },
     "scripts": {
         "test": [
+            "@php tests/market_data.php",
             "@php tests/tk_rpc_errors.php",
             "@php tests/tk_rpc_logging.php",
             "@php tests/tk_sdk_logging.php",
@@ -47,6 +48,7 @@
             "@php tests/rpc_ticket_redis.php",
             "@php tests/rpc_ticket_native.php",
             "@php tests/handling_fee_crud.php",
+            "@php tests/handling_fee_scope_batch.php",
             "@php tests/handling_fee_redis.php",
             "@php tests/scoped_handling_fees.php",
             "@php tests/config_redis.php",
