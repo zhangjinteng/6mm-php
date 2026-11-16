@@ -94,7 +94,7 @@ final class TkErrorMessages
                 ? '当前交易对暂无有效标记价，暂不能下架结算，请检查行情后重试'
                 : '下架价格或价格时间无效，请检查';
         }
-        return "TK：RPC错误码：{$code}，{$message}";
+        return "TK：{$code}，{$message}";
     }
 
     public static function status(string|int $status): string

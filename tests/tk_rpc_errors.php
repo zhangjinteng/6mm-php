@@ -17,13 +17,13 @@ $check(count($rows) === 74 && count(TkErrorMessages::BUSINESS) === 74, 'Exactly 
 foreach ($rows as $row) {
     $code = (int) $row[1];
     $chinese = str_replace('`', '', trim($row[2]));
-    $check(TkErrorMessages::business($code) === "TK：RPC错误码：{$code}，{$chinese}", 'Exact documented Chinese mapping: '.$code);
+    $check(TkErrorMessages::business($code) === "TK：{$code}，{$chinese}", 'Exact documented Chinese mapping: '.$code);
     if ($code === 0) continue;
     $e = TkRpcException::business($code, 'TestRpc', [], 'raw upstream text');
     $check($e->getCode() === $code && $e->rejectCode === $code && $e->grpcStatus === null, 'Keep actual business code: '.$code);
     $check($e->rawMessage === 'raw upstream text' && !str_contains($e->getMessage(), 'upstream'), 'Raw diagnostic is separate from display');
 }
-$check(TkErrorMessages::business(9876) === 'TK：RPC错误码：9876，未知业务错误，请联系管理员核对', 'Unknown code is not replaced with 9999');
+$check(TkErrorMessages::business(9876) === 'TK：9876，未知业务错误，请联系管理员核对', 'Unknown code is not replaced with 9999');
 $check(str_contains(TkErrorMessages::business(7004, 'DelistSymbolTrading'), '暂无有效标记价'), 'Automatic delisting explains absent valid price without claiming a single cause');
 $check(str_contains(TkErrorMessages::business(7004, 'DelistSymbolTrading', ['mark_price'=>'1','mark_price_time'=>'1']), '下架价格或价格时间无效'), 'Explicit price/time error');
 $check(str_contains(TkErrorMessages::business(7004, 'SettleFundingRate'), '结算价格或价时依据无效'), 'Funding settlement retains generic semantics');
