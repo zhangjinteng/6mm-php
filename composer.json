@@ -40,6 +40,7 @@
     },
     "scripts": {
         "test": [
+            "@php tests/contract_vip.php",
             "@php tests/market_data.php",
             "@php tests/tk_rpc_errors.php",
             "@php tests/tk_rpc_logging.php",
