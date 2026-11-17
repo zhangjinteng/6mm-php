@@ -101,30 +101,7 @@ class AgentFuturesFactRedisRepository
         ) !== null;
     }
 
-    public function putSummaryChecksum(
-        CarbonImmutable $date,
-        string $checksum
-    ): void {
-        $this->putValue($this->summaryChecksumKey($date), [
-            'status' => 'completed',
-            'checksum' => $checksum,
-            'completed_at' => CarbonImmutable::now('UTC')->format('Y-m-d H:i:s.u'),
-        ]);
-    }
 
-    public function getSummaryChecksum(CarbonImmutable $date): ?string
-    {
-        $payload = $this->decodeCompleted(
-            $this->redis()->get($this->summaryChecksumKey($date))
-        );
-        if ($payload === null) {
-            return null;
-        }
-
-        $checksum = trim((string) ($payload['checksum'] ?? ''));
-
-        return $checksum === '' ? null : $checksum;
-    }
 
     private function putValue(string $finalKey, array $payload): void
     {
@@ -194,10 +171,4 @@ class AgentFuturesFactRedisRepository
         return "{$this->keyPrefix}:{$this->version}:finalized:{{$day}}";
     }
 
-    private function summaryChecksumKey(CarbonImmutable $date): string
-    {
-        $day = $date->setTimezone('UTC')->toDateString();
-
-        return "{$this->keyPrefix}:{$this->version}:summary:{{$day}}";
-    }
 }
