@@ -17,6 +17,30 @@ final class LiquidationUserContextService
     {
     }
 
+    public function matchingHistoricalUserIds(string $keyword): array
+    {
+        return (new \SixMm\Shared\TradeFills\TradeFillUserContextService($this->connection))->matchingHistoricalUserIds($keyword);
+    }
+
+    /** CK-authorized page rows survive current ownership changes and deleted/missing users. */
+    public function hydrateHistoricalRows(array $rows): array
+    {
+        $missingTypes = array_values(array_unique(array_map(static fn (array $row): int => (int) $row['user_id'],
+            array_filter($rows, static fn (array $row): bool => !in_array((int) ($row['user_type'] ?? 0), [1,2,3], true)))));
+        if ($missingTypes !== []) {
+            $types = $this->connection->table('users')->whereIn('user_id', $missingTypes)->pluck('user_type', 'user_id');
+            foreach ($rows as &$row) if (!in_array((int) ($row['user_type'] ?? 0), [1,2,3], true)) $row['user_type'] = $types->get($row['user_id']);
+            unset($row);
+        }
+        $rows = (new \SixMm\Shared\TradeFills\TradeFillUserContextService($this->connection))->hydrateHistoricalRows($rows);
+        foreach ($rows as &$row) {
+            $row['user_id'] = $row['public_user_id'] ?? $row['platform_user_id'];
+            $row['user']['user_id'] = $row['user_id'];
+        }
+        unset($row);
+        return $rows;
+    }
+
     /** @return array<int, int> */
     public function matchingPlatformUserIds(string $keyword, UserDataScope $scope): array
     {

@@ -154,6 +154,57 @@ final class HistoryOrderUserContextService
         return $result;
     }
 
+    /** Resolve identity keywords, while the CK owner predicate remains the data access boundary. */
+    public function matchingHistoricalPlatformUserIds(string $keyword): array
+    {
+        $keyword=trim($keyword);
+        if ($keyword==='') return [];
+        $bindings=$this->connection->table('agent_user_bindings')
+            ->whereIn('bind_status',self::ACTIVE_BINDING_STATUSES)->where('agent_user_id','like','%'.$keyword.'%');
+        return $this->connection->table('users')->where(static function (Builder $q) use ($keyword,$bindings): void {
+            $q->where('username','like','%'.$keyword.'%')->orWhere('nick_name','like','%'.$keyword.'%')
+                ->orWhereIn('user_id',$bindings->select('platform_user_id'));
+            if (ctype_digit($keyword)) $q->orWhere('public_user_id',$keyword);
+        })->distinct()->pluck('user_id')->map(static fn ($id): int => (int) $id)->all();
+    }
+
+    /** Enrich only a CK-authorized page. Current ownership must not rewrite or discard history. */
+    public function hydrateHistoricalRows(array $rows): array
+    {
+        $ids=array_values(array_unique(array_filter(array_map(
+            static fn (array $row): int => (int) ($row['platform_user_id'] ?? $row['user_id'] ?? 0), $rows
+        ), static fn (int $id): bool => $id>0)));
+        if ($ids===[]) return [];
+        $users=$this->connection->table('users')->whereIn('user_id',$ids)
+            ->get(['user_id','public_user_id','username','nick_name','user_type'])->keyBy('user_id');
+        $agentIds=array_values(array_unique(array_map(static fn (array $row): int => (int) ($row['agent_id'] ?? 0),$rows)));
+        $bindings=$this->connection->table('agent_user_bindings')->whereIn('platform_user_id',$ids)
+            ->whereIn('agent_id',$agentIds)->whereIn('bind_status',self::ACTIVE_BINDING_STATUSES)
+            ->select('agent_id','platform_user_id')->selectRaw('MAX(agent_user_id) AS agent_user_id')
+            ->groupBy('agent_id','platform_user_id')->get()->keyBy(static fn (object $r): string => $r->agent_id.':'.$r->platform_user_id);
+        foreach ($rows as &$row) {
+            $id=(int) ($row['platform_user_id'] ?? $row['user_id'] ?? 0);
+            $user=$users->get($id);
+            $agent=$row['agent_id'] ?? null;
+            $external=$bindings->get((string) $agent.':'.$id)->agent_user_id ?? null;
+            $snapshotType=(int) ($row['user_type'] ?? 0);
+            $type=in_array($snapshotType,[1,2,3],true) ? $snapshotType : ($user->user_type ?? null);
+            $identity=['platform_user_id'=>$id,'user_id'=>$user->public_user_id ?? null,
+                'public_user_id'=>$user->public_user_id ?? null,'username'=>$user->username ?? null,
+                'nick_name'=>$user->nick_name ?? null,'nice_name'=>$user->nick_name ?? null,'user_type'=>$type,
+                'agent_id'=>$agent,'home_site_id'=>$row['home_site_id'] ?? null,'agent_user_id'=>$external];
+            $row['platform_user_id']=$id;
+            $row['user_id']=$identity['user_id'];
+            $row['username']=$identity['username'];
+            $row['nice_name']=$identity['nice_name'];
+            $row['user_type']=$type;
+            $row['agent_user_id']=$external;
+            $row['user']=array_merge(is_array($row['user'] ?? null) ? $row['user'] : [],$identity);
+        }
+        unset($row);
+        return $rows;
+    }
+
     private function identityQuery(): Builder
     {
         $bindings = $this->connection

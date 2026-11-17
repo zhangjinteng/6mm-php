@@ -5,10 +5,12 @@ declare(strict_types=1);
 namespace SixMm\Shared\Media;
 
 use Illuminate\Http\UploadedFile;
+use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\RequestException;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Validation\ValidationException;
-use RuntimeException;
 
 final class MediaRegistry
 {
@@ -27,66 +29,96 @@ final class MediaRegistry
         $ownerType = $tenantId === null ? 'platform' : 'white_label';
         $ownerId = $tenantId ?? 0;
         if ($tenantId !== null && $tenantId < 1) throw new \InvalidArgumentException('Invalid tenant');
-        return $db->transaction(function () use ($file, $adminId, $db, $instance, $bytes, $mime, $size, $key, $name, $sha, $ownerType, $ownerId): array {
-            // Serialize only uploads targeting the same physical object, including initial registration.
-            $db->select('SELECT pg_advisory_xact_lock(hashtextextended(?, 0))', [$instance.':'.$key]);
-            $existing = $db->table('cms.media_files')->where('imgbed_instance', $instance)
-                ->where('file_id', $key)->lockForUpdate()->first();
-            if ($existing) {
-                if ($existing->storage_status !== 'available' || $existing->sha256 !== $sha) {
-                    throw ValidationException::withMessages(['file' => '同名图片内容不一致或文件不可用']);
+        $uploaded = false;
+        try {
+            return $db->transaction(function () use ($file, $adminId, $db, $instance, $bytes, $mime, $size, $key, $name, $sha, $ownerType, $ownerId, &$uploaded): array {
+                // Serialize only uploads targeting the same physical object, including initial registration.
+                $db->select('SELECT pg_advisory_xact_lock(hashtextextended(?, 0))', [$instance.':'.$key]);
+                $existing = $db->table('cms.media_files')->where('imgbed_instance', $instance)
+                    ->where(fn ($q) => $q->where('file_id', $key)->orWhere('sha256', $sha))
+                    ->orderBy('id')->lockForUpdate()->first();
+                if ($existing) {
+                    if ($existing->storage_status !== 'available' || $existing->sha256 !== $sha) {
+                        throw ValidationException::withMessages(['file' => '同名图片内容不一致或文件不可用']);
+                    }
+                    // Proof of identical bytes permits reuse, not transfer of ownership.
+                    if ($existing->owner_type !== 'platform' && ($existing->owner_type !== $ownerType || (int) $existing->owner_id !== $ownerId)) {
+                        $db->table('cms.media_upload_grants')->insertOrIgnore(['media_id' => $existing->id,
+                            'owner_type' => $ownerType, 'owner_id' => $ownerId]);
+                    }
+                    return ['media_id' => (string) $existing->id, 'url' => $existing->public_url];
                 }
-                // Proof of identical bytes permits reuse, not transfer of ownership.
-                if ($existing->owner_type !== 'platform' && ($existing->owner_type !== $ownerType || (int) $existing->owner_id !== $ownerId)) {
-                    $db->table('cms.media_upload_grants')->insertOrIgnore(['media_id' => $existing->id,
-                        'owner_type' => $ownerType, 'owner_id' => $ownerId]);
-                }
-                return ['media_id' => (string) $existing->id, 'url' => $existing->public_url];
-            }
 
-            $base = rtrim(config('imgbed.base_url'), '/');
-            $url = rtrim(config('imgbed.public_base'), '/').'/'.$key;
-            $token = config('imgbed.token');
-            if (!$token || !str_starts_with($base, 'https://') || !str_starts_with($url, 'https://')) {
-                throw ValidationException::withMessages(['file' => '请先配置服务端图床地址和凭据']);
-            }
-            $client = fn () => Http::withToken($token)->withoutRedirecting()->timeout(20);
-            // A previous upload may have succeeded remotely before its DB transaction committed.
-            $list = $client()->get($base.'/api/manage/list', [
-                'dir' => self::FOLDER, 'search' => $name, 'recursive' => 'false',
-                'start' => 0, 'count' => 100,
-            ])->throw()->json();
-            if (!is_array($list['files'] ?? null) || ($list['isIndexedResponse'] ?? false) !== true) {
-                throw new RuntimeException('Image directory lookup unavailable');
-            }
-            $remote = collect($list['files'])->firstWhere('name', $key);
-            if ($remote !== null) {
-                $response = Http::withoutRedirecting()->timeout(15)->get($url);
-                if (!$response->ok() || !hash_equals($sha, hash('sha256', $response->body()))) {
-                    throw ValidationException::withMessages(['file' => '图床已有同名文件，内容校验未通过']);
+                $base = rtrim(config('imgbed.base_url'), '/');
+                $publicBase = rtrim(config('imgbed.public_base'), '/');
+                $token = config('imgbed.token');
+                if (!$token || !str_starts_with($base, 'https://') || !str_starts_with($publicBase, 'https://')) {
+                    throw new MediaUploadException('MEDIA_STORAGE_NOT_CONFIGURED', '图片存储服务尚未正确配置，请联系管理员', 503);
                 }
-            } else {
-                if (($list['directFileCount'] ?? count($list['files'])) > count($list['files'])) {
-                    throw new RuntimeException('Image directory lookup incomplete');
-                }
+                // Database miss: upload directly. A prior uncommitted attempt may leave a remote
+                // copy; the bed preserves it and returns hash(n).ext for this new physical object.
                 $query = http_build_query(['uploadChannel' => 's3', 'channelName' => config('imgbed.channel'),
                     'uploadFolder' => self::FOLDER, 'uploadNameType' => 'origin', 'autoRetry' => 'false', 'serverCompress' => 'false']);
-                $reply = $client()->attach('file', $bytes, $name, ['Content-Type' => $mime])
-                    ->post($base.'/upload?'.$query)->throw()->json('0');
-                if (($reply['src'] ?? null) !== '/file/'.$key || ($reply['publicUrl'] ?? null) !== $url) {
-                    throw new RuntimeException('Unexpected image storage path');
+                try {
+                    $response = Http::withToken($token)->withoutRedirecting()->timeout(20)
+                        ->attach('file', $bytes, $name, ['Content-Type' => $mime])
+                        ->post($base.'/upload?'.$query)->throw();
+                } catch (ConnectionException $e) {
+                    $timeout = str_contains($e->getMessage(), 'cURL error 28');
+                    throw new MediaUploadException('MEDIA_STORAGE_UNAVAILABLE', $timeout
+                        ? '图片上传超时，上传结果暂未确认，请稍后重试'
+                        : '无法连接图片存储服务，请稍后重试或联系管理员', $timeout ? 504 : 502, $e);
+                } catch (RequestException $e) {
+                    $rejected = in_array($e->response->status(), [401, 403], true);
+                    throw new MediaUploadException($rejected ? 'MEDIA_STORAGE_REJECTED' : 'MEDIA_STORAGE_FAILED', $rejected
+                        ? '图片存储服务拒绝上传，请联系管理员检查服务端凭据或访问策略'
+                        : '图片存储服务上传失败，请稍后重试或联系管理员', 502, $e);
                 }
-            }
-            $id = $db->table('cms.media_files')->insertGetId([
-                'owner_type' => $ownerType, 'owner_id' => $ownerId, 'imgbed_instance' => $instance,
-                'channel_name' => config('imgbed.channel'), 'file_id' => $key, 'src' => '/file/'.$key,
-                'public_url' => $url, 'original_name' => $file->getClientOriginalName(), 'mime_type' => $mime,
-                'size_bytes' => strlen($bytes), 'width' => $size[0], 'height' => $size[1], 'sha256' => $sha,
-                'uploaded_by' => $adminId, 'storage_status' => 'available', 'unreferenced_since' => now(),
-                'tracking_state' => $remote === null ? 'tracked' : 'pending_review',
-            ]);
-            return ['media_id' => (string) $id, 'url' => $url];
-        });
+                if (!$response->successful()) throw $this->invalidResponse();
+                [$key, $src, $url] = $this->uploadedPath($response->json(), $name, $publicBase);
+                $uploaded = true;
+                $id = $db->table('cms.media_files')->insertGetId([
+                    'owner_type' => $ownerType, 'owner_id' => $ownerId, 'imgbed_instance' => $instance,
+                    'channel_name' => config('imgbed.channel'), 'file_id' => $key, 'src' => $src,
+                    'public_url' => $url, 'original_name' => $file->getClientOriginalName(), 'mime_type' => $mime,
+                    'size_bytes' => strlen($bytes), 'width' => $size[0], 'height' => $size[1], 'sha256' => $sha,
+                    'uploaded_by' => $adminId, 'storage_status' => 'available', 'unreferenced_since' => now(),
+                    'tracking_state' => 'tracked',
+                ]);
+                return ['media_id' => (string) $id, 'url' => $url];
+            });
+        } catch (QueryException $e) {
+            throw new MediaUploadException($uploaded ? 'MEDIA_REGISTRATION_FAILED' : 'MEDIA_REGISTRY_UNAVAILABLE', $uploaded
+                ? '图片已上传，但登记失败，请稍后重试'
+                : '图片记录读取失败，请稍后重试或联系管理员', 503, $e);
+        }
+    }
+
+    /** Accept only the submitted content filename and the bed's non-destructive (n) suffix. */
+    private function uploadedPath(mixed $body, string $name, string $publicBase): array
+    {
+        $reply = is_array($body) ? ($body[0] ?? null) : null;
+        if (!is_array($reply) || !is_string($reply['src'] ?? null) || !is_string($reply['publicUrl'] ?? null)) {
+            throw $this->invalidResponse();
+        }
+        $src = rawurldecode($reply['src']);
+        $stem = pathinfo($name, PATHINFO_FILENAME);
+        $extension = pathinfo($name, PATHINFO_EXTENSION);
+        if (!preg_match('~\A/file/'.preg_quote(self::FOLDER.'/'.$stem, '~').'(?:\([1-9][0-9]*\))?\.'.preg_quote($extension, '~').'\z~', $src)) {
+            throw $this->invalidResponse();
+        }
+        $key = substr($src, strlen('/file/'));
+        $encodedKey = str_replace(['(', ')'], ['%28', '%29'], $key);
+        if (!in_array($reply['src'], [$src, '/file/'.$encodedKey], true) ||
+            !in_array($reply['publicUrl'], [$publicBase.'/'.$key, $publicBase.'/'.$encodedKey], true)) {
+            throw $this->invalidResponse();
+        }
+        return [$key, $src, $reply['publicUrl']];
+    }
+
+    private function invalidResponse(): MediaUploadException
+    {
+        return new MediaUploadException('MEDIA_STORAGE_INVALID_RESPONSE', '图片存储返回结果异常，请联系管理员');
     }
 
     /**

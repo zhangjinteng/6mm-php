@@ -17,6 +17,67 @@ final class HistoryPositionUserContextService
     {
     }
 
+    /** Keyword matches only narrow the independently authorized CK owner query. */
+    public function matchingHistoricalUserIds(string $keyword, ?int $agentId = null): array
+    {
+        $keyword = trim($keyword);
+        if ($keyword === '') return [];
+        $bindings = $this->connection->table('agent_user_bindings')
+            ->whereIn('bind_status', self::ACTIVE_BINDING_STATUSES)
+            ->where('agent_user_id', 'like', '%' . $keyword . '%')->select('platform_user_id');
+        if ($agentId !== null) $bindings->where('agent_id', $agentId);
+
+        // Deleted/moved profiles must not erase an already authorized historical record.
+        return $this->connection->table('users')->where(static function (Builder $query) use ($keyword, $bindings): void {
+            $query->where('username', 'like', '%' . $keyword . '%')
+                ->orWhere('nick_name', 'like', '%' . $keyword . '%')->orWhereIn('user_id', $bindings);
+            if (ctype_digit($keyword)) $query->orWhere('public_user_id', $keyword);
+        })->distinct()->orderBy('user_id')->pluck('user_id')
+            ->map(static fn ($id): int => (int) $id)->filter(static fn (int $id): bool => $id > 0)->values()->all();
+    }
+
+    /** CK has authorized every row. Enrich only this page and never replace its historical owner. */
+    public function hydrateHistoricalRows(array $rows): array
+    {
+        if ($rows === []) return [];
+        $ids = array_values(array_unique(array_filter(array_map(
+            static fn (array $row): int => (int) ($row['user_id'] ?? 0), $rows
+        ), static fn (int $id): bool => $id > 0)));
+        if ($ids === []) return $rows;
+        $users = $this->connection->table('users')->whereIn('user_id', $ids)
+            ->get(['user_id', 'public_user_id', 'username', 'nick_name'])->keyBy('user_id');
+        $ownerIds = array_values(array_unique(array_map(static fn (array $row): int => (int) ($row['agent_id'] ?? 0), $rows)));
+        $bindings = $this->connection->table('agent_user_bindings')->whereIn('platform_user_id', $ids)
+            ->whereIn('agent_id', $ownerIds)->whereIn('bind_status', self::ACTIVE_BINDING_STATUSES)
+            ->get(['agent_id', 'platform_user_id', 'agent_user_id']);
+        $externalIds = [];
+        foreach ($bindings as $binding) {
+            $key = $binding->agent_id . ':' . $binding->platform_user_id;
+            if (!isset($externalIds[$key]) || strcmp((string) $binding->agent_user_id, (string) $externalIds[$key]) > 0) {
+                $externalIds[$key] = $binding->agent_user_id;
+            }
+        }
+        foreach ($rows as &$row) {
+            $id = (int) ($row['user_id'] ?? 0);
+            $user = $users->get($id);
+            $publicId = $user?->public_user_id;
+            $row['platform_user_id'] = $id;
+            $row['public_user_id'] = $publicId;
+            $row['user_id'] = $publicId !== null && $publicId !== '' ? $publicId : $id;
+            $row['username'] = $user?->username;
+            $row['nice_name'] = $user?->nick_name;
+            $row['agent_user_id'] = $externalIds[($row['agent_id'] ?? 0) . ':' . $id] ?? null;
+            $row['user'] = [
+                'platform_user_id' => $id, 'user_id' => $row['user_id'], 'public_user_id' => $publicId,
+                'username' => $row['username'], 'nick_name' => $row['nice_name'], 'nice_name' => $row['nice_name'],
+                'home_site_id' => $row['home_site_id'] ?? null, 'agent_id' => $row['agent_id'] ?? null,
+                'user_type' => $row['user_type'] ?? null, 'agent_user_id' => $row['agent_user_id'],
+            ];
+        }
+        unset($row);
+        return $rows;
+    }
+
     /** @return array<int, int> */
     public function scopedPlatformUserIds(UserDataScope $scope): array
     {

@@ -6,6 +6,7 @@ namespace SixMm\Shared\Liquidations;
 
 use InvalidArgumentException;
 use SixMm\Shared\Pagination\PageResult;
+use SixMm\Shared\TradeFills\TradeFillOwnerScope;
 
 final class LiquidationTradeListQueryService
 {
@@ -44,6 +45,20 @@ final class LiquidationTradeListQueryService
               AND o.agent_id IN ({$agentIdList})
               AND o.user_type IN (1, 2)
         ";
+        return $this->searchWithWhere($query, $whereSql);
+    }
+
+    /** CK ownership is authoritative; includes direct/platform owner zero, never sentinel rewriting. */
+    public function searchForOwner(LiquidationTradeListQuery $query, TradeFillOwnerScope $owner): PageResult
+    {
+        if ($query->positionId() <= 0 || $owner->isEmpty()) return new PageResult([], 0, $query->page(), $query->pageSize());
+        $where = "upperUTF8(f.place_type) = 'LIQUIDATION' AND f.position_id = {$query->positionId()} AND "
+            . $owner->predicate('f') . ' AND o.user_type IN (1, 2)';
+        return $this->searchWithWhere($query, $where);
+    }
+
+    private function searchWithWhere(LiquidationTradeListQuery $query, string $whereSql): PageResult
+    {
         $groupBy = 'f.user_id, f.position_id, f.order_id';
         $countSql = "
             SELECT count() AS aggregate

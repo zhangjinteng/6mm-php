@@ -102,7 +102,7 @@ class FeedbackService
                 ->where('imgbed_instance', config('imgbed.instance'))->where('storage_status', 'available')
                 ->where('sha256', $a->sha256)->value('file_id');
             $base = rtrim((string) config('imgbed.public_base'), '/');
-            if (!str_starts_with($base, 'https://') || !preg_match('~^media/upload_files/[a-f0-9]{32}\.(?:png|jpg|webp|svg|ico)$~D', (string) $file)) {
+            if (!str_starts_with($base, 'https://') || !preg_match('~^media/upload_files/[a-f0-9]{32}(?:\([1-9][0-9]*\))?\.(?:png|jpg|webp|svg|ico)$~D', (string) $file)) {
                 throw ValidationException::withMessages(['attachment_id' => '图床附件不可用']);
             }
             $response = Http::withoutRedirecting()->timeout(10)->withOptions(['stream' => true, 'read_timeout' => 10])->get($base.'/'.$file);
