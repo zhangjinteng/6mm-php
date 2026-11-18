@@ -28,7 +28,8 @@ final class SiteEmailPublisher
         if ($schema !== null && !preg_match('/^[a-z_][a-z0-9_]*$/D', $schema)) throw new \InvalidArgumentException('Invalid schema');
         $this->resourceHosts = array_values(array_unique(array_map(static fn ($host) => strtolower(trim($host)), $resourceHosts)));
         foreach ($this->resourceHosts as $host) {
-            if ($host === '' || str_contains($host, '*') || !filter_var($host, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME)) {
+            if ($host === '' || str_contains($host, '*') || (!filter_var($host, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME)
+                && !filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6))) {
                 throw new \InvalidArgumentException('Invalid email resource allowlist');
             }
         }
@@ -189,7 +190,7 @@ final class SiteEmailPublisher
         if (count($items) > 256) $this->fail('邮件模板最多 256 条');
         $identities = []; $bytes = 0;
         foreach ($items as $item) {
-            EmailTemplateRules::template($item['template'], $this->resourceHosts);
+            EmailTemplateRules::template($item['template'], $this->resourceHosts, $brand['logo_url'], true);
             $key = $item['template']['purpose']."\0".$item['template']['locale'];
             if (isset($identities[$key])) $this->fail('邮件模板用途和语言重复');
             $identities[$key] = true;

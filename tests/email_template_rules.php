@@ -162,4 +162,15 @@ foreach (['subject' => str_repeat('中', 200),
     $check(true, 'Exact size limit accepted');
 }
 $accept('<p style="color:'.str_repeat(' ', 2038).'#fff">Text</p>');
+foreach (['<p title=test>Text</p>', '<p title="a" title="b">Text</p>',
+    '<p>A & B</p>', '<p>1 < 2</p>', '<p title>Text</p>',
+    '<p>&#123&#123logoUrl&#125&#125</p>', "<p>\0Text</p>",
+    '<p style="padding:000001px">Text</p>',
+] as $html) $reject($html, '邮件');
+$accept('<p style="border:1px  solid  #fff">Text</p>');
+$accept('<p style="' . "\u{00a0}color:#fff\u{00a0}" . '">Text</p>');
+$rejectBody(['subject' => "\u{3000}\u{00a0}"]);
+$rejectBody(['htmlBody' => null]);
+EmailTemplateRules::template($valid, ['::1'], 'https://[::1]/logo.png');
+$check(true, 'IPv6 host uses the upstream unbracketed allowlist convention');
 echo "Email template rules checks: $checks passed\n";

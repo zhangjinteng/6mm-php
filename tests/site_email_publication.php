@@ -65,6 +65,7 @@ $counts = [$db->table('wl_site_config_publications')->count(), $db->table('wl_si
 foreach ([['templates' => []], ['policy' => []], ['SMTP' => []], ['operatorId' => 999], ['logoUrl' => 'https://evil.example/logo.png'],
     ['logoUrl' => 'http://cdn.example/logo.png'], ['logoUrl' => 'https://cdn.example.evil.test/logo.png'], ['logoUrl' => 'https://user:pass@cdn.example/logo.png'],
     ['logoUrl' => 'https://cdn.example:443/logo.png'], ['logoUrl' => 'https://cdn.example:/logo.png'],
+    ['logoUrl' => 'https://cdn.example/{x}'], ['logoUrl' => 'https://cdn.example/%zz'],
     ['siteName' => str_repeat('名',129)], ['defaultLocale' => 'not a locale'], ['logoUrl' => 1]] as $bad) {
     $reject(static fn () => $save(['expectedVersion' => '2'] + $bad));
 }
@@ -120,6 +121,8 @@ $check($publisher->detail(2,20)['version'] === '1');
 foreach (['<html><p>{{code}} {{expiresAt}}</p></html>', '<body><p>{{code}} {{expiresAt}}</p></body>', '<h1>{{code}} {{expiresAt}}</h1>',
     '<p style="position:absolute">{{code}} {{expiresAt}}</p>', '<p class="x">{{code}} {{expiresAt}}</p>',
     '<a href="https://evil.example/help">{{code}} {{expiresAt}}</a>',
+    '<img src="https://cdn.example/%zz"><p>{{code}} {{expiresAt}}</p>',
+    '<p>&#123&#123logoUrl&#125&#125 {{code}} {{expiresAt}}</p>',
 ] as $invalidHtml) {
     $db->beginTransaction();
     try {

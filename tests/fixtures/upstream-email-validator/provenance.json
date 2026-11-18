@@ -1,0 +1,7 @@
+{
+  "exchange_commit": "0a4f27233",
+  "validator_sha256": "62af2fc22d47422b1fff28c875fd4ac4acd8f93b36b08483a0fcaa8887339e0a",
+  "cases_sha256": "cd98126e5f19559c51e214c6dc434ab02e9cfb995d3c7ec72feb7cca291681a7",
+  "case_count": 155,
+  "adaptation": "Validator source may change only its PHP namespace; valid is the PHP save-time contract, goValid is reference metadata."
+}

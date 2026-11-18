@@ -8,7 +8,6 @@ namespace SixMm\Shared\TenantConfig;
 final class EmailTemplateRules
 {
     public const PURPOSES = ['register', 'login', 'password_set', 'password_reset'];
-    private const VARIABLES = ['siteName', 'purposeLabel', 'code', 'validMinutes', 'expiresAt', 'logoUrl'];
 
     public static function json(mixed $value): string
     {
@@ -57,58 +56,38 @@ final class EmailTemplateRules
         return implode('-', $base);
     }
 
+    /** Logo validation; templates separately validate every static HTML resource. */
     public static function url(string $url, array $hosts): void
     {
-        if ($url === '') return;
-        $parts = parse_url($url);
-        if (strlen($url) > 2048 || preg_match('/[\x00-\x20\x7f\\\\]/', $url)
-            || !filter_var($url, FILTER_VALIDATE_URL) || !$parts || ($parts['scheme'] ?? '') !== 'https'
-            || isset($parts['user']) || isset($parts['pass']) || isset($parts['port'])
-            || !preg_match('~^https://([^/?#]+)~D', $url, $authority)
-            || strtolower($authority[1]) !== strtolower($parts['host'] ?? '')
-            || !in_array(strtolower($parts['host'] ?? ''), array_map('strtolower', $hosts), true)) {
-            throw new EmailConfigException('邮件图片必须使用已允许主机的 HTTPS 地址，且不能含用户信息或显式端口');
-        }
+        self::validateWith(static fn () => EmailTemplateValidator::validateLogo($url, $hosts));
     }
 
-    private static function variables(string $text, bool $subject = false): void
-    {
-        preg_match_all('/{{([^{}]+)}}/u', $text, $matches);
-        $allowed = $subject ? ['siteName', 'purposeLabel'] : self::VARIABLES;
-        foreach ($matches[1] as $variable) {
-            if (!in_array($variable, $allowed, true)) throw new EmailConfigException('邮件模板包含不支持的变量');
-        }
-        if (preg_match('/{{|}}/', preg_replace('/{{[^{}]+}}/u', '', $text))) {
-            throw new EmailConfigException('邮件模板变量格式无效');
-        }
-    }
-
-    public static function template(array $body, array $hosts): void
+    /** Keep control-plane identity rules outside the upstream body validator. */
+    public static function template(array $body, array $hosts, string $logoUrl = '', bool $rowStorage = true): void
     {
         if (array_diff(array_keys($body), ['purpose', 'locale', 'subject', 'textBody', 'htmlBody'])
             || !in_array($body['purpose'] ?? null, self::PURPOSES, true)
-            || !is_string($body['locale'] ?? null) || self::locale($body['locale']) !== $body['locale']
-            || !is_string($body['subject'] ?? null) || !mb_check_encoding($body['subject'], 'UTF-8') || trim($body['subject']) === '' || mb_strlen($body['subject'], 'UTF-8') > 200
-            || preg_match('/\p{Cc}/u', $body['subject'])
-            || !is_string($body['textBody'] ?? null) || !mb_check_encoding($body['textBody'], 'UTF-8') || trim($body['textBody']) === '' || strlen($body['textBody']) > 8192
-            || (isset($body['htmlBody']) && (!is_string($body['htmlBody']) || !mb_check_encoding($body['htmlBody'], 'UTF-8'))) || strlen($body['htmlBody'] ?? '') > 32768) {
-            throw new EmailConfigException('邮件模板用途、语言或正文格式无效');
+            || !is_string($body['locale'] ?? null) || self::locale($body['locale']) !== $body['locale']) {
+            throw new EmailConfigException('邮件模板用途或语言格式无效');
         }
-        self::variables($body['subject'], true);
-        self::variables($body['textBody']);
-        self::variables($body['htmlBody'] ?? '');
-        self::requiredVariables($body['textBody']);
-        if (preg_match('/{{\s*logoUrl\s*}}/u', $body['subject'].$body['textBody'])) throw new EmailConfigException('Logo 变量只能用于图片 src');
-        $html = $body['htmlBody'] ?? '';
-        if ($html === '') return;
-        self::requiredVariables($html);
-        EmailHtmlRules::validate($html, $hosts);
+        self::validateWith(static fn () => EmailTemplateValidator::validate($body, $hosts, $logoUrl, $rowStorage));
     }
 
-    private static function requiredVariables(string $body): void
+    private static function validateWith(callable $operation): void
     {
-        if (!str_contains($body, '{{code}}') || (!str_contains($body, '{{validMinutes}}') && !str_contains($body, '{{expiresAt}}'))) {
-            throw new EmailConfigException('邮件正文必须包含验证码和至少一个有效期变量');
+        try { $operation(); }
+        catch (\InvalidArgumentException $e) {
+            $reason = $e->getMessage();
+            $message = match (true) {
+                preg_match('/email HTML tag|HTML markup|unclosed HTML tag|invalid closing tag/', $reason) === 1 => '邮件 HTML 包含不允许的标签或格式',
+                str_contains($reason, 'style') => '邮件 CSS 属性、值、数量或长度不符合允许规则',
+                preg_match('/attribute|image size|email role|email alignment|table spacing/', $reason) === 1 => '邮件 HTML 包含不允许的属性或属性值',
+                preg_match('/resource|HTTPS|authority|URL|host|IPv6/', $reason) === 1 => '邮件图片必须使用已允许主机的 HTTPS 地址，且不能含用户信息或显式端口',
+                str_contains($reason, 'logo') => '邮件 Logo 变量或地址格式无效',
+                str_contains($reason, 'HTML') => '邮件 HTML 包含不允许的标签或格式',
+                default => '邮件模板格式或变量不符合允许规则',
+            };
+            throw new EmailConfigException($message.'：'.$reason, 0, $e);
         }
     }
 
