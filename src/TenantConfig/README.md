@@ -15,6 +15,18 @@ Both hosts use `ThemeSnapshotWriter::sync(tenant, site, operator, actor, reason,
 
 Tests: `php tests/site_themes.php`, shared tenant configuration tests, and the hosts' isolated tenant/account configuration tests. Never use real application database credentials for tests.
 
+## Access snapshot v4/v5 compatibility
+
+`ConfigSnapshotWriter::latest()` reads the newest record for the requested site before checking its format and raw payload digest. It accepts v4/v5 only and rejects unknown storage, malformed references, a schema/reference mismatch, or a bad newest record; it never falls back to an older v4 record.
+
+The schema column is determined by the retained email reference: missing/empty storage means v4, `rows` means v5. It is not a per-save counter and is not inserted into the single-site payload as a `schemaVersion` field. Site publication and mail configuration versions remain independent.
+
+When an existing site uses rows, non-email domain/module/availability saves preserve its complete published `emailTemplateRef`. `PublishedEmailReference` checks the site's immutable manifest and all corresponding body records against their raw-byte digests and identities before appending the new site snapshot. Frozen legacy source content is not consulted, and mail configuration, body/version records and email audits are not rewritten. Missing/extra/mismatched records fail within the caller's existing transaction.
+
+This compatibility prerequisite does **not** implement the email-brand save endpoint, initialize the new email source tables, generate default email bodies or migrate legacy sites to rows. Those writes require the authoritative controlled email Publisher and its validation/default-template/canonical-JSON contract. Do not infer that merely deploying this reader switches a site to the new email format.
+
+Regression: `php tests/site_snapshot_formats.php` (isolated SQLite; no real publication or email delivery).
+
 ## Generic Redis snapshots (Agent + Platform)
 
 The existing physical table control_plane.wl_site_theme_redis_outbox is retained and generalized. There is **no additional synchronization table**. Existing provider/class/command names remain compatible; implementations support both resource types:

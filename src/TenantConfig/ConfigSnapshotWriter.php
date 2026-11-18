@@ -15,6 +15,7 @@ final class ConfigSnapshotWriter
     private function rows(string $name) { return ($this->table)($name); }
     private function siteRows(string $name, int $id) { return $this->rows($name)->where('site_id', $id); }
     private function fail(string $message): never { ($this->reject)($message); throw new \LogicException($message); }
+    private function emailReferences(): PublishedEmailReference { return new PublishedEmailReference($this->table, $this->reject); }
     private function json(mixed $value): string
     {
         return json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
@@ -40,11 +41,18 @@ final class ConfigSnapshotWriter
     {
         $row = $this->siteRows('wl_site_config_snapshots', $site)->orderByDesc('config_version')->first();
         if (!$row) return [0, null];
-        $payload = json_decode($row->payload);
-        if ((int) $row->schema_version !== 4 || !hash_equals($row->payload_sha256, hash('sha256', $row->payload))
+        if (!is_string($row->payload) || strlen($row->payload) > 1048576) $this->fail('本站快照超过容量限制或格式无效');
+        try { $payload = json_decode($row->payload, false, 512, JSON_THROW_ON_ERROR); }
+        catch (\JsonException $e) { $this->fail('本站快照 JSON 校验失败'); }
+        if (!$payload instanceof \stdClass || !in_array((int)$row->schema_version, [4, 5], true)
+            || !hash_equals($row->payload_sha256, hash('sha256', $row->payload))
             || ($payload->tenantId ?? null) !== $tenant || ($payload->siteId ?? null) !== $site
             || !is_array($payload->domains ?? null) || !is_array($payload->entitlements ?? null)
-            || !is_int($payload->entitlementVersion ?? null)) $this->fail('本站快照校验失败或租户不匹配');
+            || !is_int($payload->entitlementVersion ?? null) || $payload->entitlementVersion < 1
+            || !in_array($payload->status ?? null, ['enabled', 'disabled'], true)) $this->fail('本站快照校验失败或租户不匹配');
+        if ((int)$row->schema_version !== $this->emailReferences()->schemaVersion($payload)) {
+            $this->fail('本站快照格式版本与邮件引用不一致');
+        }
         return [(int) $row->config_version, $payload];
     }
 
@@ -130,28 +138,43 @@ final class ConfigSnapshotWriter
             $policies->update(['version'=>++$auth['version'],'updated_by'=>$operator,'updated_at'=>\Carbon\CarbonImmutable::now()]);
         }
 
-        $templates = $this->siteRows('wl_site_email_templates', $site);
-        $template = $templates->first();
-        $newTemplate = !$template;
-        if (!$template) {
-            if (isset($old->emailTemplateRef) || $this->siteRows('wl_site_email_template_versions', $site)->exists()
-                || $this->siteRows('wl_site_email_template_audits', $site)->exists()) $this->fail('已有邮件模板缺少源配置');
-            if (!trim($siteRow->site_name)) $this->fail('首次初始化邮件模板需要本站名称');
-            $body = ['version'=>1,'siteName'=>$siteRow->site_name,'defaultLocale'=>'zh-CN','templates'=>[]];
-            $raw = $this->json($body);
-            $templates->insert(['site_id'=>$site,'version'=>1,'site_name'=>$body['siteName'],'default_locale'=>'zh-CN','templates'=>'[]','updated_by'=>$operator]);
+        if ($old && $this->emailReferences()->schemaVersion($old) === 5) {
+            // A non-email save retains the complete published reference and never consults
+            // the frozen legacy source, nor rewrites mail versions or template bodies.
+            $this->emailReferences()->validateRows($site, $old->emailTemplateRef);
+            $ref = get_object_vars($old->emailTemplateRef);
+            $newTemplate = false;
+            $raw = '';
         } else {
-            $entry = $this->siteRows('wl_site_email_template_versions', $site)->where('template_version', $template->version)->first();
-            if (!$entry || !hash_equals($entry->payload_sha256, hash('sha256', $entry->payload))) $this->fail('邮件模板版本缺失或校验失败');
-            $raw = $entry->payload;
-            $body = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
-            if (($body['version'] ?? null) !== (int)$template->version || ($body['siteName'] ?? null) !== $template->site_name
-                || ($body['defaultLocale'] ?? null) !== $template->default_locale || !isset($body['templates'])
-                || $body['templates'] != json_decode($template->templates, true, 512, JSON_THROW_ON_ERROR)) $this->fail('邮件模板与已发布版本不一致');
+            $templates = $this->siteRows('wl_site_email_templates', $site);
+            $template = $templates->first();
+            $newTemplate = !$template;
+            if (!$template) {
+                if (isset($old->emailTemplateRef) || $this->siteRows('wl_site_email_template_versions', $site)->exists()
+                    || $this->siteRows('wl_site_email_template_audits', $site)->exists()) $this->fail('已有邮件模板缺少源配置');
+                if (!trim($siteRow->site_name)) $this->fail('首次初始化邮件模板需要本站名称');
+                $body = ['version'=>1,'siteName'=>$siteRow->site_name,'defaultLocale'=>'zh-CN','templates'=>[]];
+                $raw = $this->json($body);
+                $templates->insert(['site_id'=>$site,'version'=>1,'site_name'=>$body['siteName'],'default_locale'=>'zh-CN','templates'=>'[]','updated_by'=>$operator]);
+            } else {
+                $entry = $this->siteRows('wl_site_email_template_versions', $site)->where('template_version', $template->version)->first();
+                if (!$entry || !hash_equals($entry->payload_sha256, hash('sha256', $entry->payload))) $this->fail('邮件模板版本缺失或校验失败');
+                $raw = $entry->payload;
+                $body = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
+                if (($body['version'] ?? null) !== (int)$template->version || ($body['siteName'] ?? null) !== $template->site_name
+                    || ($body['defaultLocale'] ?? null) !== $template->default_locale || !isset($body['templates'])
+                    || $body['templates'] != json_decode($template->templates, true, 512, JSON_THROW_ON_ERROR)) $this->fail('邮件模板与已发布版本不一致');
+            }
+            if (strlen($raw) > 131072) $this->fail('邮件模板超过容量限制');
+            $ref = ['version'=>$body['version'],'siteName'=>$body['siteName'],'defaultLocale'=>$body['defaultLocale'],'sha256'=>hash('sha256',$raw)];
+            if (isset($old->emailTemplateRef)) {
+                foreach ($ref as $key => $value) {
+                    if (($old->emailTemplateRef->{$key} ?? null) !== $value) $this->fail('快照邮件模板引用与版本不一致');
+                }
+                $ref = get_object_vars($old->emailTemplateRef);
+            }
         }
-        if (strlen($raw) > 131072) $this->fail('邮件模板超过容量限制');
-        $ref = ['version'=>$body['version'],'siteName'=>$body['siteName'],'defaultLocale'=>$body['defaultLocale'],'sha256'=>hash('sha256',$raw)];
-        if (isset($old->emailTemplateRef) && $old->emailTemplateRef != (object)$ref) $this->fail('快照邮件模板引用与版本不一致');
+        $schemaVersion = $this->emailReferences()->schemaVersion((object)['emailTemplateRef' => (object)$ref]);
         $payload = $this->json(['tenantId'=>$tenant,'siteId'=>$site,'domains'=>$domains,'status'=>$status,'entitlementVersion'=>$entitlement,
             'entitlements'=>$modules,'authPolicy'=>$auth,'emailTemplateRef'=>$ref]);
         if (strlen($payload) > 1048576) $this->fail('站点配置超过容量限制');
@@ -178,7 +201,7 @@ final class ConfigSnapshotWriter
                 'payload_sha256'=>$ref['sha256'],'published_snapshot_version'=>$version]);
             $this->rows('wl_site_email_template_audits')->insert($audit+['template_version'=>1,'action'=>'create','before_templates'=>null,'after_templates'=>$raw]);
         }
-        $this->rows('wl_site_config_snapshots')->insert(['site_id'=>$site,'config_version'=>$version,'schema_version'=>4,'payload'=>$payload,
+        $this->rows('wl_site_config_snapshots')->insert(['site_id'=>$site,'config_version'=>$version,'schema_version'=>$schemaVersion,'payload'=>$payload,
             'payload_sha256'=>hash('sha256',$payload),'previous_config_version'=>$previous ?: null,'rollback_of_config_version'=>null]);
         $this->replaceDomains($site,$domains);
         (new ThemeSnapshotWriter($this->table))->sync($tenant, $site, $operator, $actor, $reason, $version);
