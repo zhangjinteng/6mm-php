@@ -63,21 +63,22 @@ final class EmailTemplateRules
         $parts = parse_url($url);
         if (strlen($url) > 2048 || preg_match('/[\x00-\x20\x7f\\\\]/', $url)
             || !filter_var($url, FILTER_VALIDATE_URL) || !$parts || ($parts['scheme'] ?? '') !== 'https'
-            || isset($parts['user']) || isset($parts['pass']) || isset($parts['fragment'])
-            || (isset($parts['port']) && $parts['port'] !== 443)
-            || !in_array(strtolower($parts['host'] ?? ''), $hosts, true)) {
-            throw new EmailConfigException('邮件图片必须使用已允许主机的 HTTPS 地址');
+            || isset($parts['user']) || isset($parts['pass']) || isset($parts['port'])
+            || !preg_match('~^https://([^/?#]+)~D', $url, $authority)
+            || strtolower($authority[1]) !== strtolower($parts['host'] ?? '')
+            || !in_array(strtolower($parts['host'] ?? ''), array_map('strtolower', $hosts), true)) {
+            throw new EmailConfigException('邮件图片必须使用已允许主机的 HTTPS 地址，且不能含用户信息或显式端口');
         }
     }
 
     private static function variables(string $text, bool $subject = false): void
     {
-        preg_match_all('/{{\s*([^{}]+?)\s*}}/u', $text, $matches);
+        preg_match_all('/{{([^{}]+)}}/u', $text, $matches);
         $allowed = $subject ? ['siteName', 'purposeLabel'] : self::VARIABLES;
         foreach ($matches[1] as $variable) {
             if (!in_array($variable, $allowed, true)) throw new EmailConfigException('邮件模板包含不支持的变量');
         }
-        if (str_contains(preg_replace('/{{\s*[^{}]+?\s*}}/u', '', $text), '{{')) {
+        if (preg_match('/{{|}}/', preg_replace('/{{[^{}]+}}/u', '', $text))) {
             throw new EmailConfigException('邮件模板变量格式无效');
         }
     }
@@ -87,46 +88,28 @@ final class EmailTemplateRules
         if (array_diff(array_keys($body), ['purpose', 'locale', 'subject', 'textBody', 'htmlBody'])
             || !in_array($body['purpose'] ?? null, self::PURPOSES, true)
             || !is_string($body['locale'] ?? null) || self::locale($body['locale']) !== $body['locale']
-            || !is_string($body['subject'] ?? null) || trim($body['subject']) === '' || mb_strlen($body['subject']) > 200
-            || preg_match('/[\r\n\x00]/', $body['subject'])
-            || !is_string($body['textBody'] ?? null) || trim($body['textBody']) === '' || strlen($body['textBody']) > 8192
-            || (isset($body['htmlBody']) && !is_string($body['htmlBody'])) || strlen($body['htmlBody'] ?? '') > 32768) {
+            || !is_string($body['subject'] ?? null) || !mb_check_encoding($body['subject'], 'UTF-8') || trim($body['subject']) === '' || mb_strlen($body['subject'], 'UTF-8') > 200
+            || preg_match('/\p{Cc}/u', $body['subject'])
+            || !is_string($body['textBody'] ?? null) || !mb_check_encoding($body['textBody'], 'UTF-8') || trim($body['textBody']) === '' || strlen($body['textBody']) > 8192
+            || (isset($body['htmlBody']) && (!is_string($body['htmlBody']) || !mb_check_encoding($body['htmlBody'], 'UTF-8'))) || strlen($body['htmlBody'] ?? '') > 32768) {
             throw new EmailConfigException('邮件模板用途、语言或正文格式无效');
         }
         self::variables($body['subject'], true);
         self::variables($body['textBody']);
         self::variables($body['htmlBody'] ?? '');
+        self::requiredVariables($body['textBody']);
         if (preg_match('/{{\s*logoUrl\s*}}/u', $body['subject'].$body['textBody'])) throw new EmailConfigException('Logo 变量只能用于图片 src');
         $html = $body['htmlBody'] ?? '';
         if ($html === '') return;
-        $previous = libxml_use_internal_errors(true);
-        try {
-            $dom = new \DOMDocument();
-            $dom->loadHTML('<?xml encoding="UTF-8">'.$html, LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING);
-            foreach ($dom->getElementsByTagName('*') as $node) {
-                $tag = strtolower($node->nodeName);
-                if (in_array($tag, ['script','iframe','object','embed','form','input','button','textarea','svg','math','base','link'], true)) {
-                    throw new EmailConfigException('邮件 HTML 包含不允许的标签');
-                }
-                foreach ($node->attributes as $attribute) {
-                    $name = strtolower($attribute->name);
-                    $value = $attribute->value;
-                    if (str_starts_with($name, 'on') || $name === 'srcdoc'
-                        || preg_match('/(?:javascript\s*:|vbscript\s*:|expression\s*\(|@import|url\s*\()/i', $value)) {
-                        throw new EmailConfigException('邮件 HTML 包含不安全的属性');
-                    }
-                    if (str_contains($value, '{{logoUrl}}') && !($tag === 'img' && $name === 'src' && $value === '{{logoUrl}}')) {
-                        throw new EmailConfigException('Logo 变量只能作为 img 的完整 src');
-                    }
-                    if ($name === 'src' && !($tag === 'img' && $value === '{{logoUrl}}')) self::url($value, $hosts);
-                    if ($name === 'href' && !preg_match('/^https:\/\//D', $value)) throw new EmailConfigException('邮件链接必须使用 HTTPS');
-                }
-            }
-            // Remove only allowed occurrences for checking, never rewrite the stored HTML.
-            $withoutLogo = preg_replace('/(<img\b[^>]*\bsrc\s*=\s*["\']){{logoUrl}}(["\'])/i', '$1$2', $html);
-            if (preg_match('/{{\s*logoUrl\s*}}/u', $withoutLogo)) throw new EmailConfigException('Logo 变量位置无效');
-            if (preg_match('/(?:expression\s*\(|@import|url\s*\()/i', $html)) throw new EmailConfigException('邮件 CSS 包含不安全的资源引用');
-        } finally { libxml_clear_errors(); libxml_use_internal_errors($previous); }
+        self::requiredVariables($html);
+        EmailHtmlRules::validate($html, $hosts);
+    }
+
+    private static function requiredVariables(string $body): void
+    {
+        if (!str_contains($body, '{{code}}') || (!str_contains($body, '{{validMinutes}}') && !str_contains($body, '{{expiresAt}}'))) {
+            throw new EmailConfigException('邮件正文必须包含验证码和至少一个有效期变量');
+        }
     }
 
     /** Public presets are copied only for genuinely missing/empty site templates. */
@@ -139,11 +122,11 @@ final class EmailTemplateRules
                 ? "Your {{siteName}} {{purposeLabel}} code is {{code}}.\nValid for {{validMinutes}} minutes, until {{expiresAt}}.\nIf you did not request this code, ignore this email."
                 : "您的 {{siteName}} {{purposeLabel}}验证码是 {{code}}。\n有效期 {{validMinutes}} 分钟，到期时间 {{expiresAt}}。\n如非本人操作，请忽略此邮件。";
             $items[] = ['purpose' => $purpose, 'locale' => $locale, 'subject' => '{{siteName}} - {{purposeLabel}}', 'textBody' => $text,
-                'htmlBody' => '<html><body><table role="presentation"><tr><td><img src="{{logoUrl}}" alt="" width="120"></td></tr>'
-                    .'<tr><td><h1>{{siteName}}</h1><p>{{purposeLabel}}</p><p><strong>{{code}}</strong></p><p>'
+                'htmlBody' => '<table role="presentation"><tr><td><img src="{{logoUrl}}" alt="" width="120"></td></tr>'
+                    .'<tr><td><p><strong>{{siteName}}</strong></p><p>{{purposeLabel}}</p><p><strong>{{code}}</strong></p><p>'
                     .($english ? 'Valid for {{validMinutes}} minutes, until {{expiresAt}}.' : '有效期 {{validMinutes}} 分钟，到期时间 {{expiresAt}}。')
                     .'</p><p>'.($english ? 'If you did not request this code, ignore this email.' : '如非本人操作，请忽略此邮件。')
-                    .'</p></td></tr></table></body></html>'];
+                    .'</p></td></tr></table>'];
         }
         usort($items, static fn ($a, $b) => [$a['purpose'], $a['locale']] <=> [$b['purpose'], $b['locale']]);
         return $items;

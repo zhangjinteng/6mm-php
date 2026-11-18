@@ -64,6 +64,7 @@ $reject(static fn () => $save(['expectedVersion' => '1', 'siteName' => 'Stale'])
 $counts = [$db->table('wl_site_config_publications')->count(), $db->table('wl_site_email_template_audits')->count()];
 foreach ([['templates' => []], ['policy' => []], ['SMTP' => []], ['operatorId' => 999], ['logoUrl' => 'https://evil.example/logo.png'],
     ['logoUrl' => 'http://cdn.example/logo.png'], ['logoUrl' => 'https://cdn.example.evil.test/logo.png'], ['logoUrl' => 'https://user:pass@cdn.example/logo.png'],
+    ['logoUrl' => 'https://cdn.example:443/logo.png'], ['logoUrl' => 'https://cdn.example:/logo.png'],
     ['siteName' => str_repeat('名',129)], ['defaultLocale' => 'not a locale'], ['logoUrl' => 1]] as $bad) {
     $reject(static fn () => $save(['expectedVersion' => '2'] + $bad));
 }
@@ -101,8 +102,8 @@ try {
 // Existing v4 templates migrate without changing any subject/text/html or old records.
 $writer = new \SixMm\Shared\TenantConfig\ConfigSnapshotWriter($db->table(...), static fn ($m) => throw new EmailConfigException($m));
 $db->transaction(static function () use ($writer): void { $writer->lock(); $writer->append(2, 20, 0, 7, 'platform-admin:7', 'Legacy fixture'); });
-$legacyTemplate = ['purpose' => 'login', 'locale' => 'en', 'subject' => 'Unchanged subject', 'textBody' => "  {{code}}\nKEEP spaces  ",
-    'htmlBody' => '<p>KEEP {{code}}</p>'];
+$legacyTemplate = ['purpose' => 'login', 'locale' => 'en', 'subject' => 'Unchanged subject', 'textBody' => "  {{code}}\nKEEP spaces {{expiresAt}}  ",
+    'htmlBody' => '<p>KEEP {{code}} {{expiresAt}}</p>'];
 $legacyBody = ['version' => 1, 'siteName' => 'Legacy brand', 'defaultLocale' => 'en', 'templates' => [$legacyTemplate]];
 $legacyRaw = EmailTemplateRules::json($legacyBody);
 $legacySnapshot = $db->table('wl_site_config_snapshots')->where('site_id',20)->orderByDesc('config_version')->first();
@@ -114,6 +115,31 @@ $db->table('wl_site_email_templates')->where('site_id',20)->update(['site_name'=
 $db->table('wl_site_email_template_versions')->where('site_id',20)->update(['payload'=>$legacyRaw,'payload_sha256'=>hash('sha256',$legacyRaw)]);
 $oldLegacy = $db->table('wl_site_email_templates')->where('site_id',20)->first();
 $check($publisher->detail(2,20)['version'] === '1');
+// Hash-valid legacy templates can still be incompatible with User. Reject them
+// before migration/publication, without replacing them with the new presets.
+foreach (['<html><p>{{code}} {{expiresAt}}</p></html>', '<body><p>{{code}} {{expiresAt}}</p></body>', '<h1>{{code}} {{expiresAt}}</h1>',
+    '<p style="position:absolute">{{code}} {{expiresAt}}</p>', '<p class="x">{{code}} {{expiresAt}}</p>',
+    '<a href="https://evil.example/help">{{code}} {{expiresAt}}</a>',
+] as $invalidHtml) {
+    $db->beginTransaction();
+    try {
+        $invalidTemplate = array_replace($legacyTemplate, ['htmlBody' => $invalidHtml]);
+        $invalidBody = array_replace($legacyBody, ['templates' => [$invalidTemplate]]);
+        $invalidRaw = EmailTemplateRules::json($invalidBody);
+        $invalidSnapshot = $value;
+        $invalidSnapshot['emailTemplateRef']['sha256'] = hash('sha256', $invalidRaw);
+        $invalidSnapshotRaw = EmailTemplateRules::json($invalidSnapshot);
+        $db->table('wl_site_config_snapshots')->where('site_id',20)->update([
+            'payload' => $invalidSnapshotRaw, 'payload_sha256' => hash('sha256', $invalidSnapshotRaw)]);
+        $db->table('wl_site_email_templates')->where('site_id',20)->update(['templates' => EmailTemplateRules::json([$invalidTemplate])]);
+        $db->table('wl_site_email_template_versions')->where('site_id',20)->update([
+            'payload' => $invalidRaw, 'payload_sha256' => hash('sha256', $invalidRaw)]);
+        $beforeInvalidPublication = [];
+        foreach ($tables as $table) $beforeInvalidPublication[$table] = json_encode($db->table($table)->get());
+        $reject(static fn () => $publisher->initializeIfMissing(2,20,7,'platform-admin:7','非法旧模板迁入'));
+        foreach ($tables as $table) $check(json_encode($db->table($table)->get()) === $beforeInvalidPublication[$table]);
+    } finally { $db->rollBack(); }
+}
 $migrated = $publisher->initializeIfMissing(2,20,7,'platform-admin:7','迁入旧模板');
 $check($migrated['detail']['version'] === '2' && $migrated['detail']['site_name'] === 'Legacy brand');
 $saved = $db->table('wl_site_email_template_items')->where('site_id',20)->sole();
@@ -127,7 +153,7 @@ foreach (['{{code}}', '{{validMinutes}}', '{{expiresAt}}', '{{logoUrl}}'] as $su
 }
 foreach (['<script>alert(1)</script>', '<img src="https://evil.example/a.png">', '<img src="{{logoUrl}}/extra">',
     '<p>{{logoUrl}}</p>', '<p onclick="alert(1)">x</p>'] as $html) {
-    $reject(static fn () => EmailTemplateRules::template(array_replace($legacyTemplate,['htmlBody'=>$html]), ['cdn.example']));
+    $reject(static fn () => EmailTemplateRules::template(array_replace($legacyTemplate,['htmlBody'=>$html.'<p>{{code}} {{expiresAt}}</p>']), ['cdn.example']));
 }
 $reject(static fn () => (new SiteEmailPublisher($db, [], false, null, false))->publish(1,10,['expectedVersion'=>3],7,'platform-admin:7','未就绪'));
 // Both administration hosts use this save path. A logo change and its mail manifest

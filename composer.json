@@ -64,6 +64,7 @@
             "@php tests/tenant_features.php",
             "@php tests/tenant_brand.php",
             "@php tests/site_snapshot_formats.php",
+            "@php tests/email_template_rules.php",
             "@php tests/site_email_publication.php",
             "@php tests/tenant_channels.php",
             "@php tests/liquidation_warnings.php",
