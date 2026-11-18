@@ -8,6 +8,8 @@ use Illuminate\Database\Connection;
 function publicationFixture(Connection $db, array $sites, bool $controlPlane = false): void
 {
     $prefix = $controlPlane ? 'control_plane.' : '';
+    require_once __DIR__.'/email_rows.php';
+    emailRowsFixture($db, $prefix);
     require_once __DIR__.'/site_themes.php';
     themeFixture($db, $prefix);
     foreach ([

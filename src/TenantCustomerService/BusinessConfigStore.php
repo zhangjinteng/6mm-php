@@ -9,7 +9,8 @@ use SixMm\Shared\TenantConfig\ConfigSnapshotWriter;
 
 final class BusinessConfigStore
 {
-    public function __construct(private CustomerServiceContext $host, private ?\Closure $initializeContract = null) {}
+    public function __construct(private CustomerServiceContext $host, private ?\Closure $initializeContract = null,
+        private ?\Closure $prepareEmail = null) {}
 
     private const MODULES = ['contract', 'seconds', CustomerService::MODULE];
 
@@ -49,7 +50,8 @@ final class BusinessConfigStore
             }
         }
         return ['initialized' => true] + $writer->append((int)$tenantId, (int)$siteId, 0, $operatorId,
-            $this->host->actorReference(), $publishReason ?? '首次初始化站点 '.$siteId);
+            $this->host->actorReference(), $publishReason ?? '首次初始化站点 '.$siteId,
+            $this->prepareEmail ? ($this->prepareEmail)((int)$tenantId, (int)$siteId) : null);
     }
 
     public function listing(array $input): array

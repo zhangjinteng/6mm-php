@@ -54,7 +54,7 @@ final class PublishedEmailReference
     }
 
     /** Never reserialize immutable bodies to calculate their digest. */
-    public function validateRows(int $site, stdClass $ref): void
+    public function validateRows(int $site, stdClass $ref): array
     {
         $this->validateIdentity($ref);
         if (($ref->storage ?? null) !== 'rows') $this->fail('分行邮件模板引用格式无效');
@@ -85,6 +85,7 @@ final class PublishedEmailReference
             ->where('template_version', $ref->version)->limit(257)->get();
         if ($rows->count() !== count($expected)) $this->fail('邮件发布正文缺失或存在额外条目');
         $bytes = 0;
+        $items = [];
         foreach ($rows as $row) {
             $key = $row->purpose."\0".$row->locale;
             if (!isset($expected[$key]) || !is_string($row->payload) || strlen($row->payload) > 262144
@@ -96,8 +97,11 @@ final class PublishedEmailReference
             if (($body->purpose ?? null) !== $row->purpose || ($body->locale ?? null) !== $row->locale
                 || !is_string($body->subject ?? null) || !is_string($body->textBody ?? null)
                 || (isset($body->htmlBody) && !is_string($body->htmlBody))) $this->fail('邮件发布正文身份或格式无效');
+            $items[] = ['template' => get_object_vars($body), 'payload' => $row->payload, 'sha256' => $row->payload_sha256];
             unset($expected[$key]);
         }
         if ($expected) $this->fail('邮件发布正文缺失');
+        usort($items, static fn ($a, $b) => [$a['template']['purpose'], $a['template']['locale']] <=> [$b['template']['purpose'], $b['template']['locale']]);
+        return ['manifest' => $entry->payload, 'items' => $items];
     }
 }

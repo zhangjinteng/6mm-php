@@ -90,7 +90,7 @@ final class ConfigSnapshotWriter
     }
 
     /** Caller must acquire lock() BEFORE staging any changes in this transaction. */
-    public function append(int $tenant, int $site, int $expected, int $operator, string $actor, string $reason): array
+    public function append(int $tenant, int $site, int $expected, int $operator, string $actor, string $reason, ?EmailPublication $emailPublication = null): array
     {
         $db = $this->rows('wl_sites')->getConnection();
         if (!$db->transactionLevel() || $operator < 1 || $site < 1 || $tenant < 1 || !trim($reason)
@@ -138,7 +138,13 @@ final class ConfigSnapshotWriter
             $policies->update(['version'=>++$auth['version'],'updated_by'=>$operator,'updated_at'=>\Carbon\CarbonImmutable::now()]);
         }
 
-        if ($old && $this->emailReferences()->schemaVersion($old) === 5) {
+        if ($emailPublication !== null) {
+            if ($emailPublication->tenantId !== $tenant || $emailPublication->siteId !== $site
+                || $emailPublication->expectedConfigVersion !== $previous) throw new \LogicException('Email publication scope/version mismatch');
+            $ref = $emailPublication->reference();
+            $newTemplate = false;
+            $raw = '';
+        } elseif ($old && $this->emailReferences()->schemaVersion($old) === 5) {
             // A non-email save retains the complete published reference and never consults
             // the frozen legacy source, nor rewrites mail versions or template bodies.
             $this->emailReferences()->validateRows($site, $old->emailTemplateRef);
@@ -191,6 +197,7 @@ final class ConfigSnapshotWriter
             (int)$db->selectOne("SELECT nextval('control_plane.wl_snapshot_version_seq'::regclass) AS version")->version;
         if ($version <= max($global,$previous)) $this->fail('发布版本序列异常');
         $pub->insert(['publication_version'=>$version,'published_by'=>$actor,'publish_reason'=>$reason,'published_at'=>\Carbon\CarbonImmutable::now()]);
+        $emailPublication?->persist($this->table, $version, $operator, $actor, $reason);
         $audit = ['site_id'=>$site,'snapshot_version'=>$version,'operator_id'=>$operator,'reason'=>$reason,
             'source_service'=>explode(':',$actor)[0],'request_id'=>(string)Str::uuid()];
         if ($created || $availability) $this->rows('wl_site_auth_policy_audits')->insert($audit+['policy_version'=>$auth['version'],

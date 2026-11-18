@@ -23,9 +23,32 @@ The schema column is determined by the retained email reference: missing/empty s
 
 When an existing site uses rows, non-email domain/module/availability saves preserve its complete published `emailTemplateRef`. `PublishedEmailReference` checks the site's immutable manifest and all corresponding body records against their raw-byte digests and identities before appending the new site snapshot. Frozen legacy source content is not consulted, and mail configuration, body/version records and email audits are not rewritten. Missing/extra/mismatched records fail within the caller's existing transaction.
 
-This compatibility prerequisite does **not** implement the email-brand save endpoint, initialize the new email source tables, generate default email bodies or migrate legacy sites to rows. Those writes require the authoritative controlled email Publisher and its validation/default-template/canonical-JSON contract. Do not infer that merely deploying this reader switches a site to the new email format.
+The compatibility reader does not itself initialize email sources or migrate legacy sites. Email writes use the shared PHP controlled publisher below, never direct editor CRUD. Deploying the reader alone does not switch a site to rows.
 
 Regression: `php tests/site_snapshot_formats.php` (isolated SQLite; no real publication or email delivery).
+
+## Controlled email-brand publisher (Platform + White Label)
+
+`SiteEmailPublisher` implements the documented rows publication contract in PHP, without invoking Go. Both hosts accept only brand name, Logo and default language plus the expected **mail** version; operator and tenant scope come from their authenticated server context. The Platform routes reuse brand read/edit permissions; White Label routes reuse its brand page permission and restrict ownership to enabled sites in the authenticated tenant.
+
+- `detail()` returns the current brand, mail version and independent site publication watermark. It never initializes on read. Existing legacy versions are not mistaken for first version zero.
+- `publish()` manages the same-connection transaction, obtains publication locks, checks the latest target snapshot/source/domain-index agreement, validates the expected mail version, language and exact HTTPS image-host allowlist, and prepares a trusted `EmailPublication` for `ConfigSnapshotWriter::append()`.
+- One transaction updates/inserts the brand source, initializes per-language source items only when missing, appends an immutable manifest and complete immutable item-version set, records the mail audit and host operation audit, and publishes the schema-5 site snapshot. No full body aggregate is stored in the brand row or manifest. Failed validation/audit/insert rolls the transaction back.
+- Existing rows body payloads are copied as exact raw bytes with their existing hashes. Existing source subject/text/html strings are verified and left untouched. Legacy migration retains these strings and leaves the old table/version bytes frozen; only empty/missing legacy collections copy the PHP public presets (four purposes × en/zh-CN). There is no other-site inheritance and no template/policy/SMTP mutation API.
+- Omitted/null Logo preserves; an empty string clears. The HTTP adapters recover this distinction from the raw JSON because Laravel converts empty strings to null. Omitted/empty name and language retain the current values. Same-version concurrent saves produce one winner and one conflict, with no overwrite retry.
+- New white-label base publication prepares email version 1 directly; account edit calls `initializeIfMissing()` on its selected owned site and never resets an existing config. Missing domains or corrupt existing state produce an error, not an unpublished/default fallback.
+- Canonical JSON uses encoding/json-style lowercase HTML escapes, and hashes cover exact emitted bytes. A brand-only change does not alter auth policy switches/version or issued codes. Static image URLs inside existing templates are not rewritten when the brand Logo changes.
+
+Environment prerequisites, in **both hosts**, before enabling writes:
+
+```dotenv
+SITE_EMAIL_CONSUMERS_V5_READY=true
+SITE_EMAIL_RESOURCE_HOSTS=approved-image-host.example
+```
+
+The readiness flag defaults to false. Apply the separately managed migration 9 (plus existing single-site/FK prerequisites) and upgrade all actual consumers before enabling it. Resource hosts must match User `emailAuth.resourceHosts`; no wildcard/implicit host is accepted. Empty Logo/default initialization works without an image host. This feature does not execute migrations, grant User access, restart consumers or send email.
+
+Tests: `php tests/site_email_publication.php`; `bash scripts/test-site-email-postgres.sh` creates an isolated local PostgreSQL cluster and checks concurrent saves, real FKs and rollback. It never targets application databases.
 
 ## Generic Redis snapshots (Agent + Platform)
 

@@ -16,7 +16,7 @@ $db->statement("CREATE TABLE wl_tenants (tenant_id integer PRIMARY KEY, tenant_n
 $db->statement('CREATE TABLE wl_sites (site_id integer PRIMARY KEY, tenant_id integer, site_name text, status text, entitlement_version integer, updated_at text)');
 $db->statement('CREATE TABLE wl_site_modules (site_id integer, module_code text, enabled boolean)');
 publicationFixture($db, []);
-$db->statement('CREATE TABLE wl_site_email_template_item_versions (site_id integer, template_version integer, purpose text, locale text, payload text, payload_sha256 text, PRIMARY KEY(site_id,template_version,purpose,locale))');
+$db->statement('CREATE TABLE IF NOT EXISTS wl_site_email_template_item_versions (site_id integer, template_version integer, purpose text, locale text, payload text, payload_sha256 text, PRIMARY KEY(site_id,template_version,purpose,locale))');
 $db->table('wl_tenants')->insert(['tenant_id' => 1, 'tenant_name' => 'Alpha', 'status' => 'enabled']);
 $db->table('wl_sites')->insert(['site_id' => 10, 'tenant_id' => 1, 'site_name' => 'Alpha', 'status' => 'enabled', 'entitlement_version' => 1]);
 $db->table('wl_site_domains')->insert(['site_id' => 10, 'domain' => 'alpha.example', 'is_primary' => true]);
