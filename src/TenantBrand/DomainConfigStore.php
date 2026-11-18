@@ -12,7 +12,8 @@ use SixMm\Shared\Media\MediaRegistry;
 
 final class DomainConfigStore
 {
-    public function __construct(private ConnectionInterface $db, private bool $enabledSitesOnly = false, private ?string $schema = null)
+    public function __construct(private ConnectionInterface $db, private bool $enabledSitesOnly = false, private ?string $schema = null,
+        private ?\SixMm\Shared\TenantConfig\SiteEmailPublisher $email = null)
     {
         if ($schema !== null && !preg_match('/^[a-z_][a-z0-9_]*$/D', $schema)) throw new \InvalidArgumentException('Invalid domain schema');
     }
@@ -137,6 +138,8 @@ final class DomainConfigStore
             $oldDomains = $old->domains;
             sort($oldDomains, SORT_STRING);
             if ($oldDomains !== array_column($current, 'domain')) $this->reject('域名表与发布快照不一致');
+            $syncEmail = $this->email && $beforeBrand['logo_url'] !== $desiredBrand['logo_url'];
+            if ($syncEmail) $this->email->assertPublishedSources((int)$site->site_id, $old);
             if ($current !== $desired) {
                 $this->table('wl_site_domains')->where('site_id', $site->site_id)->update(['is_primary' => false]);
                 $remove = $this->table('wl_site_domains')->where('site_id', $site->site_id);
@@ -153,7 +156,8 @@ final class DomainConfigStore
             if ($beforeBrand !== $desiredBrand) $this->table('wl_sites')->where('site_id', $site->site_id)->update(['updated_at' => $timestamp]);
             $result = $writer->append((int)$site->tenant_id, (int)$site->site_id, $version, $operatorId,
                 ($actorType === 'platform' ? 'platform-admin:' : 'white-label-admin:').$operatorId,
-                '品牌配置域名更新：站点 '.$site->site_id);
+                '品牌配置域名更新：站点 '.$site->site_id,
+                $syncEmail ? $this->email->prepareInitialization((int)$site->tenant_id, (int)$site->site_id) : null);
             if ($current !== $desired || $result['changed'] || $beforeBrand !== $desiredBrand) {
                 $audit(['tenant_id'=>(string)$site->tenant_id,'site_id'=>(string)$site->site_id,'before'=>$current,'after'=>$desired,
                     'before_brand'=>$beforeBrand, 'after_brand'=>$desiredBrand,

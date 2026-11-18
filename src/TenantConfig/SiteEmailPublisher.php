@@ -34,6 +34,13 @@ final class SiteEmailPublisher
         }
     }
 
+    /** Both admin hosts already configure the same public image bed used by website uploads. */
+    public static function forWebsiteBrand(ConnectionInterface $db, bool $enabledOnly = false, ?string $schema = null): self
+    {
+        $host = parse_url((string)config('imgbed.public_base'), PHP_URL_HOST);
+        return new self($db, $host ? [$host] : [], $enabledOnly, $schema, (bool)config('site_email.consumers_v5_ready', false));
+    }
+
     private function table(string $name)
     {
         $prefix = $this->schema ?? ($this->db->getDriverName() === 'pgsql' ? 'control_plane' : '');
@@ -194,7 +201,7 @@ final class SiteEmailPublisher
             $this->compact($state['version'] + 1, $brand, $items), $state['before'], $state['source'] !== 'rows', $requestId ?: (string)Str::uuid());
     }
 
-    private function assertPublishedSources(int $site, ?object $snapshot): void
+    public function assertPublishedSources(int $site, ?object $snapshot): void
     {
         if (!$snapshot) return; // First publication is validated by ConfigSnapshotWriter.
         $domains = $this->table('wl_site_domains')->where('site_id', $site)->orderBy('domain')->pluck('domain')->all();
@@ -239,6 +246,37 @@ final class SiteEmailPublisher
         }, 3);
     }
 
+    private function inheritedBrand(int $tenant, int $site): array
+    {
+        $assets = new \SixMm\Shared\TenantBrand\SiteBrandAssets($this->db, $this->schema);
+        $logo = (string)$assets->read((string)$site)['logo_url'];
+        if ($logo !== '' && $this->db->getDriverName() === 'pgsql') {
+            $media = new \SixMm\Shared\Media\MediaRegistry();
+            $ids = $media->idsForUrl($logo, 'logo_url');
+            if (!$ids) $this->fail('网站 Logo 未在图床登记，请重新上传后发布');
+            $media->checkMediaReferences('platform_admin', 'white_label', $tenant, 'brand', 'site', (string)$site,
+                'logo_url', 'published', $ids);
+        }
+        return ['siteName' => (string)$this->table('wl_tenants')->where('tenant_id', $tenant)->value('tenant_name'),
+            'logoUrl' => $logo, 'defaultLocale' => 'zh-CN'];
+    }
+
+    /** Explicit reconciliation / rename; the publication lock protects both source reads and version selection. */
+    public function syncWebsiteBrand(int $tenant, int $site, int $operator, string $actor): array
+    {
+        return $this->db->transaction(function () use ($tenant, $site, $operator, $actor): array {
+            $writer = $this->writer(); $writer->lock();
+            $row = $this->site($tenant, $site, true);
+            [, $snapshot] = $writer->latest($tenant, $site);
+            $state = $this->state($row, $snapshot);
+            $change = $this->inheritedBrand($tenant, $site);
+            if ($state['source'] === 'rows' && $state['brand'] === ['site_name' => $change['siteName'],
+                'logo_url' => $change['logoUrl'], 'default_locale' => 'zh-CN']) return ['initialized' => false, 'changed' => false];
+            return ['initialized' => $state['source'] !== 'rows'] + $this->publish($tenant, $site,
+                ['expectedVersion' => $state['version']] + $change, $operator, $actor, '邮件品牌同步网站标识与白标名称');
+        }, 3);
+    }
+
     /** Base-site bootstrap uses the same pending write without creating a legacy row first. */
     public function prepareInitialization(int $tenant, int $site): ?EmailPublication
     {
@@ -246,6 +284,7 @@ final class SiteEmailPublisher
         $row = $this->site($tenant, $site, true);
         [, $snapshot] = $this->writer()->latest($tenant, $site);
         $state = $this->state($row, $snapshot);
-        return $this->prepare($tenant, $site, ['expectedVersion' => $state['version']]);
+        $change = $this->inheritedBrand($tenant, $site);
+        return $this->prepare($tenant, $site, ['expectedVersion' => $state['version']] + $change);
     }
 }

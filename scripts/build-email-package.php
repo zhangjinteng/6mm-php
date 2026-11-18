@@ -16,7 +16,7 @@ $zip = new ZipArchive();
 if ($zip->open($target, ZipArchive::CREATE | ZipArchive::EXCL) !== true) throw new RuntimeException('Cannot create artifact');
 $zip->addFromString('composer.json', json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)."\n");
 $zip->addFile($root.'/README.md', 'README.md');
-foreach (['src', 'tests', 'docs', 'scripts'] as $folder) {
+foreach (['src', 'tests', 'docs', 'scripts', 'database'] as $folder) {
     $files = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root.'/'.$folder, FilesystemIterator::SKIP_DOTS));
     foreach ($files as $file) {
         if (!$file->isFile() || $file->isLink()) continue;
