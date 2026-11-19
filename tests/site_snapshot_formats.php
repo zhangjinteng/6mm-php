@@ -91,6 +91,57 @@ $publish = static function (callable $stage) use ($db, $writer): array {
         return $writer->append(1, 10, $expected, 7, 'platform-admin:7', 'Non-email configuration update');
     });
 };
+
+// The upstream publisher can omit a false password-management flag. Only that
+// missing key is equivalent to an explicit boolean; no other coercion is allowed.
+$authWithoutPassword = $auth;
+unset($authWithoutPassword['passwordManagementEnabled']);
+$mismatch = '认证策略与已发布快照不一致';
+$invalidPasswordFlag = 'passwordManagementEnabled 必须是布尔值';
+foreach ([
+    'omitted-false' => [$authWithoutPassword, false, null],
+    'reordered' => [array_reverse($auth, true), false, null],
+    'omitted-true' => [$authWithoutPassword, true, $mismatch],
+    'false-true' => [$auth, true, $mismatch],
+    'null-flag' => [array_replace($auth, ['passwordManagementEnabled' => null]), false, $invalidPasswordFlag],
+    'string-flag' => [array_replace($auth, ['passwordManagementEnabled' => 'false']), false, $invalidPasswordFlag],
+    'numeric-flag' => [array_replace($auth, ['passwordManagementEnabled' => 0]), false, $invalidPasswordFlag],
+    'wrong-version' => [array_replace($auth, ['version' => 3]), false, $mismatch],
+    'string-version' => [array_replace($auth, ['version' => '2']), false, $mismatch],
+    'wrong-email-flag' => [array_replace($auth, ['emailRegistrationEnabled' => false]), false, $mismatch],
+    'string-email-flag' => [array_replace($auth, ['emailLoginEnabled' => 'true']), false, $mismatch],
+    'extra-field' => [$auth + ['unknown' => false], false, $mismatch],
+    'absent-policy' => [null, false, $mismatch],
+    'non-object-policy' => [[], false, $mismatch],
+] as $case => [$publishedAuth, $currentPasswordFlag, $expectedError]) {
+    $db->beginTransaction();
+    try {
+        $existing = $site;
+        if ($publishedAuth === null) unset($existing['authPolicy']);
+        else $existing['authPolicy'] = $publishedAuth;
+        $putSnapshot(10, 5, $existing);
+        $db->table('wl_site_auth_policies')->where('site_id', 10)->update(['password_management_enabled' => $currentPasswordFlag]);
+        $policyBefore = $db->table('wl_site_auth_policies')->where('site_id', 10)->first();
+        $previousBefore = $db->table('wl_site_config_snapshots')->where('config_version', 10)->first();
+        $publicationCount = $db->table('wl_site_config_publications')->count();
+        $error = null;
+        try {
+            $publish(static fn () => $db->table('wl_site_domains')->insert(['site_id' => 10, 'domain' => 'new.alpha.example', 'is_primary' => false]));
+        } catch (DomainConfigException $e) { $error = $e->getMessage(); }
+        if ($error !== $expectedError) throw new RuntimeException('Unexpected auth comparison for '.$case.': '.($error ?? '(accepted)'));
+        $check($db->table('wl_site_domains')->where('domain', 'new.alpha.example')->exists() === ($expectedError === null));
+        $check($db->table('wl_site_config_publications')->count() === $publicationCount + (int)($expectedError === null));
+        $check($db->table('wl_site_config_snapshots')->where('config_version', 10)->first() == $previousBefore);
+        $check($db->table('wl_site_auth_policies')->where('site_id', 10)->first() == $policyBefore);
+        $check($db->table('wl_site_auth_policy_audits')->count() === 0);
+        if ($expectedError === null) {
+            $newSnapshot = $writer->latest(1, 10)[1];
+            $check((array)$newSnapshot->authPolicy === $auth);
+            $check((array)$newSnapshot->emailTemplateRef === $rowsRef);
+        }
+    } finally { $db->rollBack(); }
+}
+
 foreach (['domain', 'module', 'status'] as $change) {
     $publish(static function () use ($db, $change): void {
         if ($change === 'domain') $db->table('wl_site_domains')->insert(['site_id' => 10, 'domain' => 'backup.example', 'is_primary' => false]);

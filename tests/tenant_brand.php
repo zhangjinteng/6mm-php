@@ -32,7 +32,8 @@ require __DIR__.'/fixtures/site_publication.php';
 $db->statement('CREATE TABLE wl_site_modules (site_id integer, module_code text, enabled boolean)');
 publicationFixture($db, [
     ['siteId'=>10,'tenantId'=>1,'domains'=>['one.example'],'entitlements'=>[],'entitlementVersion'=>1,'status'=>'enabled'],
-    ['siteId'=>20,'tenantId'=>2,'domains'=>['other.example'],'entitlements'=>[],'entitlementVersion'=>1,'status'=>'enabled'],
+    ['siteId'=>20,'tenantId'=>2,'domains'=>['other.example'],'entitlements'=>[],'entitlementVersion'=>1,'status'=>'enabled',
+        'authPolicy'=>['version'=>5,'registrationClass'=>'agent_only','emailRegistrationEnabled'=>false,'emailLoginEnabled'=>false,'passwordManagementEnabled'=>false]],
 ]);
 $store = new DomainConfigStore($db, true);
 $checks = 0;

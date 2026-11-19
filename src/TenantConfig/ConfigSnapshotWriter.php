@@ -21,6 +21,16 @@ final class ConfigSnapshotWriter
         return json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
     }
 
+    private function normalizeAuthPolicy(?array $policy): ?array
+    {
+        if ($policy === null) return null;
+        $field = 'passwordManagementEnabled';
+        if (!array_key_exists($field, $policy)) $policy[$field] = false;
+        elseif (!is_bool($policy[$field])) $this->fail('passwordManagementEnabled 必须是布尔值');
+        ksort($policy, SORT_STRING);
+        return $policy;
+    }
+
     public function lock(): void
     {
         $db = $this->rows('wl_tenants')->getConnection();
@@ -133,7 +143,15 @@ final class ConfigSnapshotWriter
         if ($auth['version'] < 1 || !in_array($auth['registrationClass'], ['white_label','agent_only'], true)
             || ($auth['registrationClass'] === 'agent_only' && ($auth['emailRegistrationEnabled'] || $auth['emailLoginEnabled'] || $auth['passwordManagementEnabled']))
             || ($auth['emailRegistrationEnabled'] && !$auth['emailLoginEnabled'])) $this->fail('认证策略无效');
-        if (isset($old->authPolicy) && (object)$auth != $old->authPolicy) $this->fail('认证策略与已发布快照不一致');
+        if ($old !== null) {
+            $publishedAuth = $old->authPolicy ?? null;
+            // Compare the preexisting source policy, not a default just initialized above.
+            if (($publishedAuth !== null && !($publishedAuth instanceof \stdClass))
+                || $this->normalizeAuthPolicy($created ? null : $auth)
+                    !== $this->normalizeAuthPolicy($publishedAuth === null ? null : get_object_vars($publishedAuth))) {
+                $this->fail('认证策略与已发布快照不一致');
+            }
+        }
         if ($availability && !$created) {
             $policies->update(['version'=>++$auth['version'],'updated_by'=>$operator,'updated_at'=>\Carbon\CarbonImmutable::now()]);
         }

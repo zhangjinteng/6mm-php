@@ -161,6 +161,13 @@ foreach (['<script>alert(1)</script>', '<img src="https://evil.example/a.png">',
 $reject(static fn () => (new SiteEmailPublisher($db, [], false, null, false))->publish(1,10,['expectedVersion'=>3],7,'platform-admin:7','未就绪'));
 // Both administration hosts use this save path. A logo change and its mail manifest
 // must be published together, keeping every existing template byte unchanged.
+$upstreamSnapshot = $db->table('wl_site_config_snapshots')->where('site_id',10)->orderByDesc('config_version')->first();
+$upstreamPayload = json_decode($upstreamSnapshot->payload, false, 512, JSON_THROW_ON_ERROR);
+unset($upstreamPayload->authPolicy->passwordManagementEnabled);
+$upstreamRaw = EmailTemplateRules::json($upstreamPayload);
+$db->table('wl_site_config_snapshots')->where('config_version', $upstreamSnapshot->config_version)->update([
+    'payload' => $upstreamRaw, 'payload_sha256' => hash('sha256', $upstreamRaw),
+]);
 $store = new \SixMm\Shared\TenantBrand\DomainConfigStore($db, false, null, $publisher);
 $changeLogo = function (?string $logo) use ($store): void {
     $site = $store->detail(['tenant_id'=>1])['sites'][0];
@@ -171,6 +178,8 @@ $changeLogo = function (?string $logo) use ($store): void {
 $changeLogo('https://cdn.example/website.png');
 $mail = $publisher->detail(1,10);
 $check($mail['site_name'] === 'Alpha' && $mail['logo_url'] === 'https://cdn.example/website.png' && $mail['default_locale'] === 'zh-CN');
+$check($db->table('wl_site_config_snapshots')->where('config_version', $upstreamSnapshot->config_version)->value('payload') === $upstreamRaw);
+$check($db->table('wl_site_auth_policies')->where('site_id', 10)->first() == $policyBefore);
 $check($publisher->syncWebsiteBrand(1,10,7,'platform-admin:7')['changed'] === false);
 $changeLogo(null);
 $check($publisher->detail(1,10)['logo_url'] === '');
