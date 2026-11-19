@@ -187,6 +187,17 @@ final class SiteEmailPublisher
         if (EmailTemplateRules::locale($brand['default_locale']) !== $brand['default_locale']) $this->fail('默认语言不是规范语言标签');
         EmailTemplateRules::url($brand['logo_url'], $this->resourceHosts);
         $items = $state['items'] ?: $this->encodeItems(EmailTemplateRules::defaults());
+        $sourceChanges = [];
+        foreach ($items as &$item) {
+            $before = $item['template'];
+            $html = EmailHeaderLayout::html($before['htmlBody'] ?? '', $brand['site_name'], $state['brand']['site_name']);
+            if ($html === ($before['htmlBody'] ?? '')) continue;
+            $body = $before; $body['htmlBody'] = $html;
+            $raw = EmailTemplateRules::json($body);
+            $item = ['template' => $body, 'payload' => $raw, 'sha256' => hash('sha256', $raw)];
+            if ($state['source'] === 'rows') $sourceChanges[] = ['before' => $before, 'after' => $body];
+        }
+        unset($item);
         if (count($items) > 256) $this->fail('邮件模板最多 256 条');
         $identities = []; $bytes = 0;
         foreach ($items as $item) {
@@ -197,9 +208,9 @@ final class SiteEmailPublisher
             $bytes += strlen($item['payload']);
             if (strlen($item['payload']) > 262144 || $bytes > 4194304) $this->fail('邮件模板超过容量限制');
         }
-        if ($state['source'] === 'rows' && $brand === $state['brand']) return null;
+        if ($state['source'] === 'rows' && $brand === $state['brand'] && !$sourceChanges) return null;
         return new EmailPublication($tenant, $site, $publication, $state['version'], $brand, $items,
-            $this->compact($state['version'] + 1, $brand, $items), $state['before'], $state['source'] !== 'rows', $requestId ?: (string)Str::uuid());
+            $this->compact($state['version'] + 1, $brand, $items), $state['before'], $state['source'] !== 'rows', $requestId ?: (string)Str::uuid(), $sourceChanges);
     }
 
     public function assertPublishedSources(int $site, ?object $snapshot): void

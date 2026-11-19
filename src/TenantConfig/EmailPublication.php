@@ -15,6 +15,7 @@ final class EmailPublication
         public readonly int $expectedMailVersion, public readonly array $brand, public readonly array $items,
         public readonly string $manifest, public readonly ?string $beforeManifest, public readonly bool $initializeSource,
         public readonly string $requestId,
+        public readonly array $sourceChanges = [],
     ) {}
 
     public function reference(): array
@@ -38,6 +39,14 @@ final class EmailPublication
             }
         } elseif ($source->where('version', $this->expectedMailVersion)->update($values) !== 1) {
             throw new EmailConfigException('配置已被修改，请刷新后重试');
+        }
+        foreach ($this->sourceChanges as $change) {
+            $before = $change['before']; $after = $change['after'];
+            $updated = $table('wl_site_email_template_items')->where('site_id', $this->siteId)
+                ->where('purpose', $before['purpose'])->where('locale', $before['locale'])
+                ->where('subject', $before['subject'])->where('text_body', $before['textBody'])
+                ->where('html_body', $before['htmlBody'] ?? '')->update(['html_body' => $after['htmlBody']]);
+            if ($updated !== 1) throw new EmailConfigException('邮件正文已被修改，请刷新后重试');
         }
         $table('wl_site_email_template_versions')->insert(['site_id' => $this->siteId, 'template_version' => $version,
             'payload' => $this->manifest, 'payload_sha256' => hash('sha256', $this->manifest), 'published_snapshot_version' => $publication]);

@@ -177,4 +177,28 @@ $check($publisher->detail(1,10)['logo_url'] === '');
 $check($db->table('wl_site_email_template_items')->where('site_id',10)->orderBy('purpose')->orderBy('locale')->get()->all() == $sourceBodies);
 $reject(static fn()=>$changeLogo('https://other.example/logo.png'));
 $check($publisher->detail(1,10)['logo_url'] === '');
+// Only the managed heading is shortened; names in the manifest/body remain full.
+$beforeRename = $publisher->detail(1, 10);
+$longName = 'Freedex-self-operated';
+$renamed = $save(['expectedVersion' => $beforeRename['version'], 'siteName' => $longName]);
+$check($renamed['detail']['site_name'] === $longName);
+foreach ($db->table('wl_site_email_template_items')->where('site_id', 10)->get() as $body) {
+    $check(str_contains($body->html_body, 'Freedex-self-oper...') && str_contains($body->html_body, '{{siteName}}'));
+}
+$check(!$save(['expectedVersion' => $renamed['detail']['version']])['changed']);
+// A later publication failure must roll the materialized heading back as well.
+$beforeRollback = $db->table('wl_site_email_template_items')->where('site_id', 10)->orderBy('purpose')->orderBy('locale')->get()->all();
+$db->unprepared("CREATE TRIGGER fail_header_publication BEFORE INSERT ON wl_site_email_template_item_versions BEGIN SELECT RAISE(ABORT, 'header rollback test'); END");
+try {
+    $save(['expectedVersion' => $renamed['detail']['version'], 'siteName' => 'Short']);
+    throw new RuntimeException('Expected publication failure');
+} catch (Illuminate\Database\QueryException $e) { $check(true); }
+$db->unprepared('DROP TRIGGER fail_header_publication');
+$check($publisher->detail(1, 10) === $renamed['detail']);
+$check($db->table('wl_site_email_template_items')->where('site_id', 10)->orderBy('purpose')->orderBy('locale')->get()->all() == $beforeRollback);
+$short = $save(['expectedVersion' => $renamed['detail']['version'], 'siteName' => 'Short']);
+$check($short['detail']['site_name'] === 'Short');
+foreach ($db->table('wl_site_email_template_items')->where('site_id', 10)->get() as $body) {
+    $check(!str_contains($body->html_body, 'Freedex-self-oper...') && !str_contains($body->html_body, 'title='));
+}
 echo "Site email publication: {$checks} checks passed\n";

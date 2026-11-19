@@ -94,20 +94,9 @@ final class EmailTemplateRules
     /** Public presets are copied only for genuinely missing/empty site templates. */
     public static function defaults(): array
     {
-        $items = [];
-        foreach (self::PURPOSES as $purpose) foreach (['en', 'zh-CN'] as $locale) {
-            $english = $locale === 'en';
-            $text = $english
-                ? "Your {{siteName}} {{purposeLabel}} code is {{code}}.\nValid for {{validMinutes}} minutes, until {{expiresAt}}.\nIf you did not request this code, ignore this email."
-                : "您的 {{siteName}} {{purposeLabel}}验证码是 {{code}}。\n有效期 {{validMinutes}} 分钟，到期时间 {{expiresAt}}。\n如非本人操作，请忽略此邮件。";
-            $items[] = ['purpose' => $purpose, 'locale' => $locale, 'subject' => '{{siteName}} - {{purposeLabel}}', 'textBody' => $text,
-                'htmlBody' => '<table role="presentation"><tr><td><img src="{{logoUrl}}" alt="" width="120"></td></tr>'
-                    .'<tr><td><p><strong>{{siteName}}</strong></p><p>{{purposeLabel}}</p><p><strong>{{code}}</strong></p><p>'
-                    .($english ? 'Valid for {{validMinutes}} minutes, until {{expiresAt}}.' : '有效期 {{validMinutes}} 分钟，到期时间 {{expiresAt}}。')
-                    .'</p><p>'.($english ? 'If you did not request this code, ignore this email.' : '如非本人操作，请忽略此邮件。')
-                    .'</p></td></tr></table>'];
-        }
-        usort($items, static fn ($a, $b) => [$a['purpose'], $a['locale']] <=> [$b['purpose'], $b['locale']]);
+        // Keep upstream content as a source asset; adapt only the managed header.
+        $items = json_decode(file_get_contents(__DIR__.'/presets/email-templates.json'), true, 512, JSON_THROW_ON_ERROR);
+        foreach ($items as &$body) $body['htmlBody'] = EmailHeaderLayout::html($body['htmlBody']);
         return $items;
     }
 }

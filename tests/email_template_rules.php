@@ -38,7 +38,7 @@ $identities = [];
 foreach ($defaults as $body) {
     $identities[] = $body['purpose'].'/'.$body['locale'];
     $check(!preg_match('/<\/?(?:html|body|h1)\b/i', $body['htmlBody']), 'Presets must contain only supported HTML fragments');
-    $check(str_contains($body['htmlBody'], '<p><strong>{{siteName}}</strong></p>'), 'Preset brand heading must use p/strong');
+    $check(str_contains($body['htmlBody'], 'background-color:#edf3f0') && str_contains($body['htmlBody'], 'max-width:600px'), 'Presets must retain the upstream green card layout');
     $check(str_contains($body['htmlBody'], '<img src="{{logoUrl}}"'), 'Presets must retain the logo placeholder');
     EmailTemplateRules::template($body, ['cdn.example']);
     $check(true, 'Preset must pass publication validation');
