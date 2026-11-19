@@ -9,6 +9,7 @@ use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Carbon;
 use SixMm\Shared\Contracts\UserDataScope;
 use SixMm\Shared\Pagination\PageResult;
+use SixMm\Shared\DataScope\BusinessOwnerScope;
 
 final class FundingAccountListQueryService
 {
@@ -23,7 +24,8 @@ final class FundingAccountListQueryService
     public function search(
         FundingAccountListQuery $criteria,
         UserDataScope $accountScope,
-        UserDataScope $userScope
+        UserDataScope $userScope,
+        ?UserDataScope $identityScope = null
     ): PageResult {
         $query = $this->assetConnection
             ->table('funding_balances as balances')
@@ -33,6 +35,7 @@ final class FundingAccountListQueryService
             ->where('assets.status', 'ENABLED');
 
         $accountScope->apply($query, 'accounts.agent_id');
+        $identityScope?->apply($query, 'accounts.agent_id');
 
         if ($criteria->keyword() !== '') {
             $matchedUserIds = $this->matchedUserIds($userScope, $criteria->keyword());
@@ -60,6 +63,7 @@ final class FundingAccountListQueryService
 
         $rows = $query
             ->select([
+                ...($accountScope instanceof BusinessOwnerScope ? ['accounts.home_site_id'] : []),
                 'balances.balance_id',
                 'accounts.agent_id',
                 'accounts.user_id as platform_user_id',
@@ -80,12 +84,13 @@ final class FundingAccountListQueryService
             $rows->pluck('platform_user_id')->map(static fn ($id): int => (int) $id)->all()
         );
 
-        $items = $rows->map(function (object $row) use ($users): array {
+        $items = $rows->map(function (object $row) use ($users, $accountScope): array {
             $platformUserId = (int) $row->platform_user_id;
             $user = $users[$platformUserId] ?? null;
             $scale = max(0, (int) $row->internal_scale);
 
             return [
+                ...($accountScope instanceof BusinessOwnerScope ? ['home_site_id' => $row->home_site_id] : []),
                 'id' => (int) $row->balance_id,
                 'agent_id' => (int) $row->agent_id,
                 'platform_user_id' => $platformUserId,

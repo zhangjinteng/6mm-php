@@ -11,6 +11,8 @@ use InvalidArgumentException;
 use SixMm\Shared\AssetReports\SourceAssetReportSchema;
 use SixMm\Shared\FuturesReports\TradeReportAggregator;
 use Throwable;
+use SixMm\Shared\TradeFills\TradeFillOwnerScope;
+use SixMm\Shared\DataScope\BusinessOwnerScope;
 
 /** Read existing publications only. Scope arguments must come from the authenticated host adapter. */
 final class SupportedDashboardQuery
@@ -107,26 +109,32 @@ final class SupportedDashboardQuery
 
     private function prediction_runtime(): array
     {
-        // A bounded identity set keeps this cross-database read safe for a workbench request.
-        $ids = $this->userScope()->limit(10001)->pluck('user_id')->all();
-        if (count($ids) > 10000) throw new \RuntimeException('当前订单范围超过即时看板查询上限，请使用预测业务列表');
-        $siteIds = $this->type === 'tenant' ? $this->db->table($this->table('wl_sites', 'control_plane'))
-            ->where('tenant_id', $this->id)->pluck('site_id')->all() : [];
+        $owner = TradeFillOwnerScope::all();
+        if ($this->type === 'tenant') {
+            $site = $this->db->table($this->table('wl_sites', 'control_plane'))->where('tenant_id', $this->id)
+                ->where('status', 'enabled')->where('site_id', '>', 0)->orderBy('site_id')->value('site_id');
+            $owner = new TradeFillOwnerScope($site ? [[(int) $site, 0]] : []);
+        } elseif ($this->type === 'merchant') {
+            $site = $this->db->table($this->table('agents'))->where('id', $this->id)->whereNull('deleted_at')->value('home_site_id');
+            $owner = new TradeFillOwnerScope((int) $site > 0 ? [[(int) $site, (int) $this->id]] : []);
+        }
         $db = $this->predictionDatabase;
-        return $db->transaction(function () use ($db, $ids, $siteIds): array {
+        return $db->transaction(function () use ($db, $owner): array {
             if ($db->getDriverName() === 'pgsql' && $db->transactionLevel() === 1) {
                 $db->statement('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
                 $db->statement('SET LOCAL statement_timeout = 3000');
             }
-            $native = $db->table('prediction.prediction_order')->whereIn('funding_user_id', $ids)
+            $native = $db->table('prediction.prediction_order')
                 ->where('order_source', 'PLAYER')->where('settlement_asset', 'USDT')
                 ->whereIn('game_type', ['HIGH_LOW', 'UP_DOWN'])->where('player_query_view', 'HOLDINGS')->where('fund_status', '<>', 'REJECTED');
-            $grid = $db->table('grid_contract.grid_orders as o')->whereIn('o.user_id', $ids)
+            (new BusinessOwnerScope($owner, 'home_site_id', true, true))->apply($native, 'agent_id');
+            $grid = $db->table('grid_contract.grid_orders as o')
                 ->where('o.settlement_asset', 'USDT')->whereNotIn('o.status', [5, 6, 7])
                 ->whereExists(function (Builder $q): void {
                     $q->selectRaw('1')->from('grid_contract.grid_order_state_logs as s')
                         ->whereColumn('s.order_id', 'o.order_id')->where('s.to_status', 2);
                 });
+            (new BusinessOwnerScope($owner, 'o.home_site_id', true))->apply($grid, 'o.agent_id');
             $pending = (clone $native)->where('business_status', 'ACTIVE')->where('fund_status', 'DEBITED')->where('result', 'PENDING')
                 ->select('game_type')->selectRaw('COUNT(*) AS count, SUM(stake_amount) AS amount')->groupBy('game_type')->get()
                 ->map(fn ($r): array => ['play' => strtolower($r->game_type), 'count' => (int) $r->count, 'amount' => (string) $r->amount])->all();
@@ -143,8 +151,7 @@ final class SupportedDashboardQuery
             }
             usort($orders, fn ($a, $b): int => strcmp((string) $b['created_at'], (string) $a['created_at']));
             $rounds = $db->table('prediction.prediction_round')->whereIn('state', ['PREPARING', 'BETTING', 'LOCKED', 'OBSERVING', 'RESULTING', 'SETTLING']);
-            if ($this->type === 'tenant') $rounds->whereIn('routing_site_id', $siteIds)->where('agent_id', 0);
-            if ($this->type === 'merchant') $rounds->where('agent_id', $this->id);
+            (new BusinessOwnerScope($owner, 'routing_site_id', true, true))->apply($rounds, 'agent_id');
             return ['orders' => array_slice($orders, 0, 8), 'pending' => $pending,
                 'rounds' => $rounds->orderByDesc('created_at')->limit(8)->get(['round_id', 'symbol', 'state', 'bet_close_at', 'created_at'])
                     ->map(fn ($r): array => ['id' => (string) $r->round_id, 'symbol' => $r->symbol, 'state' => $r->state, 'closes_at' => $r->bet_close_at])->all(),

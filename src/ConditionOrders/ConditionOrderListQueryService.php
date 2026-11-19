@@ -9,6 +9,9 @@ use Illuminate\Database\Query\Builder;
 use Illuminate\Database\Query\JoinClause;
 use SixMm\Shared\Contracts\UserDataScope;
 use SixMm\Shared\Pagination\PageResult;
+use SixMm\Shared\TradeFills\TradeFillOwnerScope;
+use SixMm\Shared\DataScope\BusinessOwnerScope;
+use SixMm\Shared\DataScope\AllUsersScope;
 
 final class ConditionOrderListQueryService
 {
@@ -19,7 +22,12 @@ final class ConditionOrderListQueryService
     }
 
     /** @return PageResult<array<string, mixed>> */
-    public function search(ConditionOrderListQuery $criteria, UserDataScope $scope): PageResult
+    public function searchByOwner(ConditionOrderListQuery $criteria, TradeFillOwnerScope $owner): PageResult
+    {
+        return $this->search($criteria, new AllUsersScope(), $owner);
+    }
+
+    public function search(ConditionOrderListQuery $criteria, UserDataScope $scope, ?TradeFillOwnerScope $owner = null): PageResult
     {
         $bindings = $this->connection
             ->table('agent_user_bindings')
@@ -33,20 +41,27 @@ final class ConditionOrderListQueryService
 
         $query = $this->connection
             ->table('condition_orders')
-            ->join('users', 'users.user_id', '=', 'condition_orders.user_id')
-            ->leftJoinSub($bindings, 'aub', static function (JoinClause $join): void {
-                $join->on('aub.agent_id', '=', 'users.agent_id')
+            ->leftJoin('users', 'users.user_id', '=', 'condition_orders.user_id')
+            ->leftJoinSub($bindings, 'aub', static function (JoinClause $join) use ($owner): void {
+                $join->on('aub.agent_id', '=', $owner === null ? 'users.agent_id' : 'condition_orders.agent_id')
                     ->on('aub.platform_user_id', '=', 'users.user_id');
             })
             ->leftJoin('orders AS generated_orders', 'generated_orders.order_id', '=', 'condition_orders.generated_order_id')
-            ->whereNull('condition_orders.deleted_at')
-            ->whereNull('users.deleted_at');
+            ->whereNull('condition_orders.deleted_at');
 
-        $scope->apply($query, 'users.agent_id');
+        if ($owner === null) {
+            $scope->apply($query, 'users.agent_id');
+            $query->whereNull('users.deleted_at');
+        } else (new BusinessOwnerScope($owner, 'condition_orders.home_site_id'))->apply($query, 'condition_orders.agent_id');
         $this->applyPreset($query, $criteria);
-        $this->applyFilters($query, $criteria);
+        $this->applyFilters($query, $criteria, $owner !== null);
 
-        $total = (int) (clone $query)->distinct()->count('condition_orders.condition_id');
+        $countQuery = clone $query;
+        if ($owner !== null && $criteria->keyword() === '') {
+            $countQuery->joins = [];
+            $countQuery->setBindings([], 'join');
+        }
+        $total = (int) $countQuery->distinct()->count('condition_orders.condition_id');
 
         $items = $query
             ->orderBy('condition_orders.created_at', 'desc')
@@ -62,11 +77,11 @@ final class ConditionOrderListQueryService
                 'aub.agent_user_id',
                 $this->connection->raw('COALESCE(generated_orders.filled_quantity, 0) AS filled_quantity'),
             ])
-            ->map(function (object $row) use ($criteria): array {
+            ->map(function (object $row) use ($criteria, $owner): array {
                 $item = (array) $row;
                 $item['condition_id'] = (string) ($item['condition_id'] ?? '');
                 $platformUserId = (int) $item['user_id'];
-                $resolvedUserType = $criteria->lifecycle()->usesUserTypeSnapshot()
+                $resolvedUserType = $owner !== null || $criteria->lifecycle()->usesUserTypeSnapshot()
                     ? ($item['user_type'] ?? $item['current_user_type'] ?? null)
                     : ($item['current_user_type'] ?? null);
 
@@ -108,7 +123,7 @@ final class ConditionOrderListQueryService
         }
     }
 
-    private function applyFilters(Builder $query, ConditionOrderListQuery $criteria): void
+    private function applyFilters(Builder $query, ConditionOrderListQuery $criteria, bool $eventOwner = false): void
     {
         if ($criteria->keyword() !== '') {
             $keyword = $criteria->keyword();
@@ -129,7 +144,7 @@ final class ConditionOrderListQueryService
         }
 
         if ($criteria->userType() !== null) {
-            $column = $criteria->lifecycle()->usesUserTypeSnapshot()
+            $column = $eventOwner || $criteria->lifecycle()->usesUserTypeSnapshot()
                 ? 'condition_orders.user_type'
                 : 'users.user_type';
             $query->where($column, $criteria->userType());

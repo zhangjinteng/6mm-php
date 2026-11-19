@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace SixMm\Shared\UserPredictions;
 
 use Illuminate\Database\ConnectionInterface;
+use SixMm\Shared\TradeFills\TradeFillOwnerScope;
+use SixMm\Shared\DataScope\BusinessOwnerScope;
 
 final class UserPredictionReportService
 {
@@ -29,13 +31,15 @@ final class UserPredictionReportService
         ?string $startTime,
         ?string $endTimeExclusive,
         string $orderBy,
-        string $orderDirection
+        string $orderDirection,
+        ?TradeFillOwnerScope $owner = null,
+        bool $filterUsers = true
     ): array {
         $userIds = array_values(array_unique(array_filter(array_map('intval', $userIds))));
         $page = max(1, $page);
         $pageSize = min(100, max(1, $pageSize));
 
-        if ($userIds === []) {
+        if (($owner === null || $filterUsers) && $userIds === [] || $owner?->isEmpty()) {
             return ['lists' => [], 'count' => 0];
         }
 
@@ -46,13 +50,14 @@ final class UserPredictionReportService
             self::PLAY_UP_DOWN,
         ], true) ? $playType : self::PLAY_ALL;
 
-        [$sourceSql, $sourceBindings] = $this->sourceSql($playType, $this->postgresArray($userIds));
+        [$sourceSql, $sourceBindings] = $this->sourceSql($playType, $this->postgresArray($userIds), $owner, $filterUsers);
+        $ownerColumns = $owner === null ? '' : ', home_site_id, agent_id';
         $aggregateSql = <<<SQL
             WITH source AS (
                 {$sourceSql}
             )
             SELECT
-                user_id,
+                user_id{$ownerColumns},
                 COUNT(*) FILTER (WHERE is_pending) AS pending_orders,
                 COALESCE(SUM(stake_amount) FILTER (WHERE is_pending), 0) AS pending_amount,
                 COUNT(*) FILTER (
@@ -82,7 +87,7 @@ final class UserPredictionReportService
                 ), 0) AS net_profit_30d,
                 MAX(event_at) AS last_prediction_at
             FROM source
-            GROUP BY user_id
+            GROUP BY user_id{$ownerColumns}
         SQL;
 
         $conditions = [];
@@ -120,7 +125,7 @@ final class UserPredictionReportService
 
         $rows = $this->connection->select(
             "SELECT * FROM ({$aggregateSql}) AS report{$whereSql} "
-                . "ORDER BY {$orderBy} {$orderDirection}, user_id ASC LIMIT ? OFFSET ?",
+                . "ORDER BY {$orderBy} {$orderDirection}, user_id ASC{$ownerColumns} LIMIT ? OFFSET ?",
             array_merge($sourceBindings, $filterBindings, [$pageSize, $offset])
         );
 
@@ -131,29 +136,46 @@ final class UserPredictionReportService
     }
 
     /** @return array{0: string, 1: array<int, string>} */
-    private function sourceSql(string $playType, string $userIds): array
+    private function sourceSql(string $playType, string $userIds, ?TradeFillOwnerScope $owner = null, bool $filterUsers = true): array
     {
         $queries = [];
         $bindings = [];
 
         if (in_array($playType, [self::PLAY_ALL, self::PLAY_GRID], true)) {
-            $queries[] = $this->gridSourceSql();
-            $bindings[] = $userIds;
+            [$predicate, $values] = $this->ownerPredicate($owner, false, $filterUsers, $userIds);
+            $queries[] = $this->gridSourceSql($predicate, $owner !== null);
+            array_push($bindings, ...$values);
         }
 
         if (in_array($playType, [self::PLAY_ALL, self::PLAY_HIGH_LOW, self::PLAY_UP_DOWN], true)) {
-            $queries[] = $this->predictionSourceSql($playType);
-            $bindings[] = $userIds;
+            [$predicate, $values] = $this->ownerPredicate($owner, true, $filterUsers, $userIds);
+            $queries[] = $this->predictionSourceSql($playType, $predicate, $owner !== null);
+            array_push($bindings, ...$values);
         }
 
         return [implode("\nUNION ALL\n", $queries), $bindings];
     }
 
-    private function gridSourceSql(): string
+    private function ownerPredicate(?TradeFillOwnerScope $owner, bool $native, bool $filterUsers, string $ids): array
     {
-        return <<<'SQL'
+        if ($owner === null) return [$native ? 'orders.user_id = ANY(?::text[])' : 'orders.user_id = ANY(?::bigint[])', [$ids]];
+        $query = $this->connection->query();
+        (new BusinessOwnerScope($owner, 'orders.home_site_id', true, $native))->apply($query, 'orders.agent_id');
+        $predicate = substr($query->getGrammar()->compileWheres($query), 6);
+        $bindings = $query->getBindings();
+        if ($filterUsers) {
+            $predicate .= ' AND ' . ($native ? 'orders.funding_user_id' : 'orders.user_id') . ' = ANY(?::bigint[])';
+            $bindings[] = $ids;
+        }
+        return [$predicate, $bindings];
+    }
+
+    private function gridSourceSql(string $predicate, bool $owner): string
+    {
+        $columns = $owner ? ', orders.home_site_id, orders.agent_id::text AS agent_id' : '';
+        return <<<SQL
             SELECT
-                orders.user_id,
+                orders.user_id{$columns},
                 active.accepted_at AS event_at,
                 orders.status NOT IN (5, 6, 7) AS is_pending,
                 CASE orders.status
@@ -175,12 +197,12 @@ final class UserPredictionReportService
                 WHERE order_id = orders.order_id
                   AND to_status = 2
             ) AS active ON active.accepted_at IS NOT NULL
-            WHERE orders.user_id = ANY(?::bigint[])
+            WHERE {$predicate}
               AND orders.settlement_asset = 'USDT'
         SQL;
     }
 
-    private function predictionSourceSql(string $playType): string
+    private function predictionSourceSql(string $playType, string $predicate, bool $owner): string
     {
         $gameCondition = match ($playType) {
             self::PLAY_HIGH_LOW => " AND orders.game_type = 'HIGH_LOW'",
@@ -188,9 +210,10 @@ final class UserPredictionReportService
             default => '',
         };
 
+        $columns = $owner ? ', orders.home_site_id, orders.agent_id' : '';
         return <<<SQL
             SELECT
-                orders.funding_user_id AS user_id,
+                orders.funding_user_id AS user_id{$columns},
                 orders.created_at AS event_at,
                 (
                     orders.business_status = 'ACTIVE'
@@ -207,7 +230,7 @@ final class UserPredictionReportService
                 orders.stake_amount::numeric AS stake_amount,
                 COALESCE(orders.final_return, 0)::numeric AS return_amount
             FROM prediction.prediction_order AS orders
-            WHERE orders.user_id = ANY(?::text[])
+            WHERE {$predicate}
               AND orders.order_source = 'PLAYER'
               AND orders.settlement_asset = 'USDT'
               AND orders.fund_status <> 'REJECTED'

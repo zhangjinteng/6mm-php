@@ -9,6 +9,7 @@ use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Carbon;
 use SixMm\Shared\Contracts\UserDataScope;
 use SixMm\Shared\Pagination\PageResult;
+use SixMm\Shared\DataScope\BusinessOwnerScope;
 
 final class FundingChangeLogListQueryService
 {
@@ -25,7 +26,8 @@ final class FundingChangeLogListQueryService
     public function search(
         FundingChangeLogListQuery $criteria,
         UserDataScope $accountScope,
-        UserDataScope $userScope
+        UserDataScope $userScope,
+        ?UserDataScope $identityScope = null
     ): PageResult {
         $query = $this->assetConnection
             ->table('funding_ledger_entries as ledger')
@@ -34,6 +36,10 @@ final class FundingChangeLogListQueryService
             ->where('ledger.business_type', '<>', 'DEPLOY_SMOKE');
 
         $accountScope->apply($query, 'accounts.agent_id');
+        $identityScope?->apply($query, 'accounts.agent_id');
+        if ($accountScope instanceof BusinessOwnerScope) {
+            $query->whereColumn('ledger.home_site_id', 'accounts.home_site_id')->whereColumn('ledger.user_id', 'accounts.user_id');
+        }
         $this->applyKeywordFilter($query, $userScope, $criteria->keyword());
         $this->applyChangeTypeFilter($query, $criteria->changeType());
 
@@ -50,6 +56,7 @@ final class FundingChangeLogListQueryService
         $total = (int) (clone $query)->count();
         $rows = $query
             ->select([
+                ...($accountScope instanceof BusinessOwnerScope ? ['ledger.home_site_id'] : []),
                 'ledger.ledger_id',
                 'accounts.agent_id',
                 'ledger.user_id as platform_user_id',
@@ -72,14 +79,17 @@ final class FundingChangeLogListQueryService
         $rows = $rows->forPage($criteria->page(), $criteria->pageSize())->get();
         $userIds = $rows->pluck('platform_user_id')->map(static fn ($id): int => (int) $id)->all();
         $users = $this->usersById($userScope, $userIds);
-        $externalUserIds = $this->externalUserIdsByPlatformUserId($userScope, $userIds);
+        $eventOwners = $accountScope instanceof BusinessOwnerScope;
+        $externalUserIds = $this->externalUserIdsByPlatformUserId($userScope, $userIds,
+            $eventOwners ? $rows->pluck('agent_id')->unique()->all() : null);
 
-        $items = $rows->map(function (object $row) use ($users, $externalUserIds): array {
+        $items = $rows->map(function (object $row) use ($users, $externalUserIds, $accountScope): array {
             $platformUserId = (int) $row->platform_user_id;
             $user = $users[$platformUserId] ?? null;
             $scale = max(0, (int) $row->internal_scale);
 
             return [
+                ...($accountScope instanceof BusinessOwnerScope ? ['home_site_id' => $row->home_site_id] : []),
                 'id' => (string) $row->ledger_id,
                 'ledger_id' => (string) $row->ledger_id,
                 'agent_id' => (int) $row->agent_id,
@@ -87,7 +97,7 @@ final class FundingChangeLogListQueryService
                 'user_id' => $user !== null ? (string) $user->public_user_id : (string) $platformUserId,
                 'username' => $user !== null ? (string) ($user->username ?? '') : '',
                 'nice_name' => $user !== null ? (string) ($user->nick_name ?? '') : '',
-                'agent_user_id' => (string) ($externalUserIds[$platformUserId] ?? ''),
+                'agent_user_id' => (string) ($externalUserIds[$accountScope instanceof BusinessOwnerScope ? $row->agent_id . ':' . $platformUserId : $platformUserId] ?? ''),
                 'entry_type' => (string) $row->entry_type,
                 'business_type' => (string) $row->business_type,
                 'business_scope' => (string) ($row->business_scope ?? ''),
@@ -199,7 +209,7 @@ final class FundingChangeLogListQueryService
     }
 
     /** @param int[] $userIds @return array<int, string> */
-    private function externalUserIdsByPlatformUserId(UserDataScope $scope, array $userIds): array
+    private function externalUserIdsByPlatformUserId(UserDataScope $scope, array $userIds, ?array $agentIds = null): array
     {
         if ($userIds === []) return [];
         $query = $this->mainConnection
@@ -207,6 +217,11 @@ final class FundingChangeLogListQueryService
             ->whereIn('platform_user_id', $userIds)
             ->whereIn('bind_status', self::ACTIVE_BINDING_STATUSES);
         $scope->apply($query, 'agent_id');
+        if ($agentIds !== null) {
+            return $query->whereIn('agent_id', $agentIds)->select('agent_id', 'platform_user_id')
+                ->selectRaw('MAX(agent_user_id) AS agent_user_id')->groupBy('agent_id', 'platform_user_id')->get()
+                ->mapWithKeys(static fn (object $row): array => [$row->agent_id . ':' . $row->platform_user_id => (string) $row->agent_user_id])->all();
+        }
         return $query->pluck('agent_user_id', 'platform_user_id')
             ->mapWithKeys(static fn ($value, $key): array => [(int) $key => (string) $value])
             ->all();

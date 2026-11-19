@@ -38,6 +38,24 @@ final class TradeFillOwnerScope
     public function isEmpty(): bool { return $this->sourceType === null && $this->owners === []; }
     public function cacheKey(): string { return hash('sha256', json_encode([$this->sourceType, $this->owners])); }
 
+    /** RPC snapshots must carry a canonical owner; absent identity is never platform data. */
+    public function matches($site, $agent): bool
+    {
+        foreach ([$site, $agent] as $id) {
+            if (!is_int($id) && !is_string($id)) return false;
+            if (!preg_match('/^(?:0|[1-9][0-9]{0,18})$/D', (string) $id)
+                || bccomp((string) $id, (string) PHP_INT_MAX) > 0) return false;
+        }
+        $site = (int) $site; $agent = (int) $agent;
+        if ($site === 0 && $agent > 0) return false;
+        return match ($this->sourceType) {
+            'all' => true,
+            'merchant' => $site > 0 && $agent > 0,
+            'white_label' => $site > 0 && $agent === 0,
+            default => in_array([$site, $agent], $this->owners, true),
+        };
+    }
+
     public function predicate(string $alias = 'o'): string
     {
         if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/D', $alias)) throw new InvalidArgumentException('Invalid table alias.');

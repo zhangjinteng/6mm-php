@@ -10,6 +10,7 @@ use Illuminate\Database\Query\JoinClause;
 use Illuminate\Support\Collection;
 use SixMm\Shared\Contracts\UserDataScope;
 use SixMm\Shared\Pagination\CursorPageResult;
+use SixMm\Shared\TradeFills\TradeFillOwnerScope;
 
 final class AccountChangeLogListQueryService
 {
@@ -34,19 +35,41 @@ final class AccountChangeLogListQueryService
         return $this->paginate($criteria, $query, $users);
     }
 
+    /** Ownership comes from ledger snapshots; identity filters must not reassign historical rows. */
+    public function searchByOwner(
+        AccountChangeLogListQuery $criteria,
+        TradeFillOwnerScope $owner,
+        ?UserDataScope $identityFilter = null
+    ): CursorPageResult {
+        if ($owner->isEmpty()) return $this->emptyResult($criteria);
+        $query = $this->connection->table('user_account_change_log AS logs')
+            ->whereRaw($owner->predicate('logs'))->whereNull('logs.deleted_at');
+        if ($identityFilter !== null || $criteria->keyword() !== '' || $criteria->userType() !== null) {
+            $query->whereExists(function (Builder $users) use ($criteria, $identityFilter): void {
+                $users->selectRaw('1')->from('users')->whereColumn('users.user_id', 'logs.user_id')
+                    ->whereNull('users.deleted_at');
+                $this->applyUserFilters($users, $criteria);
+                $identityFilter?->apply($users, 'users.agent_id');
+            });
+        }
+        return $this->paginate($criteria, $query, null, null, true);
+    }
+
     /** Site is derived from the authenticated white-label tenant, never from request parameters. */
     public function fundingFeesAtSite(AccountChangeLogListQuery $criteria, int $site): CursorPageResult
     {
         if ($site <= 0) return $this->emptyResult($criteria);
         $query = $this->connection->table('user_account_change_log AS logs')
             ->where('logs.home_site_id', $site)->where('logs.agent_id', 0)
-            ->whereRaw('LOWER(logs.change_type) = ?', ['funding_fee_settle'])->whereNull('logs.deleted_at')
-            ->whereExists(function (Builder $users) use ($site, $criteria): void {
+            ->whereRaw('LOWER(logs.change_type) = ?', ['funding_fee_settle'])->whereNull('logs.deleted_at');
+        if ($criteria->keyword() !== '' || $criteria->userType() !== null) {
+            $query->whereExists(function (Builder $users) use ($criteria): void {
                 $users->selectRaw('1')->from('users')->whereColumn('users.user_id', 'logs.user_id')
-                    ->where('users.home_site_id', $site)->where('users.agent_id', 0)->whereNull('users.deleted_at');
+                    ->whereNull('users.deleted_at');
                 $this->applyUserFilters($users, $criteria);
             });
-        return $this->paginate($criteria, $query, null, 0);
+        }
+        return $this->paginate($criteria, $query, null, 0, true);
     }
 
     /**
@@ -83,7 +106,8 @@ final class AccountChangeLogListQueryService
         AccountChangeLogListQuery $criteria,
         Builder $query,
         ?Collection $users = null,
-        ?int $bindingAgentId = null
+        ?int $bindingAgentId = null,
+        bool $eventOwner = false
     ): CursorPageResult {
         $this->applyLogFilters($query, $criteria);
 
@@ -111,7 +135,7 @@ final class AccountChangeLogListQueryService
                     'logs.id',
                     $candidateIds->map(static fn ($id): int => (int) $id)->all()
                 )
-                ->get($this->columns())
+                ->get($this->columns($eventOwner))
                 ->keyBy(static fn (object $row): string => (string) $row->id);
         $rows = $candidateIds
             ->map(static fn ($id) => $rowsById->get((string) $id))
@@ -120,20 +144,32 @@ final class AccountChangeLogListQueryService
 
         if ($users === null) {
             // Only hydrate the authorized page; do not enumerate a merchant's users.
+            $pageUserIds = $rows->pluck('platform_user_id')->map(static fn ($id): int => (int) $id)->unique()->all();
             $users = $rows->isEmpty() ? collect() : $this->getUsers(
-                $this->usersQuery($bindingAgentId)->whereIntegerInRaw(
-                    'users.user_id',
-                    $rows->pluck('platform_user_id')->map(static fn ($id): int => (int) $id)->unique()->all()
-                )
+                $this->usersQuery($bindingAgentId, $pageUserIds)->whereIntegerInRaw('users.user_id', $pageUserIds)
             );
         }
 
+        $eventBindings = collect();
+        if ($eventOwner && $rows->isNotEmpty()) {
+            $eventBindings = $this->connection->table('agent_user_bindings')
+                ->whereIn('platform_user_id', $rows->pluck('platform_user_id')->unique()->all())
+                ->whereIn('agent_id', $rows->pluck('agent_id')->unique()->all())
+                ->whereIn('bind_status', self::ACTIVE_BINDING_STATUSES)
+                ->select(['agent_id', 'platform_user_id'])->selectRaw('MAX(agent_user_id) AS agent_user_id')
+                ->groupBy('agent_id', 'platform_user_id')->get()
+                ->keyBy(static fn (object $binding): string => $binding->agent_id . ':' . $binding->platform_user_id);
+        }
+
         $items = $rows
-            ->map(function (object $row) use ($users): array {
+            ->map(function (object $row) use ($users, $eventOwner, $eventBindings): array {
                 $values = (array) $row;
                 $user = $users->get((string) $values['platform_user_id']);
-
-                return $this->mapRow($values, $user !== null ? (array) $user : []);
+                $identity = $user !== null ? (array) $user : [];
+                if ($eventOwner) {
+                    $identity['agent_user_id'] = $eventBindings->get($values['agent_id'] . ':' . $values['platform_user_id'])?->agent_user_id;
+                }
+                return $this->mapRow($values, $identity);
             })
             ->all();
         $hasPrevious = $isPreviousRequest ? $hasExtraItem : $cursor !== null;
@@ -161,7 +197,7 @@ final class AccountChangeLogListQueryService
         return $this->getUsers($query);
     }
 
-    private function usersQuery(?int $bindingAgentId = null): Builder
+    private function usersQuery(?int $bindingAgentId = null, ?array $pageUserIds = null): Builder
     {
         $bindings = $this->connection
             ->table('agent_user_bindings')
@@ -172,6 +208,7 @@ final class AccountChangeLogListQueryService
             ])
             ->whereIn('bind_status', self::ACTIVE_BINDING_STATUSES)
             ->groupBy('agent_id', 'platform_user_id');
+        if ($pageUserIds !== null) $bindings->whereIn('platform_user_id', $pageUserIds);
 
         return $this->connection
             ->table('users')
@@ -306,9 +343,10 @@ final class AccountChangeLogListQueryService
     }
 
     /** @return array<int, string> */
-    private function columns(): array
+    private function columns(bool $eventOwner = false): array
     {
         return [
+            ...($eventOwner ? ['logs.home_site_id'] : []),
             'logs.id',
             'logs.user_id AS platform_user_id',
             'logs.user_type',
