@@ -34,6 +34,21 @@ final class AccountChangeLogListQueryService
         return $this->paginate($criteria, $query, $users);
     }
 
+    /** Site is derived from the authenticated white-label tenant, never from request parameters. */
+    public function fundingFeesAtSite(AccountChangeLogListQuery $criteria, int $site): CursorPageResult
+    {
+        if ($site <= 0) return $this->emptyResult($criteria);
+        $query = $this->connection->table('user_account_change_log AS logs')
+            ->where('logs.home_site_id', $site)->where('logs.agent_id', 0)
+            ->whereRaw('LOWER(logs.change_type) = ?', ['funding_fee_settle'])->whereNull('logs.deleted_at')
+            ->whereExists(function (Builder $users) use ($site, $criteria): void {
+                $users->selectRaw('1')->from('users')->whereColumn('users.user_id', 'logs.user_id')
+                    ->where('users.home_site_id', $site)->where('users.agent_id', 0)->whereNull('users.deleted_at');
+                $this->applyUserFilters($users, $criteria);
+            });
+        return $this->paginate($criteria, $query, null, 0);
+    }
+
     /**
      * Merchant history is owned by the event snapshot, not the user's current owner.
      * The host MUST derive $agentId from its authenticated merchant identity.
