@@ -6,7 +6,7 @@ namespace SixMm\Shared\TranslationConfig;
 
 use Illuminate\Database\ConnectionInterface;
 use Illuminate\Database\QueryException;
-use SixMm\Shared\Cms\{TranslationCatalog, TranslationCredential, TranslationSettingsStore};
+use SixMm\Shared\Cms\{TranslationCatalog, TranslationSettingsStore};
 use RuntimeException;
 
 /** Deployment-only. Decode old merchant keys, verify every row, then drop legacy storage atomically. */
@@ -23,7 +23,6 @@ final class LegacyMerchantTranslationMigration
                 $db->statement('LOCK TABLE agent_translation_config IN ACCESS EXCLUSIVE MODE');
             }
             $store = new TranslationSettingsStore($db);
-            $credential = new TranslationCredential();
             $count = 0;
             foreach ($db->table('agent_translation_config')->orderBy('agent_id')->get() as $old) {
                 $key = TranslationSettingsStore::merchantKey((int) $old->agent_id);
@@ -62,7 +61,7 @@ final class LegacyMerchantTranslationMigration
                 }
                 if ($store->targets($row) !== $targets) throw new RuntimeException('商户 '.$old->agent_id.' 翻译语言校验失败，旧表未删除');
                 try {
-                    $same = $plain === null ? $row->api_key === null : hash_equals($plain, $credential->resolve($row));
+                    $same = $plain === null ? $row->api_key === null : is_string($row->api_key) && hash_equals($plain, $row->api_key);
                 } catch (\Throwable) { $same = false; }
                 if (!$same) throw new RuntimeException('商户 '.$old->agent_id.' 翻译密钥校验失败，旧表未删除');
                 unset($plain, $raw);

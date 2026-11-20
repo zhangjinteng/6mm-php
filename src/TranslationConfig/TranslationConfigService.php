@@ -25,7 +25,7 @@ final class TranslationConfigService
         $row = $this->store->row(TranslationSettingsStore::merchantKey($agentId));
         $settings = (new MerchantTranslationSettings($this->connection))->settings($agentId);
         return ['provider'=>'google', 'api_version'=>'v2', 'api_key_mask'=>$settings['api_key_mask'],
-            'api_key_set'=>$settings['credential_configured'], 'concurrency'=>$settings['concurrency_limit'],
+            'api_key_set'=>$settings['credential_configured'], 'credential_locked'=>$settings['credential_locked'] ?? false, 'concurrency'=>$settings['concurrency_limit'],
             'is_enabled'=>$row ? $settings['is_enabled'] : true, 'verify_status'=>$row->verify_status ?? 'pending',
             'verified_at'=>$row->verified_at ?? null, 'last_error'=>$row->last_error ?? null];
     }
@@ -41,7 +41,9 @@ final class TranslationConfigService
             throw TranslationConfigException::because(TranslationConfigException::INVALID_PARAMETERS);
         }
         $candidate = trim((string) ($input['api_key'] ?? ''));
-        if ((!$row || (($row->api_key ?? null) === null && ($row->api_key_ciphertext ?? null) === null)) && $candidate === '') {
+        $locked = TranslationCredential::publicKeyActive();
+        if ($locked && $candidate !== '') throw TranslationConfigException::because(TranslationConfigException::INVALID_PARAMETERS);
+        if (!$locked && (!$row || (($row->api_key ?? null) === null && ($row->api_key_ciphertext ?? null) === null)) && $candidate === '') {
             throw TranslationConfigException::because(TranslationConfigException::API_KEY_REQUIRED);
         }
         $settings = (new MerchantTranslationSettings($this->connection))->settings($agentId);
@@ -49,7 +51,7 @@ final class TranslationConfigService
             'space_revision'=>$settings['space_revision'], 'target_locales'=>$settings['target_locales'],
             'request_timeout_seconds'=>$settings['request_timeout_seconds'], 'max_attempts'=>$settings['max_attempts']];
         $values = $this->store->prepare($row, $p, $settings['source_locale']);
-        if ($candidate === '') {
+        if ($candidate === '' && $row) {
             $values['verify_status'] = $row->verify_status;
             $values['verified_at'] = $row->verified_at;
             $values['last_error'] = $row->last_error;
@@ -62,7 +64,10 @@ final class TranslationConfigService
     {
         $key = TranslationSettingsStore::merchantKey($agentId);
         $candidate = trim((string) $candidateApiKey);
-        $saved = $candidate === '';
+        $locked = TranslationCredential::publicKeyActive();
+        if ($locked && $candidate !== '') throw TranslationConfigException::because(TranslationConfigException::INVALID_PARAMETERS);
+        if ($locked) $candidate = (new TranslationCredential())->resolve(null);
+        $saved = !$locked && $candidate === '';
         $row = $saved ? $this->store->row($key) : null;
         if ($saved) {
             if (!$row || (($row->api_key ?? null) === null && ($row->api_key_ciphertext ?? null) === null)) throw TranslationConfigException::because(TranslationConfigException::API_KEY_REQUIRED);

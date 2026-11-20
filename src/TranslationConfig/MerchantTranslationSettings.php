@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace SixMm\Shared\TranslationConfig;
 
 use Illuminate\Database\ConnectionInterface;
-use SixMm\Shared\Cms\{GoogleTranslationClient, TranslationCatalog, TranslationSettingsStore};
+use SixMm\Shared\Cms\{GoogleTranslationClient, TranslationCatalog, TranslationCredential, TranslationSettingsStore};
 
 /** Merchant scope adapter; storage, credential handling and validation are shared with CMS/SEO. */
 final class MerchantTranslationSettings
@@ -29,7 +29,7 @@ final class MerchantTranslationSettings
     {
         $row = $this->store->row(TranslationSettingsStore::merchantKey($agentId));
         $this->store->checkRevision($row, $p['space_revision']);
-        if (!$row && trim((string) ($p['api_key'] ?? '')) === '') throw new \RuntimeException('GOOGLE_CREDENTIAL_MISSING');
+        if (!TranslationCredential::publicKeyActive() && !$row && trim((string) ($p['api_key'] ?? '')) === '') throw new \RuntimeException('GOOGLE_CREDENTIAL_MISSING');
         $google->withApiKey($this->store->key($row, $p))->translate('连接测试', 'zh-CN', 'en', false, 10);
         return ['connected'=>true];
     }
@@ -38,7 +38,7 @@ final class MerchantTranslationSettings
     {
         $key = TranslationSettingsStore::merchantKey($agentId);
         $row = $this->store->row($key);
-        if ((!$row || (($row->api_key ?? null) === null && ($row->api_key_ciphertext ?? null) === null)) && $p['is_enabled'] && trim((string) ($p['api_key'] ?? '')) === '') {
+        if (!TranslationCredential::publicKeyActive() && (!$row || (($row->api_key ?? null) === null && ($row->api_key_ciphertext ?? null) === null)) && $p['is_enabled'] && trim((string) ($p['api_key'] ?? '')) === '') {
             throw new \RuntimeException('GOOGLE_CREDENTIAL_MISSING');
         }
         $values = $this->store->prepare($row, $p, 'zh-CN', $google);

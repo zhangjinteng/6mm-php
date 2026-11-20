@@ -48,7 +48,7 @@ final class TranslationSettingsStore
     public function settings(#[\SensitiveParameter] ?object $row, string $identity, string $scope, string $source = 'zh-CN', array $targets = []): array
     {
         // Merchant keys must never silently borrow the deployment-wide Google credential.
-        $status = $scope === 'merchant' && (!$row || (($row->api_key ?? null) === null && ($row->api_key_ciphertext ?? null) === null))
+        $status = !TranslationCredential::publicKeyActive() && $scope === 'merchant' && (!$row || (($row->api_key ?? null) === null && ($row->api_key_ciphertext ?? null) === null))
             ? ['credential_configured'=>false, 'api_key_mask'=>null, 'credential_source'=>'database', 'credential_error'=>'GOOGLE_CREDENTIAL_MISSING']
             : (new TranslationCredential())->status($row);
         return ['space_id'=>$identity, 'space_revision'=>(string) ($row->revision ?? 0),
@@ -76,6 +76,10 @@ final class TranslationSettingsStore
     public function key(#[\SensitiveParameter] ?object $row, #[\SensitiveParameter] array $p): string
     {
         $candidate = trim((string) ($p['api_key'] ?? ''));
+        if (TranslationCredential::publicKeyActive()) {
+            if ($candidate !== '') $this->fail('当前使用平台公共密钥，不允许提交独立密钥');
+            return (new TranslationCredential())->resolve($row);
+        }
         if ($candidate !== '') return $candidate;
         if ($row && str_starts_with((string) ($row->config_key ?? ''), 'merchant:') && ($row->api_key ?? null) === null && ($row->api_key_ciphertext ?? null) === null) {
             throw new RuntimeException('GOOGLE_CREDENTIAL_MISSING');
@@ -95,7 +99,9 @@ final class TranslationSettingsStore
         $this->checkRevision($row, $p['space_revision']);
         if (!isset(TranslationCatalog::LOCALES[$source]) || in_array($source, $p['target_locales'], true)) $this->fail('目标语言不能包含源语言');
         $candidate = trim((string) ($p['api_key'] ?? ''));
-        if ($candidate === '' && ($row->api_key ?? null) === null && ($row->api_key_ciphertext ?? null) !== null) {
+        $locked = TranslationCredential::publicKeyActive();
+        if ($locked && $candidate !== '') $this->fail('当前使用平台公共密钥，不允许提交独立密钥');
+        if (!$locked && $candidate === '' && ($row->api_key ?? null) === null && ($row->api_key_ciphertext ?? null) !== null) {
             throw new RuntimeException('GOOGLE_CREDENTIAL_MIGRATION_REQUIRED');
         }
         $key = $candidate !== '' ? $candidate : ($row->api_key ?? null);
@@ -103,8 +109,8 @@ final class TranslationSettingsStore
             $google->withApiKey($this->key($row, $p))->translate('连接测试', 'zh-CN', 'en', false, (int) $p['request_timeout_seconds']);
         }
         return ['provider'=>'google', 'api_version'=>'v2',
-            'credential_ref'=>$key !== null ? 'database' : config('cms_translation.credential_ref'),
-            'api_key'=>$key, 'api_key_ciphertext'=>null, 'project_id'=>null, 'is_enabled'=>$p['is_enabled'],
+            'credential_ref'=>$locked && $row ? $row->credential_ref : ($key !== null ? 'database' : config('cms_translation.credential_ref')),
+            'api_key'=>$key, 'api_key_ciphertext'=>$locked ? ($row->api_key_ciphertext ?? null) : null, 'project_id'=>null, 'is_enabled'=>$p['is_enabled'],
             'concurrency_limit'=>$p['concurrency_limit'], 'request_timeout_seconds'=>$p['request_timeout_seconds'],
             'max_attempts'=>$p['max_attempts'], 'source_locale'=>$source,
             'target_locales'=>json_encode(array_values($p['target_locales']), JSON_THROW_ON_ERROR),

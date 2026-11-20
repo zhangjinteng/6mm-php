@@ -242,8 +242,7 @@ class TranslationService
             $this->fail('空间配置已变化，请重新加载配置');
         }
         $setting = $this->settingForSpace($space);
-        $key = trim((string) ($p['api_key'] ?? ''));
-        $google->withApiKey($key !== '' ? $key : (new TranslationCredential())->resolve($setting))
+        $google->withApiKey((new TranslationSettingsStore($this->db))->key($setting, $p))
             ->translate('连接测试', 'zh-CN', 'en', false, 10);
         return ['connected' => true];
     }

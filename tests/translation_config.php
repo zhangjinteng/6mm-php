@@ -18,7 +18,7 @@ if (!function_exists('config')) {
 }
 $app = new Container(); Container::setInstance($app); Facade::setFacadeApplication($app);
 $GLOBALS['translationTestConfig'] = ['cms_translation.encryption_key'=>'',
-    'cms_translation.credential_ref'=>'fixture', 'cms_translation.google_api_key'=>'ENV-KEY-MUST-NOT-BE-BORROWED'];
+    'cms_translation.credential_ref'=>'fixture', 'cms_translation.google_api_key'=>''];
 $app->instance('validator', new Factory(new Translator(new ArrayLoader(), 'en'), $app));
 $capsule = new Capsule(); $capsule->addConnection(['driver'=>'sqlite','database'=>':memory:']);
 $db = $capsule->getConnection(); translationSettingsFixture($db);
@@ -102,4 +102,23 @@ $GLOBALS['translationTestConfig']['cms_translation.encryption_key']='base64:'.ba
 try { \SixMm\Shared\TranslationConfig\PlaintextTranslationKeyMigration::run($db); throw new RuntimeException('conflicting key accepted'); }
 catch (RuntimeException $e) { $check(str_contains($e->getMessage(),'不一致')); }
 $check($store->row('legacy-cms-conflict')->api_key==='DIFFERENT' && $store->row('legacy-cms-conflict')->api_key_ciphertext!==null);
+// The same precedence applies for all hosts and workers.
+$cred = new TranslationCredential();
+$check($cred->resolve($row) === 'FAKE-SECRET-1234');
+$GLOBALS['translationTestConfig']['cms_translation.google_api_key'] = 'FAKE-PUBLIC';
+$check($cred->resolve($row) === 'FAKE-PUBLIC');
+$check($merchant->runtime(10)['api_key'] === 'FAKE-PUBLIC');
+$check($merchant->settings(11)['credential_locked'] && $merchant->settings(11)['api_key_mask'] === null);
+$check($service->test(11)['valid'] && $verifier->receivedKey === 'FAKE-PUBLIC');
+$service->save(11,21,['concurrency'=>3,'is_enabled'=>true]);
+$check($store->row('merchant:11')->api_key === null);
+foreach (['test', 'save'] as $action) {
+    try {
+        $action === 'test' ? $service->test(10,'OVERRIDE') : $service->save(10,21,['api_key'=>'OVERRIDE','concurrency'=>3]);
+        throw new RuntimeException('Accepted override in public mode');
+    } catch (\SixMm\Shared\TranslationConfig\TranslationConfigException $e) { $check($e->reason() === 'invalid_parameters'); }
+}
+$GLOBALS['translationTestConfig']['cms_translation.google_api_key'] = ' ';
+$check($merchant->runtime(10)['api_key'] === 'FAKE-SECRET-1234');
+$check(!$merchant->settings(11)['credential_configured']);
 echo "Unified translation settings: $checks checks passed.\n";
