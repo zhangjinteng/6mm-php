@@ -28,6 +28,20 @@ final class TradeFillOwnerScope
     }
 
     public function owners(): array { return $this->owners; }
+    /** Disjoint TK beta29 read scopes. No unscoped request, even for the admin union. */
+    public function rpcScopes(): array
+    {
+        $platform = ['ownership_type' => 1];
+        $site = ['ownership_type' => 2];
+        $merchant = ['ownership_type' => 3];
+        return match ($this->sourceType) {
+            'all' => [$platform, $site, $merchant],
+            'white_label' => [$site],
+            'merchant' => [$merchant],
+            default => array_map(static fn(array $p) => $p[0] === 0 ? $platform :
+                (($p[1] === 0 ? $site : $merchant) + ['home_site_id' => (string)$p[0], 'agent_id' => $p[1]]), $this->owners),
+        };
+    }
     /** Only the trusted total-admin adapter may select a whole source category. */
     public static function category(string $type): self
     {

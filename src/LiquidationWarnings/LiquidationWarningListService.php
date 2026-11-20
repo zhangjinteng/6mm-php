@@ -29,7 +29,7 @@ final class LiquidationWarningListService
         $this->riskBatch = Closure::fromCallable($riskBatch);
         $this->select = Closure::fromCallable($select);
     }
-    public function search(CurrentPositionListQuery $query, UserDataScope $scope, float $threshold, ?TradeFillOwnerScope $owner = null): PageResult
+    public function search(CurrentPositionListQuery $query, UserDataScope $scope, float $threshold, ?TradeFillOwnerScope $owner = null, bool $classified = false): PageResult
     {
         if (!is_finite($threshold) || $threshold <= 0 || $threshold >= 1) {
             throw new InvalidArgumentException('Invalid risk threshold.');
@@ -46,7 +46,8 @@ final class LiquidationWarningListService
             if ($query->userType() !== null) $users->where('users.user_type', $query->userType());
             if (!(clone $users)->exists()) return $empty();
         }
-        $candidates = $owner === null ? $this->fetchRisk($threshold) : $this->fetchOwnerRisk($threshold, $owner);
+        if ($classified && $owner === null) throw new InvalidArgumentException('A trusted TK scope is required');
+        $candidates = $owner === null ? $this->fetchRisk($threshold) : $this->fetchOwnerRisk($threshold, $owner, $classified);
         if ($candidates === []) {
             return $empty();
         }
@@ -145,14 +146,27 @@ final class LiquidationWarningListService
         unset($row);
         return new PageResult($rows, $total, $query->page(), $query->pageSize());
     }
-    private function fetchOwnerRisk(float $threshold, TradeFillOwnerScope $owner): array
+    private function fetchOwnerRisk(float $threshold, TradeFillOwnerScope $owner, bool $classified): array
     {
+        if ($classified) {
+            $positions = [];
+            foreach ($owner->rpcScopes() as $scope) {
+                foreach ($this->scopedRiskRows($threshold, $scope) as $row) $positions[] = $row;
+            }
+            return $positions;
+        }
         $pairs = $owner->owners();
         if (count($pairs) !== 1 || $pairs[0][0] === 0) return $this->fetchRisk($threshold, true);
+        return $this->scopedRiskRows($threshold, $pairs[0]);
+    }
+    private function scopedRiskRows(float $threshold, array $scope): array
+    {
         $cursor = ''; $positions = []; $seen = [];
         do {
-            $batch = ($this->riskBatch)($threshold, $this->batchSize, 0, $pairs[0], $cursor);
+            $batch = ($this->riskBatch)($threshold, $this->batchSize, 0, $scope, $cursor);
             if (($batch['scope_applied'] ?? false) !== true) throw new RuntimeException('Risk service did not apply owner scope');
+            if (isset($scope['ownership_type']) && ($batch['applied_ownership_type'] ?? null) !== $scope['ownership_type'])
+                throw new RuntimeException('Risk service did not confirm ownership type');
             foreach ($batch['positions'] ?? [] as $row) {
                 $positions[] = $this->riskRow($row, true);
             }
