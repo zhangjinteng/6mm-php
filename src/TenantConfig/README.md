@@ -48,13 +48,11 @@ SITE_EMAIL_RESOURCE_HOSTS=approved-image-host.example
 
 The readiness flag defaults to false. Apply the separately managed migration 9 (plus existing single-site/FK prerequisites) and upgrade all actual consumers before enabling it. Resource hosts must match User `emailAuth.resourceHosts`; no wildcard/implicit host is accepted. Empty Logo/default initialization works without an image host. This feature does not execute migrations, grant User access, restart consumers or send email.
 
-To roll out the neutral white-card default for new sites, record the maximum existing
-`wl_sites.site_id` before opening new sites with the release, then set
-`SITE_EMAIL_WHITE_PRESET_AFTER_SITE_ID` to that value in **both hosts**. Keep the same
-cutover on later deployments. Only a site above that boundary with no existing
-snapshot or template source uses the new layout; existing and unpublished pre-cutover
-sites are not migrated. Unset or invalid values keep the previous presets. Subjects,
-plain text and site/Logo variables are unchanged.
+Whenever email configuration is initialized and there are no existing template
+bodies, both hosts use the neutral white-card presets. Site IDs and whether a base
+site snapshot already exists do not affect this choice. Existing template bodies
+are not replaced by the default, and no existing sites are republished on rollout.
+Subjects, plain text and site/Logo variables are unchanged.
 
 Tests: `php tests/site_email_publication.php`; `bash scripts/test-site-email-postgres.sh` creates an isolated local PostgreSQL cluster and checks concurrent saves, real FKs and rollback. It never targets application databases.
 

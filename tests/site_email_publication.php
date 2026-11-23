@@ -53,6 +53,7 @@ $check($snapshot->schema_version === 5 && json_decode($snapshot->payload)->email
 $check(!str_contains($snapshot->payload, 'logoUrl') && !str_contains($snapshot->payload, 'schemaVersion'));
 $check($publisher->initializeIfMissing(1, 10, 7, 'platform-admin:7', '再次检查') === ['initialized' => false]);
 $sourceBodies = $db->table('wl_site_email_template_items')->where('site_id', 10)->orderBy('purpose')->orderBy('locale')->get()->all();
+$check(count(array_filter($sourceBodies, fn ($r) => str_contains($r->html_body, 'border:1px solid #dedede'))) === 8);
 $publishedBodies = $db->table('wl_site_email_template_item_versions')->where('site_id', 10)->where('template_version', 1)->orderBy('purpose')->orderBy('locale')->get(['purpose','locale','payload','payload_sha256'])->all();
 $policyBefore = $db->table('wl_site_auth_policies')->where('site_id', 10)->first();
 $result = $save(['expectedVersion' => '1', 'logoUrl' => 'https://cdn.example/brand.png']);
@@ -186,35 +187,29 @@ $check($publisher->detail(1,10)['logo_url'] === '');
 $check($db->table('wl_site_email_template_items')->where('site_id',10)->orderBy('purpose')->orderBy('locale')->get()->all() == $sourceBodies);
 $reject(static fn()=>$changeLogo('https://other.example/logo.png'));
 $check($publisher->detail(1,10)['logo_url'] === '');
-// Only the managed heading is shortened; names in the manifest/body remain full.
+// The white-card default uses brand variables; a rename does not rewrite its HTML.
 $beforeRename = $publisher->detail(1, 10);
 $longName = 'Freedex-self-operated';
 $renamed = $save(['expectedVersion' => $beforeRename['version'], 'siteName' => $longName]);
 $check($renamed['detail']['site_name'] === $longName);
-foreach ($db->table('wl_site_email_template_items')->where('site_id', 10)->get() as $body) {
-    $check(str_contains($body->html_body, 'Freedex-self-oper...') && str_contains($body->html_body, '{{siteName}}'));
-}
+$check($db->table('wl_site_email_template_items')->where('site_id',10)->orderBy('purpose')->orderBy('locale')->get()->all() == $sourceBodies);
 $check(!$save(['expectedVersion' => $renamed['detail']['version']])['changed']);
-// A later publication failure must roll the materialized heading back as well.
+// A later publication failure must roll the brand and version back as well.
 $beforeRollback = $db->table('wl_site_email_template_items')->where('site_id', 10)->orderBy('purpose')->orderBy('locale')->get()->all();
-$db->unprepared("CREATE TRIGGER fail_header_publication BEFORE INSERT ON wl_site_email_template_item_versions BEGIN SELECT RAISE(ABORT, 'header rollback test'); END");
+$db->unprepared("CREATE TRIGGER fail_item_publication BEFORE INSERT ON wl_site_email_template_item_versions BEGIN SELECT RAISE(ABORT, 'item rollback test'); END");
 try {
     $save(['expectedVersion' => $renamed['detail']['version'], 'siteName' => 'Short']);
     throw new RuntimeException('Expected publication failure');
 } catch (Illuminate\Database\QueryException $e) { $check(true); }
-$db->unprepared('DROP TRIGGER fail_header_publication');
+$db->unprepared('DROP TRIGGER fail_item_publication');
 $check($publisher->detail(1, 10) === $renamed['detail']);
 $check($db->table('wl_site_email_template_items')->where('site_id', 10)->orderBy('purpose')->orderBy('locale')->get()->all() == $beforeRollback);
 $short = $save(['expectedVersion' => $renamed['detail']['version'], 'siteName' => 'Short']);
 $check($short['detail']['site_name'] === 'Short');
-foreach ($db->table('wl_site_email_template_items')->where('site_id', 10)->get() as $body) {
-    $check(!str_contains($body->html_body, 'Freedex-self-oper...') && !str_contains($body->html_body, 'title='));
-}
+$check($db->table('wl_site_email_template_items')->where('site_id',10)->orderBy('purpose')->orderBy('locale')->get()->all() == $sourceBodies);
 
-// A rollout only switches genuinely new sites. The old site can still be
-// unpublished at deployment; a brand update on an already published site
-// must also retain the existing default/legacy rules.
-$rollout = new SiteEmailPublisher($db, ['cdn.example'], whitePresetAfterSiteId: 30);
+// A site with no template bodies uses the white preset, regardless of its ID
+// or whether it has already published a base snapshot.
 foreach ([30, 31, 32] as $siteId) {
     $db->table('wl_sites')->insert(['site_id'=>$siteId, 'tenant_id'=>2, 'site_name'=>'Site '.$siteId,
         'status'=>'enabled', 'entitlement_version'=>1]);
@@ -225,28 +220,26 @@ $db->transaction(static function () use ($writer): void {
     $writer->append(2, 32, 0, 7, 'platform-admin:7', 'Existing v4 site with no email bodies');
 });
 $existingItems = $db->table('wl_site_email_template_items')->where('site_id', 10)->orderBy('purpose')->orderBy('locale')->get();
-foreach ([30=>false, 31=>true, 32=>false] as $siteId => $isWhite) {
-    $db->transaction(static function () use ($writer, $rollout, $siteId): void {
+foreach ([30, 31, 32] as $siteId) {
+    $db->transaction(static function () use ($writer, $publisher, $siteId): void {
         $writer->lock();
         [$version] = $writer->latest(2, $siteId);
-        $writer->append(2, $siteId, $version, 7, 'platform-admin:7', 'First email rollout fixture',
-            $rollout->prepareInitialization(2, $siteId));
+        $writer->append(2, $siteId, $version, 7, 'platform-admin:7', 'First email preset fixture',
+            $publisher->prepareInitialization(2, $siteId));
     });
     $rows = $db->table('wl_site_email_template_items')->where('site_id', $siteId)->get();
     $check($rows->count() === 8);
     foreach ($rows as $body) {
-        $check(str_contains($body->html_body, 'border:1px solid #dedede') === $isWhite);
-        $check(str_contains($body->html_body, 'ACCOUNT<br>SECURITY') !== $isWhite);
+        $check(str_contains($body->html_body, 'border:1px solid #dedede'));
+        $check(!str_contains($body->html_body, 'ACCOUNT<br>SECURITY'));
         $check(str_contains($body->html_body, '{{logoUrl}}') && str_contains($body->html_body, '{{code}}'));
-        if ($isWhite) {
-            $template = ['purpose'=>$body->purpose, 'locale'=>$body->locale, 'subject'=>$body->subject,
-                'textBody'=>$body->text_body, 'htmlBody'=>$body->html_body];
-            EmailTemplateRules::template($template, []);
-            EmailTemplateRules::template($template, ['cdn.example'], 'https://cdn.example/logo.png');
-            $check(!str_contains($body->html_body, 'https://'));
-            $preset = collect(EmailTemplateRules::defaults())->first(fn ($r) => $r['purpose'] === $body->purpose && $r['locale'] === $body->locale);
-            $check($body->text_body === $preset['textBody'] && $body->subject === $preset['subject']);
-        }
+        $template = ['purpose'=>$body->purpose, 'locale'=>$body->locale, 'subject'=>$body->subject,
+            'textBody'=>$body->text_body, 'htmlBody'=>$body->html_body];
+        EmailTemplateRules::template($template, []);
+        EmailTemplateRules::template($template, ['cdn.example'], 'https://cdn.example/logo.png');
+        $check(!str_contains($body->html_body, 'https://'));
+        $preset = collect(EmailTemplateRules::defaults())->first(fn ($r) => $r['purpose'] === $body->purpose && $r['locale'] === $body->locale);
+        $check($body->text_body === $preset['textBody'] && $body->subject === $preset['subject']);
     }
 }
 $check($db->table('wl_site_email_template_items')->where('site_id', 10)->orderBy('purpose')->orderBy('locale')->get() == $existingItems);
