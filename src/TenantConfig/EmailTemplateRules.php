@@ -99,4 +99,17 @@ final class EmailTemplateRules
         foreach ($items as &$body) $body['htmlBody'] = EmailHeaderLayout::html($body['htmlBody']);
         return $items;
     }
+
+    /** Neutral white-card layout for newly opened sites. Plain text and subjects are unchanged. */
+    public static function whiteDefaults(): array
+    {
+        $html = json_decode(file_get_contents(__DIR__.'/presets/email-white-layout.json'), true, 512, JSON_THROW_ON_ERROR);
+        $items = self::defaults();
+        foreach ($items as &$body) {
+            $layout = $html[$body['purpose']][$body['locale']] ?? null;
+            if (!is_string($layout) || $layout === '') throw new \LogicException('Missing white email preset layout');
+            $body['htmlBody'] = $layout;
+        }
+        return $items;
+    }
 }

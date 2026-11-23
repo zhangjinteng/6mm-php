@@ -210,4 +210,44 @@ $check($short['detail']['site_name'] === 'Short');
 foreach ($db->table('wl_site_email_template_items')->where('site_id', 10)->get() as $body) {
     $check(!str_contains($body->html_body, 'Freedex-self-oper...') && !str_contains($body->html_body, 'title='));
 }
+
+// A rollout only switches genuinely new sites. The old site can still be
+// unpublished at deployment; a brand update on an already published site
+// must also retain the existing default/legacy rules.
+$rollout = new SiteEmailPublisher($db, ['cdn.example'], whitePresetAfterSiteId: 30);
+foreach ([30, 31, 32] as $siteId) {
+    $db->table('wl_sites')->insert(['site_id'=>$siteId, 'tenant_id'=>2, 'site_name'=>'Site '.$siteId,
+        'status'=>'enabled', 'entitlement_version'=>1]);
+    $db->table('wl_site_domains')->insert(['site_id'=>$siteId, 'domain'=>'site'.$siteId.'.example', 'is_primary'=>true]);
+}
+$db->transaction(static function () use ($writer): void {
+    $writer->lock();
+    $writer->append(2, 32, 0, 7, 'platform-admin:7', 'Existing v4 site with no email bodies');
+});
+$existingItems = $db->table('wl_site_email_template_items')->where('site_id', 10)->orderBy('purpose')->orderBy('locale')->get();
+foreach ([30=>false, 31=>true, 32=>false] as $siteId => $isWhite) {
+    $db->transaction(static function () use ($writer, $rollout, $siteId): void {
+        $writer->lock();
+        [$version] = $writer->latest(2, $siteId);
+        $writer->append(2, $siteId, $version, 7, 'platform-admin:7', 'First email rollout fixture',
+            $rollout->prepareInitialization(2, $siteId));
+    });
+    $rows = $db->table('wl_site_email_template_items')->where('site_id', $siteId)->get();
+    $check($rows->count() === 8);
+    foreach ($rows as $body) {
+        $check(str_contains($body->html_body, 'border:1px solid #dedede') === $isWhite);
+        $check(str_contains($body->html_body, 'ACCOUNT<br>SECURITY') !== $isWhite);
+        $check(str_contains($body->html_body, '{{logoUrl}}') && str_contains($body->html_body, '{{code}}'));
+        if ($isWhite) {
+            $template = ['purpose'=>$body->purpose, 'locale'=>$body->locale, 'subject'=>$body->subject,
+                'textBody'=>$body->text_body, 'htmlBody'=>$body->html_body];
+            EmailTemplateRules::template($template, []);
+            EmailTemplateRules::template($template, ['cdn.example'], 'https://cdn.example/logo.png');
+            $check(!str_contains($body->html_body, 'https://'));
+            $preset = collect(EmailTemplateRules::defaults())->first(fn ($r) => $r['purpose'] === $body->purpose && $r['locale'] === $body->locale);
+            $check($body->text_body === $preset['textBody'] && $body->subject === $preset['subject']);
+        }
+    }
+}
+$check($db->table('wl_site_email_template_items')->where('site_id', 10)->orderBy('purpose')->orderBy('locale')->get() == $existingItems);
 echo "Site email publication: {$checks} checks passed\n";

@@ -23,7 +23,8 @@ final class SiteEmailPublisher
     }
 
     public function __construct(private ConnectionInterface $db, private array $resourceHosts = [],
-        private bool $enabledSitesOnly = false, private ?string $schema = null, private bool $consumersReady = true)
+        private bool $enabledSitesOnly = false, private ?string $schema = null, private bool $consumersReady = true,
+        private ?int $whitePresetAfterSiteId = null)
     {
         if ($schema !== null && !preg_match('/^[a-z_][a-z0-9_]*$/D', $schema)) throw new \InvalidArgumentException('Invalid schema');
         $this->resourceHosts = array_values(array_unique(array_map(static fn ($host) => strtolower(trim($host)), $resourceHosts)));
@@ -39,7 +40,11 @@ final class SiteEmailPublisher
     public static function forWebsiteBrand(ConnectionInterface $db, bool $enabledOnly = false, ?string $schema = null): self
     {
         $host = parse_url((string)config('imgbed.public_base'), PHP_URL_HOST);
-        return new self($db, $host ? [$host] : [], $enabledOnly, $schema, (bool)config('site_email.consumers_v5_ready', false));
+        $cutover = config('site_email.white_preset_after_site_id');
+        $cutover = is_string($cutover) || is_int($cutover)
+            ? filter_var($cutover, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]) : false;
+        return new self($db, $host ? [$host] : [], $enabledOnly, $schema,
+            (bool)config('site_email.consumers_v5_ready', false), $cutover === false ? null : $cutover);
     }
 
     private function table(string $name)
@@ -186,7 +191,9 @@ final class SiteEmailPublisher
         if (trim($brand['site_name']) === '' || mb_strlen($brand['site_name']) > 128 || preg_match('/[\r\n\x00]/', $brand['site_name'])) $this->fail('品牌名称不能为空且最多 128 个字符');
         if (EmailTemplateRules::locale($brand['default_locale']) !== $brand['default_locale']) $this->fail('默认语言不是规范语言标签');
         EmailTemplateRules::url($brand['logo_url'], $this->resourceHosts);
-        $items = $state['items'] ?: $this->encodeItems(EmailTemplateRules::defaults());
+        $whitePreset = $snapshot === null && $state['source'] === 'default'
+            && $this->whitePresetAfterSiteId !== null && $site > $this->whitePresetAfterSiteId;
+        $items = $state['items'] ?: $this->encodeItems($whitePreset ? EmailTemplateRules::whiteDefaults() : EmailTemplateRules::defaults());
         $sourceChanges = [];
         foreach ($items as &$item) {
             $before = $item['template'];
