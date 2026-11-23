@@ -29,6 +29,7 @@ class HelpService
     {
         return self::identityRules($edit) + [
             'name' => 'required|string|max:120', 'parent_id' => 'nullable|integer|min:1',
+            'show_on_vip_page' => 'sometimes|boolean',
             'image_media_id' => 'sometimes|nullable|integer|min:1',
             'icon_key' => ['nullable', 'string', 'max:128', 'regex:/^[a-zA-Z0-9][a-zA-Z0-9_:-]*$/D'],
             'sort_order' => 'required|integer|between:0,2147483647', 'is_enabled' => 'required|boolean',
@@ -289,6 +290,9 @@ class HelpService
             $old = $this->editRow('categories', $space, $p);
             $parentId = $p['parent_id'] ?? null;
             if ($parentId !== null) {
+                if (!empty($p['show_on_vip_page'])) {
+                    $this->fail('只有一级帮助分类可展示在 VIP 页');
+                }
                 $parent = $this->category($space, (int) $parentId);
                 if ($parent->parent_id !== null || ($old && (int) $old->id === (int) $parentId)) {
                     $this->fail('最多支持二级分类，父分类必须是其他一级分类');
@@ -298,6 +302,7 @@ class HelpService
                 }
             }
             $data = ['name' => trim($p['name']), 'parent_id' => $parentId,
+                'show_on_vip_page' => $parentId === null && (bool) ($p['show_on_vip_page'] ?? $old->show_on_vip_page ?? false),
                 'icon_key' => array_key_exists('icon_key', $p) ? $p['icon_key'] : ($old->icon_key ?? null),
                 'sort_order' => $p['sort_order'], 'is_enabled' => (bool) $p['is_enabled']];
             if ($old) {
