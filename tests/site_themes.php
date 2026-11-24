@@ -42,6 +42,7 @@ $p=json_decode($row->payload,true,512,JSON_THROW_ON_ERROR);
 $check($p['siteId']==='10' && $p['name']==='交易所' && $p['bindings'][0]['isPrimary']===true);
 $check($p['access']['modules']===['contract'=>'enabled','prediction'=>'enabled']);
 $check($p['config']['features']['tradingRanking'] && $p['config']['features']['news'] && !$p['config']['features']['help']);
+$check($p['config']['features']['vipInfo'] === false);
 $check($p['config']['templateId']==='template-1' && $p['config']['brand']['faviconUrl']===null);
 $check($p['config']['seo']['homeByLocale']['zh-CN']['title']==='标题' && $p['config']['seo']['googleSiteVerification']==='token');
 $check(count($p['config']['channels']['social'])===1 && $p['config']['channels']['downloads']['apk']==='https://download.example/app.apk');
@@ -60,7 +61,9 @@ $db->table('wl_site_seo_configs')->where('site_id',10)->update([
 $check(!$sync()['changed'] && $db->table('wl_site_config_themes')->count()===1);
 $check($db->table('wl_site_config_themes')->sole()->payload === $row->payload);
 $db->table('wl_site_modules')->where('module_code','news')->update(['enabled'=>false]);
+$db->table('wl_site_modules')->insert(['site_id'=>10,'module_code'=>'vip_info','module_type'=>'feature','enabled'=>true]);
 $second=$sync();
+$check(json_decode($db->table('wl_site_config_themes')->orderByDesc('config_version')->value('payload'),true)['config']['features']['vipInfo'] === true);
 $check($second['changed'] && $db->table('wl_site_config_themes')->orderByDesc('config_version')->first()->previous_config_version===$row->config_version);
 $check($db->table('wl_site_config_themes')->where('config_version',$row->config_version)->value('payload')===$row->payload);
 try { $sync(1,20); throw new RuntimeException('Foreign site accepted'); }

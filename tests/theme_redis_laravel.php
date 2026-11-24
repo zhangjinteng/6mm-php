@@ -58,6 +58,16 @@ $check($redis->hGet($key,'config_version') === '1');
 $check(json_decode($redis->hGet($key,'payload'))->config->legal->entity->WHITE_LABEL_NAME==='White label, not site name');
 $check($redis->hGet('wrong-app-prefix:'.$key,'payload') === false);
 $check($db->table(ThemeRedisOutbox::TABLE)->value('synced_version') === 1);
+$vipInfo = static fn (): bool => json_decode($redis->hGet($key, 'payload'), false, 512, JSON_THROW_ON_ERROR)->config->features->vipInfo;
+$check($vipInfo() === false);
+foreach ([true, false] as $enabled) {
+    $db->transaction(function () use ($db, $writer, $enabled): void {
+        $db->table('wl_site_modules')->updateOrInsert(['site_id'=>910024, 'module_code'=>'vip_info'],
+            ['module_type'=>'feature', 'enabled'=>$enabled]);
+        $writer->sync(1,910024,7,'test:7','VIP visibility');
+    });
+    $check($vipInfo() === $enabled);
+}
 $redis->del($key);
 $command = new SyncThemeRedisCommand(); $command->setLaravel($app);
 $output = new BufferedOutput();

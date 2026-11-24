@@ -71,7 +71,7 @@ $check($db->table('wl_sites')->where('site_id', 10)->value('entitlement_version'
 $check($db->table('wl_config_snapshots')->value('payload') === '{"preserve":true}');
 $check($platform->listing(['keyword' => '_%'])['count'] === 1);
 $content = new FeatureConfigStore($db, true, true, null, true);
-$all = ['trade_ranking' => false, 'news' => false, 'academy' => false, 'help_center' => false, 'feedback' => false, 'announcement' => false];
+$all = ['trade_ranking' => false, 'news' => false, 'academy' => false, 'help_center' => false, 'feedback' => false, 'announcement' => false, 'vip_info' => false];
 $initial = $content->detail(['tenant_id' => 1, 'site_id' => 11]);
 $check($initial['features'] === $all);
 $check(strlen($initial['expected_revision']) === 64);

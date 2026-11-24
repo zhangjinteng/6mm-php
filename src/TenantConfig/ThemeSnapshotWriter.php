@@ -87,7 +87,7 @@ final class ThemeSnapshotWriter
             && $modules[$code]->module_type === $type && (bool)$modules[$code]->enabled;
         $features = [];
         foreach (['tradingRanking'=>'trade_ranking','news'=>'news','academy'=>'academy','help'=>'help_center',
-            'announcements'=>'announcement','feedback'=>'feedback'] as $key=>$code) $features[$key] = $flag($code, 'feature');
+            'announcements'=>'announcement','feedback'=>'feedback','vipInfo'=>'vip_info'] as $key=>$code) $features[$key] = $flag($code, 'feature');
         $seo = $this->siteRows('wl_site_seo_configs', $id)->first();
         $copies = SeoTranslations::home($seo?->translations ?? null);
         $home = [];

@@ -12,7 +12,7 @@ use SixMm\Shared\TenantConfig\ConfigSnapshotWriter;
 final class FeatureConfigStore
 {
     public const CODE = 'trade_ranking';
-    public const CONTENT_CODES = ['news', 'academy', 'help_center', 'feedback', 'announcement'];
+    public const CONTENT_CODES = ['news', 'academy', 'help_center', 'feedback', 'announcement', 'vip_info'];
 
     public function __construct(private ConnectionInterface $db, private bool $enabledSitesOnly = false, private bool $allowSiteSelection = false, private ?string $schema = null, private bool $contentFeatures = false)
     {
