@@ -128,6 +128,15 @@ foreach (['template_id' => 'custom', 'logo_url' => 'javascript:alert(1)', 'favic
     try { $store->save($brandInput([$field => $value]), 7, $audit); throw new RuntimeException('Invalid brand asset accepted'); }
     catch (DomainConfigException $e) { $check(true); }
 }
+$appearance = fn () => json_decode($db->table('wl_site_config_themes')->where('site_id',10)->orderByDesc('config_version')->value('payload'), true)['config']['appearance'];
+$check($appearance() === ['schemaVersion'=>1, 'colorPrimary'=>'#B7F214']);
+$store->save($brandInput(['color_primary'=>'#2457d6']), 7, $audit);
+$check($appearance()['colorPrimary'] === '#2457D6');
+$store->save($brandInput(['template_id'=>'template-1']), 7, $audit);
+$check($appearance()['colorPrimary'] === '#2457D6');
+$store->save($brandInput(['color_primary'=>null]), 7, $audit);
+$check($appearance()['colorPrimary'] === '#FFB13F');
+$store->save($brandInput(['template_id'=>'template-2']), 7, $audit);
 $oldClient = $brandInput(['domains' => [['domain' => 'replacement.example', 'is_primary' => true]]]);
 foreach (['expected_brand_revision', ...\SixMm\Shared\TenantBrand\SiteBrandAssets::FIELDS] as $key) unset($oldClient[$key]);
 $store->save($oldClient, 7, $audit);

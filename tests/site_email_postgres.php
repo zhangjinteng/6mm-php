@@ -27,7 +27,7 @@ $db->unprepared('CREATE SCHEMA control_plane; CREATE SEQUENCE control_plane.wl_s
 foreach ([
     'wl_tenants'=>'tenant_id bigint primary key, tenant_name text, status text',
     'wl_sites'=>'site_id bigint primary key, tenant_id bigint references control_plane.wl_tenants, site_name text, status text, entitlement_version bigint, updated_at timestamptz',
-    'wl_site_domains'=>'site_id bigint references control_plane.wl_sites, domain text unique, is_primary boolean, template_id text, logo_url text, favicon_url text',
+    'wl_site_domains'=>'site_id bigint references control_plane.wl_sites, domain text unique, is_primary boolean, template_id text, logo_url text, favicon_url text, color_primary text',
     'wl_site_modules'=>'site_id bigint, module_code text, module_type text, enabled boolean',
     'wl_site_config_publications'=>'publication_version bigint primary key, published_by text, publish_reason text, published_at timestamptz',
     'wl_site_config_snapshots'=>'site_id bigint references control_plane.wl_sites, config_version bigint references control_plane.wl_site_config_publications, previous_config_version bigint, rollback_of_config_version bigint, schema_version bigint check(schema_version in (4,5)), payload text, payload_sha256 text, primary key(site_id,config_version), foreign key(site_id,previous_config_version) references control_plane.wl_site_config_snapshots(site_id,config_version)',

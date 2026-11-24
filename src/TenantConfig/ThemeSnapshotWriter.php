@@ -125,6 +125,7 @@ final class ThemeSnapshotWriter
             'access'=>['siteAvailability'=>$tenant->status === 'enabled' && $site->status === 'enabled' ? 'active' : 'inactive',
                 'modules'=>['contract'=>$flag('contract','business')?'enabled':'disabled','prediction'=>$flag('seconds','business')?'enabled':'disabled']],
             'config'=>['templateId'=>$template,'brand'=>['logoUrl'=>$this->nullable($brand?->logo_url ?? null),'faviconUrl'=>$this->nullable($brand?->favicon_url ?? null)],
+                'appearance'=>\SixMm\Shared\TenantBrand\SiteBrandAssets::appearance($template, $brand?->color_primary ?? null),
                 'seo'=>['indexingRequested'=>(bool)($seo?->indexing_enabled ?? false),'homeByLocale'=>(object)$home,
                     'ogImageUrl'=>$this->nullable($seo?->og_image_url ?? null),'googleSiteVerification'=>$verification],
                 'features'=>$features,'channels'=>['support'=>$support,'social'=>$links,'downloads'=>['appStore'=>$downloads['app_store'] ?? null,

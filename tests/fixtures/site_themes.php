@@ -7,7 +7,7 @@ function themeFixture(\Illuminate\Database\Connection $db, string $prefix = ''):
 {
     foreach ([
         'wl_site_config_themes' => 'site_id integer, config_version integer, schema_version integer, payload text, payload_sha256 text, previous_config_version integer, published_by text, publish_reason text, published_at text, primary key(site_id, config_version), check(config_version>0), check(previous_config_version IS NULL OR previous_config_version<config_version), foreign key(site_id,previous_config_version) references wl_site_config_themes(site_id,config_version)',
-        'wl_site_domains' => 'site_id integer, domain text, is_primary boolean, template_id text, logo_url text, favicon_url text',
+        'wl_site_domains' => 'site_id integer, domain text, is_primary boolean, template_id text, logo_url text, favicon_url text, color_primary text',
         'wl_site_modules' => 'site_id integer, module_code text, module_type text, enabled boolean',
         'wl_site_seo_configs' => 'site_id integer, indexing_enabled boolean, translations text, og_image_url text, google_verification_token text, verification_domain text',
         'wl_channel_configs' => 'tenant_id integer, social_links text, app_downloads text, customer_service text',

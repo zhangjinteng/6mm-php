@@ -10,7 +10,12 @@ use SixMm\Shared\Media\MediaRegistry;
 /** Site-wide identity, mirrored on every access domain (including newly added domains). */
 final class SiteBrandAssets
 {
-    public const FIELDS = ['template_id', 'logo_url', 'favicon_url'];
+    public const FIELDS = ['template_id', 'logo_url', 'favicon_url', 'color_primary'];
+
+    public static function appearance(?string $template, ?string $color): array
+    {
+        return ['schemaVersion' => 1, 'colorPrimary' => $color ?? ($template === 'template-2' ? '#B7F214' : '#FFB13F')];
+    }
 
     public function __construct(private ConnectionInterface $db, private ?string $schema = null) {}
 
@@ -36,6 +41,7 @@ final class SiteBrandAssets
     {
         return ['expected_brand_revision' => 'sometimes|required|string|size:64|regex:/^[a-f0-9]+$/D',
             'template_id' => 'sometimes|nullable|string|in:template-1,template-2',
+            'color_primary' => ['sometimes', 'nullable', 'string', 'regex:/^#[0-9a-fA-F]{6}$/D'],
             'logo_url' => ['sometimes', 'nullable', 'string', 'max:2048', 'url', 'regex:~^https://[^/@?#\\s]+(?:[/?#][^\\s]*)?$~iD'],
             'favicon_url' => ['sometimes', 'nullable', 'string', 'max:2048', 'url', 'regex:~^https://[^/@?#\\s]+(?:[/?#][^\\s]*)?$~iD']];
     }
@@ -49,6 +55,12 @@ final class SiteBrandAssets
             throw new DomainConfigException('主题或标识已变化，请重新加载后保存');
         }
         $values = array_replace($before, $changes);
+        if (isset($values['color_primary'])) {
+            if (!is_string($values['color_primary']) || !preg_match('/^#[0-9a-fA-F]{6}$/D', $values['color_primary'])) {
+                throw new DomainConfigException('主题色必须为 #RRGGBB 格式');
+            }
+            $values['color_primary'] = strtoupper($values['color_primary']);
+        }
         if ($values['template_id'] !== null && !in_array($values['template_id'], ['template-1', 'template-2'], true)) {
             throw new DomainConfigException('请选择主题1或主题2');
         }
