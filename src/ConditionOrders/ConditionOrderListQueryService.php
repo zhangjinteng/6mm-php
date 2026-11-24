@@ -128,6 +128,10 @@ final class ConditionOrderListQueryService
         if ($criteria->keyword() !== '') {
             $keyword = $criteria->keyword();
             $query->where(static function (Builder $nested) use ($keyword): void {
+                if (($uid = \SixMm\Shared\UserDetails\PortraitUidFilter::parse($keyword)) !== null) {
+                    $nested->where('users.public_user_id', $uid);
+                    return;
+                }
                 if (ctype_digit($keyword)) {
                     $nested->where('users.public_user_id', $keyword);
                 }

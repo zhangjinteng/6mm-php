@@ -20,6 +20,9 @@ final class HistoryPositionUserContextService
     /** Keyword matches only narrow the independently authorized CK owner query. */
     public function matchingHistoricalUserIds(string $keyword, ?int $agentId = null): array
     {
+        if (($uid = \SixMm\Shared\UserDetails\PortraitUidFilter::parse($keyword)) !== null) {
+            return \SixMm\Shared\UserDetails\PortraitUidFilter::ids($this->connection, $uid);
+        }
         $keyword = trim($keyword);
         if ($keyword === '') return [];
         $bindings = $this->connection->table('agent_user_bindings')

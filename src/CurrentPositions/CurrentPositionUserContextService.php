@@ -37,6 +37,9 @@ final class CurrentPositionUserContextService
     /** @return array<int, int> */
     public function matchingPlatformUserIds(string $keyword, UserDataScope $scope): array
     {
+        if (($uid = \SixMm\Shared\UserDetails\PortraitUidFilter::parse($keyword)) !== null) {
+            return \SixMm\Shared\UserDetails\PortraitUidFilter::ids($this->connection, $uid, $scope);
+        }
         $keyword = trim($keyword);
         if ($keyword === '') {
             return [];

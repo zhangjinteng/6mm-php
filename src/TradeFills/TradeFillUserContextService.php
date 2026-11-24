@@ -20,6 +20,9 @@ final class TradeFillUserContextService
     /** Keyword lookup is only a narrowing condition; CK owner predicates remain authoritative. */
     public function matchingHistoricalUserIds(string $keyword): array
     {
+        if (($uid = \SixMm\Shared\UserDetails\PortraitUidFilter::parse($keyword)) !== null) {
+            return \SixMm\Shared\UserDetails\PortraitUidFilter::ids($this->connection, $uid);
+        }
         $keyword = trim($keyword);
         if ($keyword === '') return [];
         $bindings = $this->connection->table('agent_user_bindings')->whereIn('bind_status', self::ACTIVE_BINDING_STATUSES)

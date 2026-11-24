@@ -157,6 +157,9 @@ final class HistoryOrderUserContextService
     /** Resolve identity keywords, while the CK owner predicate remains the data access boundary. */
     public function matchingHistoricalPlatformUserIds(string $keyword): array
     {
+        if (($uid = \SixMm\Shared\UserDetails\PortraitUidFilter::parse($keyword)) !== null) {
+            return \SixMm\Shared\UserDetails\PortraitUidFilter::ids($this->connection, $uid);
+        }
         $keyword=trim($keyword);
         if ($keyword==='') return [];
         $bindings=$this->connection->table('agent_user_bindings')

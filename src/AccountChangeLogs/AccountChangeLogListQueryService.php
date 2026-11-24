@@ -225,7 +225,7 @@ final class AccountChangeLogListQueryService
     private function applyUserFilters(Builder $query, AccountChangeLogListQuery $criteria): void
     {
         if ($criteria->keyword() !== '') {
-            $keyword = $criteria->keyword();
+            $keyword = \SixMm\Shared\UserDetails\PortraitUidFilter::parse($criteria->keyword()) ?? $criteria->keyword();
             if (!ctype_digit($keyword)) {
                 $query->whereRaw('1 = 0');
             } else {
