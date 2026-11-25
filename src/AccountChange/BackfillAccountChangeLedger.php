@@ -29,8 +29,8 @@ class BackfillAccountChangeLedger implements ShouldQueue
     {
         $this->orderId = $orderId;
         $this->generation = $generation;
-        $this->onConnection('redis');
-        $this->onQueue(config('account_change_ledger.queue', 'account-change-ledger'));
+        $this->onConnection(LedgerQueueServiceProvider::CONNECTION);
+        $this->onQueue(LedgerQueueServiceProvider::QUEUE);
         $this->delay(max(1, (int) config('account_change_ledger.delay_seconds', 3)));
     }
 
