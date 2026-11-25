@@ -13,7 +13,7 @@ use Illuminate\Support\Str;
 final class ManualUserAdjustment
 {
     /** Query/reconcile only: NEVER create an intent or execute AccountChange. */
-    public function query(array $params, callable $receipt, string $orderClass = UserAccountChangeOrder::class): array
+    public function query(array $params, callable $receipt, string $orderClass = UserAccountChangeOrder::class, ?callable $onSuccess = null): array
     {
         $order = $orderClass::withTrashed()->where('out_request_no', (string) $params['out_request_no'])->first();
         $amount = BigDecimal::of($params['balance']);
@@ -36,6 +36,7 @@ final class ManualUserAdjustment
                 UserAccountChangeOrder::STATUS_FAILED => 'failed',
                 default => 'pending',
             };
+            if ($status === 'success' && $onSuccess && !$order->trashed()) $onSuccess($order);
             return ['status' => $status];
         }
 
