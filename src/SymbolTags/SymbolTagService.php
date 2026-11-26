@@ -357,7 +357,8 @@ final class SymbolTagService
 
     private function timestamp(): string
     {
-        return (new DateTimeImmutable())->format('Y-m-d H:i:s');
+        // Keep the offset so PostgreSQL timestamptz does not reinterpret the PHP wall clock in its session timezone.
+        return (new DateTimeImmutable())->format(DATE_ATOM);
     }
 
     private function applyOwnerScope(Builder $query, ?string $alias = null): void
