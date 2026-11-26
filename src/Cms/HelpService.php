@@ -204,10 +204,22 @@ class HelpService
                     (SELECT child.id FROM cms.categories child WHERE child.space_id = categories.space_id
                      AND child.module = 'help' AND child.parent_id = categories.id AND child.deleted_at IS NULL))) AS help_count");
         } else {
+            // A template has no player traffic. A site article with no interactions has zero counts.
+            $siteSpaces = $this->db()->table('cms.spaces')->where('space_type', 'site')->select('id as site_space_id');
+            $query->leftJoinSub($siteSpaces, 'site', 'site.site_space_id', '=', 'contents.space_id');
             $query->select(['id', 'space_id', 'code', 'category_id', 'title', 'sort_order', 'publish_status',
                 'is_enabled', 'published_at', 'scheduled_at', 'created_by_type', 'created_by_id', 'updated_by_name', 'updated_at', 'row_version'])
-                // Runtime metrics belong to site copies, never to the template itself.
-                ->selectRaw('NULL::bigint AS view_count, NULL::bigint AS vote_count, NULL::numeric AS helpful_rate');
+                ->selectRaw('CASE WHEN site.site_space_id IS NOT NULL THEN
+                    (SELECT COALESCE(SUM(s.view_count), 0) FROM cms.content_daily_stats s
+                     WHERE s.space_id = site.site_space_id AND s.content_id = contents.id)
+                    END AS view_count')
+                ->selectRaw('CASE WHEN site.site_space_id IS NOT NULL THEN
+                    (SELECT COUNT(*) FROM cms.content_votes v WHERE v.space_id = site.site_space_id
+                     AND v.content_id = contents.id AND v.module = contents.module)
+                    END AS vote_count')
+                ->selectRaw('(SELECT ROUND(100 * AVG(v.is_helpful::int), 1) FROM cms.content_votes v
+                    WHERE v.space_id = site.site_space_id AND v.content_id = contents.id
+                      AND v.module = contents.module) AS helpful_rate');
         }
         return [
             'lists' => $query->orderBy('sort_order')->orderBy('id')
