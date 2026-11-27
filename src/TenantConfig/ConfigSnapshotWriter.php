@@ -134,7 +134,7 @@ final class ConfigSnapshotWriter
         if (!$policy) {
             if (isset($old->authPolicy) || $this->siteRows('wl_site_auth_policy_audits', $site)->exists()) $this->fail('已有策略缺少源配置');
             $policies->insert(['site_id'=>$site,'registration_class'=>'white_label','email_registration_enabled'=>true,
-                'email_login_enabled'=>true,'password_management_enabled'=>false,'version'=>2,'updated_by'=>$operator]);
+                'email_login_enabled'=>true,'password_management_enabled'=>true,'version'=>2,'updated_by'=>$operator]);
             $policy = $policies->first();
         }
         $auth = ['version'=>(int)$policy->version, 'registrationClass'=>$policy->registration_class,

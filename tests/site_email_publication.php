@@ -43,12 +43,16 @@ $check($detail['version'] === '0' && $detail['site_name'] === 'Site 10' && $deta
 $check($db->table('wl_site_email_configs')->count() === 0); // Read never initializes.
 $reject(static fn () => $white->detail(1, 20));
 $reject(static fn () => $white->detail(1, 11));
+// This site's legacy snapshot later omits the password flag; its persisted policy is explicitly disabled.
+$db->table('wl_site_auth_policies')->insert(['site_id'=>10,'version'=>2,'registration_class'=>'white_label',
+    'email_registration_enabled'=>true,'email_login_enabled'=>true,'password_management_enabled'=>false,'updated_by'=>7]);
 $created = $publisher->initializeIfMissing(1, 10, 7, 'platform-admin:7', '初始化默认邮件配置');
 $check($created['initialized'] && $created['detail']['version'] === '1');
 $check($created['detail']['publication_version'] !== '1');
 $check($db->table('wl_site_email_template_items')->where('site_id', 10)->count() === 8);
 $check(!$db->table('wl_site_email_templates')->where('site_id', 10)->exists());
 $snapshot = $db->table('wl_site_config_snapshots')->where('site_id', 10)->orderByDesc('config_version')->first();
+$check(json_decode($snapshot->payload)->authPolicy->passwordManagementEnabled === false);
 $check($snapshot->schema_version === 5 && json_decode($snapshot->payload)->emailTemplateRef->storage === 'rows');
 $check(!str_contains($snapshot->payload, 'logoUrl') && !str_contains($snapshot->payload, 'schemaVersion'));
 $check($publisher->initializeIfMissing(1, 10, 7, 'platform-admin:7', '再次检查') === ['initialized' => false]);
