@@ -1,0 +1,7 @@
+{
+    "name": "sixmm/domain-lambda-runtime",
+    "description": "Isolated CLI runtime for AWS Lambda Invoke; not loaded in the Laravel process",
+    "require": {"php": "^8.2", "aws/aws-sdk-php": "^3.371.4"},
+    "repositories": [{"type":"composer","url":"https://repo.packagist.org","name":"packagist.org"}],
+    "config": {"platform": {"php":"8.2.30"}, "sort-packages":true}
+}

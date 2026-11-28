@@ -4,6 +4,8 @@
     "type": "library",
     "license": "proprietary",
     "require": {
+        "symfony/process": "^5.4 || ^6.4 || ^7.0",
+        "mikepultz/netdns2": "^2.0",
         "ezyang/htmlpurifier": "^4.18",
         "ext-dom": "*",
         "brick/math": "^0.9.3 || ^0.10 || ^0.11 || ^0.12 || ^0.13 || ^0.14",
@@ -63,6 +65,7 @@
             "@php tests/tenant_seo.php",
             "@php tests/tenant_features.php",
             "@php tests/tenant_brand.php",
+            "@php tests/domain_bindings.php",
             "@php tests/site_snapshot_formats.php",
             "@php tests/email_template_rules.php",
             "@php tests/email_template_upstream.php",
